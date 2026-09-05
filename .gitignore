@@ -90,7 +90,6 @@ fabric.properties
 !/tests/
 #ipk/
 
-# Локальные сборки и логи (build.sh / CI)
-/kvas_*.ipk
+# Логи сборки (build.sh / CI)
 /logs/
 *.log
