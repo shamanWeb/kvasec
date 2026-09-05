@@ -60,6 +60,15 @@ watcher() {
         fi
         echo "$(date) fix: KVAS_MARK отсутствует -> перезапуск 100-vpn-mark" >>"$LOG"
       fi
+
+      # 4) DoT-блок (DNS-over-TLS, порт 853) для LAN — форсируем DNS через роутер,
+      #    чтобы браузеры не обходили dnsmasq. DoH-хостнеймы глушит dnsmasq-сниппет.
+      for P in tcp udp; do
+        if ! iptables -C FORWARD -i br0 -p $P --dport 853 -j REJECT 2>/dev/null; then
+          iptables -I FORWARD -i br0 -p $P --dport 853 -j REJECT 2>/dev/null
+          echo "$(date) fix: DoT-блок ${P}/853 добавлен в FORWARD" >>"$LOG"
+        fi
+      done
     fi
     sleep 5
   done

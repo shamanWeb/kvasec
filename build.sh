@@ -122,6 +122,10 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
         echo 'port=9753' >> "\${dnsmasq_conf}"
     fi
 
+    # Блокировка DoH: сниппет с именами публичных DoH-серверов -> 0.0.0.0,
+    # чтобы браузеры не обходили dnsmasq (DoT/853 глушит watcher в iptables).
+    cp -f /opt/apps/kvas/etc/conf/kvas-doh-block.dnsmasq /opt/etc/dnsmasq.d/kvas-doh-block.dnsmasq 2>/dev/null
+
     chmod -R +x /opt/apps/kvas/bin/*        2>/dev/null
     chmod -R +x /opt/apps/kvas/etc/init.d/* 2>/dev/null
     chmod -R +x /opt/apps/kvas/etc/ndm/*    2>/dev/null
