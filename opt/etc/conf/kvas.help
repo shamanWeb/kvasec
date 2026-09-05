@@ -3,8 +3,7 @@
 -------------------------------------------------------------------
 Пакет представляет собой обвязку или интерфейс командной строки
 для защиты Вашего соединения при обращении к определенным доменам.
-Поддержка: VLESS, Hysteria 2, Shadowsocks, OpenVPN, Wireguard, IKE
-Автопереключение: failover между VLESS и Hysteria
+Поддержка: VLESS, Shadowsocks, OpenVPN, Wireguard, IKE
 
 == ОСНОВНЫЕ ==
 
@@ -43,7 +42,6 @@ kvas tags update [force]     - обновить список заквасок с
 kvas vpn                     - текущий VPN интерфейс и состояние
 kvas vpn set                 - выбрать VPN из списка
 kvas vpn set vless           - переключение на VLESS
-kvas vpn set hysteria        - переключение на Hysteria
 kvas vpn reset               - обновить iptables для VPN
 kvas vpn rescan|scan         - сканирование интерфейсов роутера
 kvas vpn net|guest           - правила для гостевой/VPN сети
@@ -55,29 +53,9 @@ kvas vpn gateway <IP>        - VPN через устройство в локал
 
 kvas vless new               - настройка VLESS (запрос ссылки vless://)
 
-== HYSTERIA 2 ==
 
-kvas hysteria                - статус Hysteria 2
-kvas hysteria new            - настройка (скачает бинарник если не установлен, запрос ссылки hysteria://)
-kvas hysteria install        - скачивание/обновление бинарника
-kvas hysteria test           - тест проксирования через туннель
-kvas hysteria start          - запуск службы
-kvas hysteria stop           - остановка службы
-kvas hysteria restart        - перезапуск службы
 
-== FAILOVER (автопереключение) ==
 
-kvas failover                - статус автопереключения
-kvas failover on             - включить
-kvas failover off            - выключить
-kvas failover start          - запустить демон
-kvas failover stop           - остановить демон
-kvas failover status         - статус и логи
-kvas failover primary <proto>- основной протокол (vless|hysteria)
-kvas failover set interval <N>    - интервал проверки (сек, по умолч. 15)
-kvas failover set threshold <N>   - порог ошибок (по умолч. 2)
-kvas failover log [N]        - последние N записей лога
-kvas failover test           - тест обоих каналов
 
 == DNS ==
 
@@ -166,8 +144,6 @@ opkg install <файл>.ipk --force-reinstall
 kvas add ya.ru test.ru       - добавить несколько доменов
 kvas add ya.ru              - добавить ya.ru в список
 kvas vpn set vless          - переключиться на VLESS
-kvas hysteria new           - настроить Hysteria 2
-kvas failover on            - включить автопереключение
 kvas route add full 1.2.3.4 - всё от 1.2.3.4 в тоннель
 kvas route exclude 5.6.7.8  - исключить 5.6.7.8
 kvas route refresh          - применить маршруты

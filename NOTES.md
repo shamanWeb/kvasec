@@ -103,6 +103,6 @@ build.sh кладёт туда `100-dns-local` + `100-vpn-mark` (иначе KVAS
 - `./build.sh [N]` — номер релиза из аргумента / `VERSION` / `Makefile`. Формат ipk идентичен
   отгружаемым релизам. `bin/libs/ndm` генерится postinst'ом из `etc/ndm/ndm` (несёт RULE_PRIORITY).
 - Ставим `opkg install --force-reinstall`, затем `kvas setup` или ребут.
-- Собираем **core как есть** (без Hysteria/failover — их файлов в репо нет).
+- Собираем **core** (Hysteria и failover удалены из проекта).
 - **Важно:** git-дерево `opt/` ≠ отгружаемый ipk апстрима (тот собирался на Windows `lastest/`,
   дрейф двусторонний). Правки в этом репо не влияют на апстрим-релизы автоматически.

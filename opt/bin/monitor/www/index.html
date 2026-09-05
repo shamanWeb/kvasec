@@ -133,9 +133,7 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <div class="card-row"><label>Резерв VPN:</label><span class="value" id="sysMode">-</span></div>
     <div class="card-row"><label>Хостов:</label><span class="value" id="sysHosts">-</span></div>
     <div class="card-row"><label>Служба Xray:</label><span class="value" id="sysXrayService">-</span></div>
-    <div class="card-row"><label>Служба Hysteria:</label><span class="value" id="sysHysteriaService">-</span></div>
     <div class="card-row"><label>VLESS туннель:</label><span class="value" id="sysVless">-</span></div>
-    <div class="card-row"><label>Hysteria туннель:</label><span class="value" id="sysHysteria">-</span></div>
     <div class="card-row"><label>Обновления:</label><span class="value" id="sysUpdate">-</span>
       <button class="btn btn-sm" onclick="doCheckUpdate(this)" style="margin-left:8px;">Проверить</button>
     </div>
@@ -171,21 +169,8 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <h3>VPN туннель</h3>
     <div class="card-row">
       <button class="btn btn-sm" onclick="vpnSet('vless',this)">VLESS</button>
-      <button class="btn btn-sm" onclick="vpnSet('hysteria',this)">Hysteria 2</button>
     </div>
     <div id="vpnMsg" class="msg" style="white-space:pre-wrap;font-size:11px;max-height:200px;overflow-y:auto;"></div>
-  </div>
-
-  <!-- Failover -->
-  <div class="card">
-    <h3>Автопереключение (Failover)</h3>
-    <div class="card-row">
-      <button class="btn btn-sm success" id="foOn" onclick="failover('on',this)">Включить</button>
-      <button class="btn btn-sm danger" id="foOff" onclick="failover('off',this)">Выключить</button>
-      <button class="btn btn-sm" onclick="failover('status',this)">Статус</button>
-      <span class="value" id="foStatus" style="margin-left:8px;">-</span>
-    </div>
-    <div id="foMsg" class="msg" style="white-space:pre-wrap;font-size:11px;max-height:200px;overflow-y:auto;"></div>
   </div>
 
   <!-- System Actions -->
@@ -478,7 +463,6 @@ function showMain() {
   loadRouteLists();
   loadParentalList();
   loadAdblockStatus();
-  loadFailoverStatus();
   loadTags();
   fetchDevices();
   logMsg('log-info', 'Мониторинг трафика KVAS');
@@ -718,16 +702,12 @@ function loadSystemStatus() {
       document.getElementById('sysHosts').textContent = d.hosts || '-';
       var xraySvc = d.xray_service || '-';
       document.getElementById('sysXrayService').textContent = xraySvc === 'running' ? 'работает' : (xraySvc === 'stopped' ? 'остановлена' : (xraySvc === 'not_installed' ? 'не установлена' : xraySvc));
-      var hysteriaSvc = d.hysteria_service || '-';
-      document.getElementById('sysHysteriaService').textContent = hysteriaSvc === 'running' ? 'работает' : (hysteriaSvc === 'stopped' ? 'остановлена' : (hysteriaSvc === 'not_installed' ? 'не установлена' : hysteriaSvc));
       document.getElementById('sysVless').innerHTML = '<span style="color:#8b949e;">проверка...</span>';
-      document.getElementById('sysHysteria').innerHTML = '<span style="color:#8b949e;">проверка...</span>';
       api('/cgi-bin/manage.sh?action=tunnel_check', function(t) {
         if (t.ok) {
           var ok = '<span style="color:#3fb950;">\u2713</span> ';
           var fail = '<span style="color:#f85149;">\u2717</span> ';
           document.getElementById('sysVless').innerHTML = t.vless ? ok + 'работает' : fail + 'не работает';
-          document.getElementById('sysHysteria').innerHTML = t.hysteria ? ok + 'работает' : fail + 'не работает';
         }
       });
     }
@@ -907,30 +887,6 @@ function vpnSet(proto, btn) {
       el.className = 'msg err';
       el.textContent = d.error || 'error';
       consoleLog('vpn set ' + proto + ' ERROR: ' + (d.error || 'unknown'));
-    }
-  });
-}
-
-/* ========== FAILOVER ========== */
-function loadFailoverStatus() {
-  api('/cgi-bin/manage.sh?action=failover_status', function(d){
-    if (d.ok) document.getElementById('foStatus').textContent = d.enabled !== 'manual' ? 'вкл (' + d.primary + ')' : 'выкл';
-  });
-}
-
-function failover(cmd, btn) {
-  apiBtn('/cgi-bin/manage.sh?action=failover&cmd=' + cmd, btn, function(d){
-    var el = document.getElementById('foMsg');
-    if (d.ok) {
-      el.className = 'msg ok';
-      var output = cmd === 'status' ? d.data : (d.data || d.msg);
-      el.textContent = output;
-      consoleLog('failover ' + cmd + ': ' + (output || 'ok'));
-      loadFailoverStatus();
-    } else {
-      el.className = 'msg err';
-      el.textContent = d.error || 'error';
-      consoleLog('failover ' + cmd + ' ERROR: ' + (d.error || 'unknown'));
     }
   });
 }

@@ -1,11 +1,10 @@
 #!/bin/sh
 # Management API for KVAS Web UI v2
-# Actions: auth, hosts, vpn, failover, upgrade, backup, restore, update, kvas_list
+# Actions: auth, hosts, vpn, upgrade, backup, restore, update, kvas_list
 
 PASS_FILE=/opt/kvas_web_pass
 TOKEN_DIR=/tmp/kvas_web_tokens
 KVAS_BIN=/opt/apps/kvas/bin/kvas
-FAILOVER_CONF=/opt/etc/kvas.failover.conf
 KVAS_LIST=/opt/etc/kvas.list
 TAGS_FILE=/opt/etc/tags.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
@@ -79,16 +78,11 @@ detect_vpn_mode() {
 		# Check if it's a vless proxy interface
 		case "$inface_ent" in
 			*Proxy21*|*vless*) echo "vless"; return ;;
-			*Proxy41*|*hysteria*) echo "hysteria"; return ;;
 		esac
 	fi
 	# Fallback: check which process is running
 	if [ -f /var/run/xray.pid ] && kill -0 $(cat /var/run/xray.pid) 2>/dev/null; then
 		echo "vless"
-		return
-	fi
-	if [ -f /var/run/hysteria.pid ] && kill -0 $(cat /var/run/hysteria.pid) 2>/dev/null; then
-		echo "hysteria"
 		return
 	fi
 	echo "none"
@@ -106,28 +100,7 @@ check_vpn_running() {
 				echo "false"
 			fi
 			;;
-		hysteria)
-			if pidof hysteria >/dev/null 2>&1; then
-				echo "true"
-			elif [ -f /var/run/hysteria.pid ] && kill -0 $(cat /var/run/hysteria.pid) 2>/dev/null; then
-				echo "true"
-			else
-				echo "false"
-			fi
-			;;
 	esac
-}
-
-# Get failover mode from config
-get_failover_mode() {
-	if [ -f "$FAILOVER_CONF" ]; then
-		grep "^FAILOVER_MODE=" "$FAILOVER_CONF" 2>/dev/null | cut -d= -f2
-	fi
-}
-
-# Check if failover daemon is running
-check_failover_daemon() {
-	[ -f /var/run/kvas-failover.pid ] && kill -0 $(cat /var/run/kvas-failover.pid 2>/dev/null) 2>/dev/null && echo "true" || echo "false"
 }
 
 # --- Main ---
@@ -170,7 +143,7 @@ get_tag_domain_list_from_file() {
 
 main() {
 	local action token pass hash stored kvaspkg kvaspkg_name kvaspkg_ver
-	local vpn_mode failover hysteria_running vless_running host_count first
+	local vpn_mode vless_running host_count first
 	local domain out rc mode enabled primary interval threshold cmd path
 
 	action=$(echo "$QUERY_STRING" | sed 's/.*action=//; s/&.*//' 2>/dev/null)
@@ -211,13 +184,9 @@ main() {
 			kvaspkg_ver=$(echo "$kvaspkg" | awk '{print $3}')
 			vpn_mode=$(detect_vpn_mode)
 			vless_running=$(check_vpn_running "vless")
-			hysteria_running=$(check_vpn_running "hysteria")
-			failover=$(get_failover_mode)
-			[ -z "$failover" ] && failover="manual"
 			host_count=$(wc -l < "$KVAS_LIST" 2>/dev/null || echo 0)
 			# Service status — check init.d script existence + process running
 			xray_svc="not_installed"
-			hysteria_svc="not_installed"
 			# Xray: init.d at /opt/apps/kvas/etc/init.d/S97xray
 			if [ -f "/opt/apps/kvas/etc/init.d/S97xray" ]; then
 				if pidof xray >/dev/null 2>&1; then
@@ -226,18 +195,9 @@ main() {
 					xray_svc="stopped"
 				fi
 			fi
-			# Hysteria: init.d at /opt/apps/kvas/hysteria/etc/init.d/S99hysteria
-			if [ -f "/opt/apps/kvas/hysteria/etc/init.d/S99hysteria" ]; then
-				if pidof hysteria >/dev/null 2>&1; then
-					hysteria_svc="running"
-				else
-					hysteria_svc="stopped"
-				fi
-			fi
-			printf '{"ok":true,"pkg":%s,"ver":%s,"mode":%s,"failover":%s,"vless":%s,"hysteria":%s,"hosts":%s,"xray_service":%s,"hysteria_service":%s}\n' \
-				"$(json_str "$kvaspkg_name")" "$(json_str "$kvaspkg_ver")" "$(json_str "$vpn_mode")" "$(json_str "$failover")" \
-				"$vless_running" "$hysteria_running" "$host_count" \
-				"$(json_str "$xray_svc")" "$(json_str "$hysteria_svc")"
+			printf '{"ok":true,"pkg":%s,"ver":%s,"mode":%s,"vless":%s,"hosts":%s,"xray_service":%s}\n' \
+				"$(json_str "$kvaspkg_name")" "$(json_str "$kvaspkg_ver")" "$(json_str "$vpn_mode")" \
+				"$vless_running" "$host_count" "$(json_str "$xray_svc")"
 			;;
 		hosts)
 			check_token "$token"
@@ -322,73 +282,30 @@ main() {
 			check_token "$token"
 			vpn_mode=$(detect_vpn_mode)
 			vless_running=$(check_vpn_running "vless")
-			hysteria_running=$(check_vpn_running "hysteria")
-			printf '{"ok":true,"mode":%s,"vless":%s,"hysteria":%s}\n' \
-				"$(json_str "$vpn_mode")" "$vless_running" "$hysteria_running"
+			printf '{"ok":true,"mode":%s,"vless":%s}\n' \
+				"$(json_str "$vpn_mode")" "$vless_running"
 			;;
 		tunnel_check)
 			check_token "$token"
 			vless_ok="false"
-			hysteria_ok="false"
 			command -v ss >/dev/null 2>&1 && {
 				ss -tlnp 2>/dev/null | grep -q ":1097 " && vless_ok="true"
-				ss -tlnp 2>/dev/null | grep -q ":10808 " && hysteria_ok="true"
 			}
 			[ "$vless_ok" = "false" ] && command -v netstat >/dev/null 2>&1 && netstat -tlnp 2>/dev/null | grep -q ":1097 " && vless_ok="true"
-			[ "$hysteria_ok" = "false" ] && command -v netstat >/dev/null 2>&1 && netstat -tlnp 2>/dev/null | grep -q ":10808 " && hysteria_ok="true"
-			printf '{"ok":true,"vless":%s,"hysteria":%s}\n' "$vless_ok" "$hysteria_ok"
+			printf '{"ok":true,"vless":%s}\n' "$vless_ok"
 			;;
 		vpn_set)
 			check_token "$token"
 			proto=$(echo "$QUERY_STRING" | sed 's/.*proto=//; s/&.*//' 2>/dev/null)
 			[ "$proto" = "$QUERY_STRING" ] && proto=""
 			case "$proto" in
-				vless|hysteria) ;;
-				*) json_error "proto must be vless or hysteria" ;;
+				vless) ;;
+				*) json_error "proto must be vless" ;;
 			esac
 			out=$($KVAS_BIN vpn set "$proto" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "switch failed: $out"
 			json_ok "switched to $proto"
-			;;
-		failover_status)
-			check_token "$token"
-			failover_mode=$(get_failover_mode)
-			[ -z "$failover_mode" ] && failover_mode="manual"
-			primary="vless"
-			interval=15
-			threshold=2
-			if [ -f "$FAILOVER_CONF" ]; then
-				primary=$(grep "^PRIMARY=" "$FAILOVER_CONF" 2>/dev/null | cut -d= -f2)
-				interval=$(grep "^CHECK_INTERVAL=" "$FAILOVER_CONF" 2>/dev/null | cut -d= -f2)
-				threshold=$(grep "^FAIL_THRESHOLD=" "$FAILOVER_CONF" 2>/dev/null | cut -d= -f2)
-			fi
-			[ -z "$primary" ] && primary="vless"
-			[ -z "$interval" ] && interval=15
-			[ -z "$threshold" ] && threshold=2
-			daemon_running=$(check_failover_daemon)
-			printf '{"ok":true,"enabled":%s,"primary":%s,"interval":%s,"threshold":%s,"daemon":%s}\n' \
-				"$(json_str "$failover_mode")" "$(json_str "$primary")" "$interval" "$threshold" "$daemon_running"
-			;;
-		failover)
-			check_token "$token"
-			cmd=$(echo "$QUERY_STRING" | sed 's/.*cmd=//; s/&.*//' 2>/dev/null)
-			[ "$cmd" = "$QUERY_STRING" ] && cmd=""
-			case "$cmd" in
-				on|off)
-					out=$($KVAS_BIN failover "$cmd" 2>&1)
-					rc=$?
-					[ $rc -ne 0 ] && json_error "failover $cmd failed: $out"
-					json_ok "failover $cmd"
-					;;
-				status)
-					out=$($KVAS_BIN failover status 2>&1)
-					esc=$(printf '\033')
-					out=$(echo "$out" | tr -d "$esc" | sed 's/\[[0-9;]*[a-zA-Z]//g')
-					printf '{"ok":true,"data":%s}\n' "$(json_str "$out")"
-					;;
-				*) json_error "cmd must be on/off/status" ;;
-			esac
 			;;
 		kvas_list)
 			check_token "$token"

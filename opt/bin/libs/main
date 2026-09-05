@@ -62,10 +62,6 @@ ADBLOCK_LIST_EXCEPTION_BACKUP=${KVAS_BACKUP_PATH}/exception.list
 ADBLOCK_HOSTS_FILE_BACKUP=${KVAS_BACKUP_PATH}/ads.kvas.list
 ADBLOCK_SOURCES_LIST_BACKUP=${KVAS_BACKUP_PATH}/sources.list
 
-HYSTERIA_CONFIG=/opt/etc/hysteria/config.yaml
-HYSTERIA_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/hysteria_config.yaml
-HYSTERIA_ENV_FILE=/opt/apps/kvas/hysteria/etc/conf/env.sh
-HYSTERIA_ENV_BACKUP=${KVAS_BACKUP_PATH}/hysteria_env.sh
 
 KVAS_WEB_PASS=/opt/kvas_web_pass
 KVAS_WEB_PASS_BACKUP=${KVAS_BACKUP_PATH}/kvas_web_pass
