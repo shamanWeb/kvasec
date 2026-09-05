@@ -54,6 +54,7 @@ cp -a "${REPO_DIR}/opt/." "${DATA}/opt/apps/kvas/"
 # 2. Системные точки входа, которые читает сама прошивка (init.d/ndm),
 #    дублируются в /opt/etc/ (как в отгружаемом релизе)
 cp -a "${REPO_DIR}/opt/etc/init.d/S96kvas"                    "${DATA}/opt/etc/init.d/"
+cp -a "${REPO_DIR}/opt/etc/init.d/S99kvas-awg-route"          "${DATA}/opt/etc/init.d/"
 cp -a "${REPO_DIR}/opt/etc/ndm/fs.d/15-kvas-start.sh"         "${DATA}/opt/etc/ndm/fs.d/"
 cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/100-dns-local"     "${DATA}/opt/etc/ndm/netfilter.d/"
 
@@ -62,6 +63,7 @@ chmod -R +x "${DATA}/opt/apps/kvas/bin"          2>/dev/null || true
 chmod -R +x "${DATA}/opt/apps/kvas/etc/init.d"   2>/dev/null || true
 chmod -R +x "${DATA}/opt/apps/kvas/etc/ndm"      2>/dev/null || true
 chmod +x    "${DATA}/opt/etc/init.d/S96kvas" \
+            "${DATA}/opt/etc/init.d/S99kvas-awg-route" \
             "${DATA}/opt/etc/ndm/fs.d/15-kvas-start.sh" \
             "${DATA}/opt/etc/ndm/netfilter.d/100-dns-local"
 
@@ -147,6 +149,12 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     if grep -q '^INFACE_ENT=.\+' "\${kvas_conf}" 2>/dev/null; then
         /opt/apps/kvas/bin/kvas init >/dev/null 2>&1 &
     fi
+
+    # Watcher маршрутизации для НЕ-NDM AmneziaWG-туннеля (opkgtunNN).
+    # Держит default/rule/KVAS_MARK при переподключении туннеля и сбросах NDM.
+    # Для не-opkgtun интерфейсов демон сам сразу выходит — ставим всегда.
+    chmod +x /opt/etc/init.d/S99kvas-awg-route 2>/dev/null
+    /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1 &
 fi
 exit 0
 POSTINST

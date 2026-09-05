@@ -1,0 +1,64 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# Watcher маршрутизации kvas для НЕ-NDM AmneziaWG-туннеля (opkgtunNN).
+#
+# Зачем: awg-manager создаёт opkgtunNN в обход NDM, поэтому NDM-события kvas
+# не приходят, и при переподключении туннеля / перезагрузке NDM-firewall
+# состояние маршрутизации kvas слетает, а восстановить его между запусками
+# kvas (init/update/add) некому. Демон каждые 5 сек держит:
+#   1) default в kvas VPN-redirect таблицах (1001; старая вестигиальная 4096)
+#      на opkgtunNN — иначе трафик из списка сваливается в WAN;
+#   2) ip rule fwmark 0xd1000 -> table 1001 (priority 99, выше system rule 104);
+#   3) цепочку KVAS_MARK в mangle — при пропаже пересоздаёт через штатный
+#      хук 100-vpn-mark (ip4_firewall_set_all_rules).
+#
+# Метка kvas 1.1.x = 0xd1000 -> table 1001. Для НЕ-opkgtun интерфейсов демон
+# сразу выходит (штатный NDM-механизм kvas работает сам).
+# ---------------------------------------------------------------------------
+LOG=/opt/tmp/kvas-awg-route.log
+CONF=/opt/etc/kvas.conf
+IFEQ=/opt/etc/inface_equals
+PIDF=/opt/tmp/kvas-awg-route.pid
+
+MARK=0xd1000
+RTABLE=1001
+RPRIO=99
+NFHOOK=/opt/etc/ndm/netfilter.d/100-vpn-mark
+
+watcher() {
+  IFACE=$(sed -n 's/^INFACE_ENT=//p' "$CONF" | tr -d ' \r')
+  case "$IFACE" in opkgtun*) : ;; *) echo "$(date) INFACE_ENT=$IFACE не opkgtun — выход" >>"$LOG"; return ;; esac
+  grep -q "$IFACE" "$IFEQ" 2>/dev/null || echo "$IFACE|$IFACE|AmneziaWG-3.1" >>"$IFEQ"
+  echo "$(date) watcher start ($IFACE)" >>"$LOG"
+  while : ; do
+    IPGW=$(ip a 2>/dev/null | grep global | grep "$IFACE" | sed 's|.*inet \(.*\)/.* scope.*|\1|' | cut -d' ' -f1)
+    if [ -n "$IPGW" ]; then
+      # 1) default в VPN-redirect таблицах -> opkgtunNN
+      TABLES=$(ip rule 2>/dev/null | grep -iE 'fwmark (0xd1000|0xffffaaa)' | grep -oE 'lookup [0-9]+' | awk '{print $2}' | sort -u)
+      [ -z "$TABLES" ] && TABLES="1001 4096"
+      for T in $TABLES; do
+        cur=$(ip route show table "$T" 2>/dev/null | awk '/^default/{print $5; exit}')
+        if [ "$cur" != "$IFACE" ]; then
+          ip route replace table "$T" default via "$IPGW" dev "$IFACE"
+          echo "$(date) fix: table $T default '$cur' -> $IFACE" >>"$LOG"
+        fi
+      done
+
+      # 2) ip rule fwmark 0xd1000 -> table 1001 (priority 99)
+      if ! ip rule 2>/dev/null | grep -q "fwmark ${MARK}.*lookup ${RTABLE}"; then
+        ip rule add fwmark ${MARK}/${MARK} lookup ${RTABLE} priority ${RPRIO} 2>/dev/null
+        echo "$(date) fix: ip rule fwmark ${MARK} -> table ${RTABLE} (prio ${RPRIO})" >>"$LOG"
+      fi
+
+      # 3) цепочка KVAS_MARK в mangle — при пропаже пересоздать штатным хуком
+      if ! iptables -t mangle -S KVAS_MARK >/dev/null 2>&1; then
+        [ -x "$NFHOOK" ] && type=iptables table=mangle "$NFHOOK" >/dev/null 2>&1
+        echo "$(date) fix: KVAS_MARK отсутствует -> перезапуск 100-vpn-mark" >>"$LOG"
+      fi
+    fi
+    sleep 5
+  done
+}
+start() { if [ -f "$PIDF" ] && kill -0 "$(cat $PIDF 2>/dev/null)" 2>/dev/null; then exit 0; fi; watcher & echo $! > "$PIDF"; }
+stop()  { [ -f "$PIDF" ] && kill "$(cat $PIDF 2>/dev/null)" 2>/dev/null; rm -f "$PIDF"; }
+case "$1" in start) start ;; stop) stop ;; restart) stop; sleep 1; start ;; *) echo "usage: $0 {start|stop|restart}";; esac
