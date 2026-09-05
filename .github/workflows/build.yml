@@ -1,0 +1,54 @@
+name: build-and-release
+
+# Собирает ipk из репозитория (build.sh) и публикует его как GitHub Release,
+# откуда его тянет `kvas upgrade` (см. opt/bin/main/upgrade → release_url).
+#
+# Запуск:
+#   • вручную (Actions → build-and-release → Run workflow), поле release = номер сборки;
+#   • или пушем тега вида v27  (номер берётся из хвоста тега).
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Номер релиза (например 27)'
+        required: true
+        default: '27'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Определяем номер релиза
+        id: rel
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            num="${{ github.event.inputs.release }}"
+          else
+            # тег v27 → 27 ; тег v1.1.9_beta-10-27 → 27
+            num="${GITHUB_REF_NAME##*[!0-9]}"
+          fi
+          [ -n "$num" ] || { echo "Не удалось определить номер релиза"; exit 1; }
+          echo "num=$num" >> "$GITHUB_OUTPUT"
+          echo "tag=v1.1.9_beta-10-$num" >> "$GITHUB_OUTPUT"
+
+      - name: Сборка ipk
+        run: |
+          chmod +x build.sh
+          ./build.sh "${{ steps.rel.outputs.num }}"
+
+      - name: Публикация релиза
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.rel.outputs.tag }}
+          name: KVAS ${{ steps.rel.outputs.tag }}
+          files: kvas_*.ipk
+          make_latest: true

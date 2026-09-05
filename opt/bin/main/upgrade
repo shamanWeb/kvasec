@@ -127,7 +127,7 @@ select_release_from_list(){
 #	Функция выводит на экран доступные в репозитории версии пакетов Квас
 # 	и позволяет выбрать один из них в случае использования режима "отката"
 
-	url_list=$(curl -s "${release_url}" | jq -r '.[] | .assets | .[] | .browser_download_url')
+	url_list=$(gh_api "${release_url}" | jq -r '.[] | .assets | .[] | .browser_download_url')
 	rel_list=$(echo "${url_list}" | cut -d'/' -f8)
 	num=1; total=$(echo "${rel_list}" | wc -l)
 
@@ -183,9 +183,34 @@ remove_nano(){
 #--------------------------------------------------------------------------------------------------------------
 
 # Ссылка на репозиторий на GitHub для получения крайней версии пакета
-release_url=https://api.github.com/repos/qzeleza/kvas/releases
+release_url=https://api.github.com/repos/shamanWeb/kvasec/releases
+# Токен для приватного репозитория (необязателен, если релизы публичные).
+# Положите fine-grained PAT (права: Contents-read) в файл ниже одной строкой.
+GH_TOKEN_FILE=/opt/etc/kvas.github.token
+[ -f "${GH_TOKEN_FILE}" ] && GH_TOKEN="$(cat "${GH_TOKEN_FILE}" 2>/dev/null | tr -d ' \r\n')" || GH_TOKEN=''
+# Обёртка над curl к GitHub API с авторизацией, если задан токен
+gh_api(){
+	if [ -n "${GH_TOKEN}" ]; then
+		curl -s -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" "$@"
+	else
+		curl -s -H "Accept: application/vnd.github+json" "$@"
+	fi
+}
+# Скачивание ассета релиза. Для приватного репо browser_download_url недоступен
+# без авторизации, поэтому при наличии токена качаем через api-url ассета (octet-stream).
+gh_download(){
+	# $1 = browser_download_url, $2 = имя файла назначения
+	if [ -n "${GH_TOKEN}" ]; then
+		dl_tag=$(echo "$1" | sed 's#.*/download/\([^/]*\)/.*#\1#')
+		dl_file=$(get_package_name "$1")
+		dl_api=$(gh_api "${release_url}/tags/${dl_tag}" | jq -r ".assets[]? | select(.name==\"${dl_file}\") | .url" | head -1)
+		curl -sL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/octet-stream" "${dl_api}" -o "$2"
+	else
+		curl -sOL "$1"
+	fi
+}
 # Получаем ссылку на крайний релиз пакета на GitHub
-package_url=$(curl -sH "Accept: application/vnd.github.v3+json" ${release_url}/latest | sed -n 's/.*browser_download_url\": "\(.*\)\"/\1/p;'| tr -d ' ' |  sed '/^$/d')
+package_url=$(gh_api "${release_url}/latest" | jq -r '.assets[]?.browser_download_url' | grep -E '\.ipk$' | head -1)
 # Выделяем имя пакета из ссылки
 package_name=$(get_package_name "${package_url}")
 # путь к файлу конфигурации пакета Квас
@@ -296,7 +321,7 @@ ready 'Загружаем пакет...'
 
 	cd /opt/packages
 	rm -f "/opt/packages/${package_name}"
-	curl -sOL "${package_url}"
+	gh_download "${package_url}" "/opt/packages/${package_name}"
 
 } &>/dev/null && when_ok || when_err
 # в случае если отсутствует соединение с интернетом
