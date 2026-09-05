@@ -46,8 +46,7 @@ setup_print_welcome(){
 	print_line
 	echo -e "  Пакет представляет собой обвязку или интерфейс командной строки"
 	echo -e "  для защиты Вашего соединения при обращении к определенным доменам."
-	echo -e "  Поддержка: ${GREEN}VLESS${NOCL}, ${GREEN}Hysteria 2${NOCL}, ${GREEN}Shadowsocks${NOCL}, OpenVPN, Wireguard, IKE"
-	echo -e "  Автопереключение: failover между ${GREEN}VLESS${NOCL} и ${GREEN}Hysteria${NOCL}"
+	echo -e "  Поддержка: ${GREEN}VLESS${NOCL}, ${GREEN}Shadowsocks${NOCL}, OpenVPN, Wireguard, IKE"
 	print_line
 	echo -e "  Версия: ${GREEN}${full_version}${NOCL}"
 	print_line
@@ -296,15 +295,6 @@ restore_backups(){
 	restore_backup "${ADBLOCK_LIST_EXCEPTION_BACKUP}" "${ADBLOCK_LIST_EXCEPTION}" "списка хостов-исключений для блокировки рекламы"
 	restore_backup "${ADBLOCK_HOSTS_FILE_BACKUP}" "${ADBLOCK_HOSTS_FILE}" "списка хостов для блокировки рекламы"
 	restore_backup "${ADBLOCK_SOURCES_LIST_BACKUP}" "${ADBLOCK_SOURCES_LIST}" "списка источников хостов для блокировки рекламы"
-	restore_backup "${HYSTERIA_CONFIG_BACKUP}" "${HYSTERIA_CONFIG}" "конфигурации hysteria"
-	restore_backup "${HYSTERIA_ENV_BACKUP}" "${HYSTERIA_ENV_FILE}" "файла окружения hysteria"
-	[ -f "${KVAS_BACKUP_PATH}/hysteria_bin" ] && {
-		mkdir -p /opt/apps/kvas/hysteria/bin
-		cp -f "${KVAS_BACKUP_PATH}/hysteria_bin" /opt/apps/kvas/hysteria/bin/hysteria
-		chmod 755 /opt/apps/kvas/hysteria/bin/hysteria
-		ready "Бинарник Hysteria ${BLUE}восстановлен${NOCL}"
-		when_ok "УСПЕШНО"
-	}
 	restore_backup "${KVAS_WEB_PASS_BACKUP}" "${KVAS_WEB_PASS}" "пароля веб-интерфейса"
 	print_line
 }
@@ -320,10 +310,6 @@ save_backups(){
 	backup_copy "${KVAS_CONF_FILE}" "${KVAS_CONFIG_BACKUP}"
 	backup_copy "${KVAS_LIST_FILE}" "${KVAS_LIST_FILE_BACKUP}"
 	backup_copy "${TAGS_LIST_FILE}" "${TAGS_LIST_BACKUP}"
-
-	# Бэкап hysteria конфига (если есть)
-	backup_copy "${HYSTERIA_CONFIG}" "${HYSTERIA_CONFIG_BACKUP}"
-	backup_copy "${HYSTERIA_ENV_FILE}" "${HYSTERIA_ENV_BACKUP}"
 	backup_copy "${KVAS_WEB_PASS}" "${KVAS_WEB_PASS_BACKUP}"
 
 	# Бэкап остальных конфигов
@@ -341,7 +327,6 @@ save_backups(){
 	backup_copy "${ADBLOCK_SOURCES_LIST}" "${ADBLOCK_SOURCES_LIST_BACKUP}"
 	backup_copy "${ADBLOCK_LIST_EXCEPTION}" "${ADBLOCK_LIST_EXCEPTION_BACKUP}"
 
-	[ -f /opt/apps/kvas/hysteria/bin/hysteria ] && cp -f /opt/apps/kvas/hysteria/bin/hysteria "${backup_dir}/hysteria_bin" 2>/dev/null
 
 	echo "Резервная копия сохранена в: ${backup_dir}"
 }
@@ -402,7 +387,6 @@ rm_package_files() {
 			rm_file /opt/etc/inface_equals
 			rm_file /opt/etc/kvas.conf
 			rm_file /opt/etc/kvas.list
-			rm_file /opt/etc/kvas.failover.conf
 			rm_dir /opt/etc/.kvas
 			rm_file /opt/etc/init.d/S22shadowsocks
 		} && when_ok || when_bad
@@ -424,9 +408,6 @@ rm_package_files() {
 		rm_file /opt/etc/init.d/S97xray
 		rm_file /opt/bin/kvas
 		rm_dir /opt/etc/xray
-		rm_file /opt/var/log/kvas-failover.log
-		rm_file /var/run/kvas-failover.pid
-		rm_file /tmp/kvas-failover-switch.lock
 		rm_file /tmp/kvas-vpn-set.log
 	} && when_ok || when_bad
 }
@@ -762,17 +743,6 @@ cmd_install(){
 		echo "SETUP_FINISHED=true" >> "${KVAS_CONF_FILE}"
 	fi
 
-	# Отложенная установка Hysteria (если выбрана в VPN selection)
-	if [ -f "${KVAS_CONF_FILE}" ] && grep -q "SETUP_HYSTERIA=pending" "${KVAS_CONF_FILE}" 2>/dev/null; then
-		sed -i 's/SETUP_HYSTERIA=pending/SETUP_HYSTERIA=done/' "${KVAS_CONF_FILE}"
-		echo ""
-		echo -e "${GREEN}Запускаем настройку Hysteria 2...${NOCL}"
-		print_line
-		cmd_hysteria_new
-	fi
-
-
-
 	# Принудительный перезапуск dnsmasq
 	[ -f /opt/etc/init.d/K56dnsmasq ] && [ ! -f /opt/etc/init.d/S56dnsmasq ] && cp -f /opt/etc/init.d/K56dnsmasq /opt/etc/init.d/S56dnsmasq
 	if [ -f /opt/etc/init.d/S56dnsmasq ] && [ -f /opt/etc/dnsmasq.conf ]; then
@@ -905,7 +875,6 @@ cmd_uninstall() {
 		# 1. Останавливаем все сервисы
 		ready 'Останавливаем все сервисы'
 		{
-			[ -f /opt/etc/init.d/S99hysteria ] && /opt/etc/init.d/S99hysteria stop 2>/dev/null
 			[ -f /opt/etc/init.d/S97xray ] && /opt/etc/init.d/S97xray stop 2>/dev/null
 			[ -f /opt/etc/init.d/S99adguardhome ] && /opt/etc/init.d/S99adguardhome stop 2>/dev/null
 			[ -f /opt/etc/init.d/S22shadowsocks ] && /opt/etc/init.d/S22shadowsocks stop 2>/dev/null
@@ -950,14 +919,6 @@ cmd_uninstall() {
 		opkg --force-remove --force-depends remove kvas >/dev/null 2>&1
 		when_ok 'УСПЕШНО'
 
-		# 7. Полное удаление hysteria
-		if [ "${rm_type}" = full ]; then
-			ready 'Удаляем Hysteria...'
-			[ -f /opt/etc/init.d/S99hysteria ] && /opt/etc/init.d/S99hysteria stop 2>/dev/null
-			rm -f /opt/bin/hysteria /opt/etc/init.d/S99hysteria /var/run/hysteria.pid 2>/dev/null
-			rm -rf /opt/apps/kvas/hysteria 2>/dev/null
-			when_ok 'УСПЕШНО' || when_bad 'ОШИБКА'
-		fi
 
 		# 8. При полном удалении — удаляем пакеты
 		if [ "${rm_type}" = full ]; then

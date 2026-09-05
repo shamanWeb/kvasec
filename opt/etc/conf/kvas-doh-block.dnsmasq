@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# Блокировка DNS-over-HTTPS (DoH), чтобы браузеры не обходили dnsmasq роутера.
+# Если браузер резолвит домены через свой DoH-сервер, kvas не видит запрос →
+# IP не попадает в ipset KVAS_LIST → сайт идёт мимо тоннеля (симптом:
+# «некоторые сайты случайно не открываются»).
+#
+# Приём: возвращаем 0.0.0.0 на имена публичных DoH-серверов → браузер не может
+# до них достучаться по имени и откатывается на системный DNS (= этот роутер).
+# DoT (DNS-over-TLS, порт 853) блокируется отдельно в iptables (watcher).
+#
+# Загружается через conf-dir=/opt/etc/dnsmasq.d/ (см. dnsmasq.conf).
+# ---------------------------------------------------------------------------
+
+# Firefox: canary-домен. Если он не резолвится в нормальный адрес — FF не
+# включает DoH автоматически.
+address=/use-application-dns.net/0.0.0.0
+
+# Cloudflare
+address=/cloudflare-dns.com/0.0.0.0
+address=/mozilla.cloudflare-dns.com/0.0.0.0
+address=/chrome.cloudflare-dns.com/0.0.0.0
+address=/one.one.one.one/0.0.0.0
+
+# Google
+address=/dns.google/0.0.0.0
+address=/dns.google.com/0.0.0.0
+
+# Quad9
+address=/dns.quad9.net/0.0.0.0
+address=/dns9.quad9.net/0.0.0.0
+
+# AdGuard
+address=/dns.adguard.com/0.0.0.0
+address=/dns.adguard-dns.com/0.0.0.0
+address=/dns-family.adguard.com/0.0.0.0
+
+# OpenDNS / Cisco
+address=/doh.opendns.com/0.0.0.0
+address=/doh.familyshield.opendns.com/0.0.0.0
+
+# CleanBrowsing
+address=/doh.cleanbrowsing.org/0.0.0.0
+
+# NextDNS
+address=/dns.nextdns.io/0.0.0.0
+
+# Comcast/прочие распространённые
+address=/doh.xfinity.com/0.0.0.0

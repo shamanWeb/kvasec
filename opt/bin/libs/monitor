@@ -416,6 +416,7 @@ cmd_monitor_web_start() {
 	if [ -f "$MONITOR_WEB_PID_FILE" ] && kill -0 "$(cat "$MONITOR_WEB_PID_FILE")" 2>/dev/null; then
 		echo "Веб-интерфейс уже запущен на порту $MONITOR_PORT"
 		echo "Откройте: http://$(hostname):$MONITOR_PORT/"
+		touch /opt/etc/kvas-monitor-web-enabled 2>/dev/null
 		monitor__web_log "web ui already running on port $MONITOR_PORT"
 		monitor__web_log_show
 		return
@@ -497,6 +498,8 @@ cmd_monitor_web_start() {
 			echo "Откройте: http://$(hostname):$MONITOR_PORT/"
 			[ "$has_conntrack" -eq 0 ] && echo "ВНИМАНИЕ: conntrack не установлен — данные о соединениях не будут отображаться"
 			[ "$has_curl" -eq 0 ] && echo "ВНИМАНИЕ: curl не установлен — список DHCP устройств не будет загружен"
+			# Флаг автозапуска в /opt/etc (persistent — переживает ребут; НЕ /opt/tmp!)
+			touch /opt/etc/kvas-monitor-web-enabled 2>/dev/null
 			monitor__web_log "web ui started: backend=$tool port=$MONITOR_PORT"
 			;;
 		ERROR*)
@@ -517,6 +520,8 @@ cmd_monitor_web_start() {
 
 cmd_monitor_web_stop() {
 	monitor__web_log "stopping web ui on port $MONITOR_PORT"
+	# Снимаем флаг автозапуска
+	rm -f /opt/etc/kvas-monitor-web-enabled 2>/dev/null
 
 	# Kill ALL socat processes on this port (main + children)
 	if command -v pkill >/dev/null 2>&1; then

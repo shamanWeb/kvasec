@@ -4,6 +4,35 @@
 > что уже изменено. Основной сценарий железа — см. `~/Dropbox/VPN/vpn-recovery-runbook.md`
 > (сервер AmneziaWG 3.1 + роутер Keenetic с kvas и не-NDM туннелем `opkgtun10`).
 
+## 0. КРИТИЧНО: полная цепочка «сайт из списка → тоннель» (диагностировано 2026-09-05)
+
+Чтобы домен из списка реально шёл в тоннель для LAN-клиентов, ВСЁ должно быть на месте:
+1. **DNS клиента → dnsmasq на роутере.** kvas DNAT'ит `br0:53 → 127.0.0.1:9753`
+   (константа `DNS_PORT=9753` в ndm). dnsmasq ОБЯЗАН слушать на **9753** (`port=9753`
+   в `/opt/etc/dnsmasq.conf`), иначе LAN-клиенты вообще без интернета (timeout).
+2. **dnsmasq грузит ipset-директивы.** Нужен `conf-dir=/opt/etc/dnsmasq.d/,*.dnsmasq`
+   + upstream `no-resolv` / `server=127.0.0.1#<DNS_CRYPT_PORT>`. Без conf-dir IP доменов
+   не попадают в KVAS_LIST. (Всё это чинит postinst в `build.sh`, идемпотентно.)
+3. **Маркировка.** Цепочка `KVAS_MARK` (mangle) + ссылки в PREROUTING (`-i br0 ... match-set
+   KVAS_LIST dst -j KVAS_MARK`). ⚠️ При `--force-reinstall`/upgrade старый пакет флашит
+   iptables → KVAS_MARK пропадает, и установка сама её НЕ создаёт → routing мёртв до
+   `kvas update`. **Фикс:** postinst в фоне запускает `kvas init` (если `INFACE_ENT` задан).
+4. **Правило + таблица:** `ip rule 99 fwmark 0xd1000 → table 1001` → `default dev opkgtun10`.
+5. **DNS-кэш КЛИЕНТА.** Если клиент резолвил домен ДО добавления — у него старый IP, которого
+   нет в ipset → идёт мимо тоннеля. На клиенте: `resolvectl flush-caches` / `ipconfig /flushdns`.
+6. **DoH/DoT-обход.** Браузеры (Chrome/Firefox) по умолчанию шлют DNS через свой DoH-сервер
+   мимо dnsmasq → домены не попадают в ipset. Закрыто: `kvas-doh-block.dnsmasq` (имена DoH-серверов
+   → 0.0.0.0, ставится postinst'ом в dnsmasq.d) + watcher держит iptables REJECT DoT (tcp/udp 853, br0).
+
+Массовое добавление доменов: писать прямо в `/opt/etc/kvas.list` (dedup `grep -qxF`),
+затем `bin/main/dnsmasq` (регенерация директив) + рестарт dnsmasq. НЕ через heredoc+pipe
+одновременно (stdin-конфликт: `while read` съест строки скрипта).
+
+**Регистрация NDM-хуков:** NDM вызывает только хуки из `/opt/etc/ndm/` (НЕ из `/opt/apps/kvas/etc/ndm/`).
+build.sh кладёт туда `100-dns-local` + `100-vpn-mark` (иначе KVAS_MARK слетала на сбросах NDM и не
+восстанавливалась). `kvas test` для opkgtun* использует прямую проверку туннеля (`awg_tunnel_check`),
+а не NDM RCI — не даёт ложного «ОСТАНОВЛЕНО».
+
 ## 1. Как устроена маршрутизация (то, что «идёт в тоннель»)
 
 - **Метка / таблица:** `MARK_NUM=0xd1000` → `ROUTE_TABLE_ID=1001`, правило `ip rule fwmark 0xd1000 lookup 1001`
@@ -20,9 +49,13 @@
     `ifstatechanged.d/100-kvas-vpn` (по `INFACE_CLI`);
   - `ip4__mark__create_chain` (`ndm:531`) — при СОЗДАНИИ MARK-цепочки (после её флаша).
 - **⚠️ Не-NDM туннели (AmneziaWG `opkgtunNN`):** создаются awg-manager'ом в обход NDM →
-  NDM-хуки НЕ срабатывают → таблицу 1001 kvas сам не держит → нужен ВНЕШНИЙ watcher-демон
-  `S99kvas-awg-route` (см. runbook §7.1). Он держит `default via <ip> dev opkgtunNN` в table 1001,
-  но НЕ восстанавливает `ip rule` (его восстанавливает пересоздание MARK-цепочки).
+  NDM-хуки НЕ срабатывают → таблицу 1001/правило/KVAS_MARK kvas сам не держит после
+  переподключения туннеля и сбросов NDM-firewall. Решает watcher-демон
+  **`opt/etc/init.d/S99kvas-awg-route`** (теперь В ПАКЕТЕ, ставится и стартует из postinst).
+  Каждые 5с держит: (1) `default via <ip> dev opkgtunNN` в table 1001/4096; (2) `ip rule
+  fwmark 0xd1000 -> table 1001` (prio 99); (3) цепочку KVAS_MARK — при пропаже пересоздаёт
+  через `100-vpn-mark`. Для не-opkgtun интерфейсов сразу выходит. Лог: `/opt/tmp/kvas-awg-route.log`.
+  (Исторически был ручным артефактом runbook §7.1 — теперь заведён в репо.)
 - **Ложные тревоги (не авария):** `kvas test` / `check_vpn` опрашивают состояние через NDM RCI
   (`localhost:79/rci/...`) по `INFACE_CLI` → для `opkgtun10` (вне NDM) вернут «ОСТАНОВЛЕНО/пусто»,
   хотя туннель работает. Проверять надо `ip route get ... mark 0xd1000`, `ip route show table 1001`.
@@ -70,6 +103,6 @@
 - `./build.sh [N]` — номер релиза из аргумента / `VERSION` / `Makefile`. Формат ipk идентичен
   отгружаемым релизам. `bin/libs/ndm` генерится postinst'ом из `etc/ndm/ndm` (несёт RULE_PRIORITY).
 - Ставим `opkg install --force-reinstall`, затем `kvas setup` или ребут.
-- Собираем **core как есть** (без Hysteria/failover — их файлов в репо нет).
+- Собираем **core** (Hysteria и failover удалены из проекта).
 - **Важно:** git-дерево `opt/` ≠ отгружаемый ipk апстрима (тот собирался на Windows `lastest/`,
   дрейф двусторонний). Правки в этом репо не влияют на апстрим-релизы автоматически.

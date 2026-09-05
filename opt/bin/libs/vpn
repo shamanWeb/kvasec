@@ -15,9 +15,6 @@ MINUS=10
 # 	Добавляет хосты в белый список, доступ к сайтам которого
 #   осуществляется через Shadowsocks
 #
-#	Разработчик: mail@zeleza.ru
-#	Дата: 21/05/2022
-#	Лицензия: Apache License 2.0
 #	75 функций (на 23/07/2022)
 #	
 # ------------------------------------------------------------------------------------------
@@ -204,14 +201,6 @@ all_services_restart() {
 
 		service_restart 'DNS сервер DNSMasq'  'S56dnsmasq'
 		service_restart 'DNS сервер DNSCrypt' 'S09dnscrypt-proxy2'
-	fi
-
-	if [ -f /opt/apps/kvas/hysteria/bin/hysteria ]; then
-		[ -f /opt/bin/hysteria ] || ln -sf /opt/apps/kvas/hysteria/bin/hysteria /opt/bin/hysteria
-		[ -f /opt/etc/init.d/S99hysteria ] || ln -sf /opt/apps/kvas/hysteria/etc/init.d/S99hysteria /opt/etc/init.d/S99hysteria
-		log_warning 'Перезапуск Hysteria 2'
-
-		service_restart 'Hysteria 2' 'S99hysteria'
 	fi
 
 	if is_shadowsocks_enabled ; then
@@ -2435,15 +2424,13 @@ select_vpn_interface() {
 	show_vpn_list
 
 	total=$(cat < "${INFACE_NAMES_FILE}" | wc -l)
-	local hysteria_num=$((total + 1))
-	local skip_num=$((total + 2))
+	local skip_num=$((total + 1))
 	while true; do
 		print_line
-		echo -e "  ${GREEN}H${NOCL}) Hysteria 2 — настроить Hysteria (автоматическая установка)"
 		echo -e "  ${GREEN}R${NOCL}) Restore — восстановить настройки из резервной копии"
 		echo -e "  ${GREEN}S${NOCL}) Пропустить выбор — настроить позже"
 		echo ""
-		echo -en "${BLUE}Выберите номер 1-${total}, H, R, S, или Q-выход:${NOCL} "
+		echo -en "${BLUE}Выберите номер 1-${total}, R, S, или Q-выход:${NOCL} "
 		read -r num_vpn_inface
 		if [[ "$num_vpn_inface" =~ ^[\-]?[0-9]+$ ]]; then
 			print_line
@@ -2456,13 +2443,6 @@ select_vpn_interface() {
 				error "Число должно быть в пределах от 1 до ${total}"
 				continue
 			fi
-		elif [[ "$num_vpn_inface" =~ ^[Hh]$ ]]; then
-			print_line
-			echo -e "${GREEN}Hysteria 2 будет настроена после завершения setup...${NOCL}"
-			echo -e "${YELLOW}Установка отложена: DNS ещё не настроен, бинарник будет скачан позже.${NOCL}"
-			set_config_value "SETUP_HYSTERIA" "pending"
-			print_line
-			break
 		elif [[ "$num_vpn_inface" =~ ^[Rr]$ ]]; then
 			print_line
 			restore_backups
@@ -2472,7 +2452,7 @@ select_vpn_interface() {
 			continue
 		elif [[ "$num_vpn_inface" =~ ^[Ss]$ ]]; then
 			print_line
-			echo -e "${YELLOW}Выбор интерфейса пропущен. Настройка позже: kvas vless new / kvas hysteria new${NOCL}"
+			echo -e "${YELLOW}Выбор интерфейса пропущен. Настройка позже: kvas vless new${NOCL}"
 			print_line
 			break
 		elif [[ "$num_vpn_inface" =~ ^[Qq]$ ]]; then
@@ -2508,7 +2488,7 @@ select_vpn_interface() {
 			print_line
 			cmd_interface_change "yes" "${is_install_stage}"
 		else
-			error "Введите цифру 1-${total}, H-Hysteria, S-пропустить, Q-выход."
+			error "Введите цифру 1-${total}, S-пропустить, Q-выход."
 			continue
 		fi
 		break

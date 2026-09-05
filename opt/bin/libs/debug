@@ -7,9 +7,6 @@
 #	в работе пакета КВАС
 #
 # ------------------------------------------------------------------------------
-#	Разработчик: mail@zeleza.ru
-#	Дата создания: 22/05/2022
-#	Лицензия: Apache License 2.0
 # ------------------------------------------------------------------------------------------
 
 . /opt/apps/kvas/bin/libs/main
@@ -947,15 +944,6 @@ show_services_status(){
 		cmd_dns_crypt_status_show
 		cmd_dnsmasq_dns_change
 	fi
-	# Проверяем Hysteria
-	if [ -f "/opt/apps/kvas/hysteria/bin/hysteria" ]; then
-		ready "Hysteria 2"
-		if [ -f "/var/run/hysteria.pid" ] && kill -0 $(cat /var/run/hysteria.pid 2>/dev/null) 2>/dev/null; then
-			when_ok "ЗАПУЩЕНА"
-		else
-			when_bad "ОСТАНОВЛЕНА"
-		fi
-	fi
 	show_guest_nets
 
 }
@@ -992,16 +980,6 @@ print_debug() {
 	kvas__show_install_log
 	syslog__show 'info'  'КВАС' 'Последние информационные сообщения [kvas log info]:' 20
 	syslog__show 'error' 'КВАС' 'Последние ошибки [kvas log error]:'                  20
-
-	print_line
-	echo -e " ${BLUE}Прокси [kvas hysteria status]${NOCL}"
-	print_line
-	cmd_hysteria_status
-
-	print_line
-	echo -e " ${BLUE}Автопереключение [kvas failover status]${NOCL}"
-	print_line
-	show_failover_status 2>/dev/null || echo "Failover не настроен"
 
 	print_line
 	echo -e " ${BLUE}Сетевые правила [kvas debug iptables]${NOCL}"

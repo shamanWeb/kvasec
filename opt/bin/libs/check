@@ -6,9 +6,6 @@
 #	Данный файл содержит функции для проверки работы пакета Квас
 #
 # ------------------------------------------------------------------------------
-#	Разработчик: mail@zeleza.ru
-#	Дата создания: 13/09/2022
-#	Лицензия: Apache License 2.0
 # ------------------------------------------------------------------------------------------
 
 . /opt/apps/kvas/bin/libs/main
@@ -128,7 +125,47 @@ dnsmasq_check() {
 #	 Проверяем работу vpn
 #
 # ------------------------------------------------------------------------------------------
+#	Прямая проверка НЕ-NDM AmneziaWG-туннеля (opkgtunNN).
+#	NDM RCI его не видит (INFACE_CLI пуст), поэтому обычная vpn_check даёт
+#	ложное «ОСТАНОВЛЕНО» и пытается бунсить несуществующий интерфейс.
+awg_tunnel_check(){
+	local iface="${1}"
+
+	ready "Состояние AmneziaWG-туннеля ${iface}"
+	if /opt/sbin/ip a show "${iface}" 2>/dev/null | grep -q 'inet '; then
+		when_ok "ПОДКЛЮЧЕНО"
+	else
+		when_bad "ИНТЕРФЕЙС НЕ ПОДНЯТ"
+		return
+	fi
+
+	ready "Последнее рукопожатие"
+	local hs=$(awg show "${iface}" 2>/dev/null | sed -n 's/.*latest handshake: //p')
+	[ -n "${hs}" ] && when_ok "${hs}" || when_bad "НЕТ"
+
+	ready "Таблица маршрутов 1001 -> ${iface}"
+	/opt/sbin/ip route show table 1001 2>/dev/null | grep -q "^default.*dev ${iface}" \
+		&& when_ok "OK" || when_bad "НЕ НА ${iface}"
+
+	ready "Правило fwmark 0xd1000 -> table 1001"
+	/opt/sbin/ip rule show 2>/dev/null | grep -q '0xd1000' && when_ok "ЕСТЬ" || when_bad "НЕТ"
+
+	ready "Цепочка маркировки KVAS_MARK"
+	/opt/sbin/iptables -t mangle -S KVAS_MARK >/dev/null 2>&1 && when_ok "ЕСТЬ" || when_bad "НЕТ"
+
+	ready "Выход в интернет через туннель"
+	local wan=$(curl -s --connect-timeout 6 --interface "${iface}" https://api.ipify.org 2>/dev/null)
+	echo "${wan}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' \
+		&& when_ok "OK (${wan})" || when_bad "НЕТ ОТВЕТА"
+}
+
 vpn_check(){
+
+#	Ветка для НЕ-NDM AmneziaWG-туннеля — проверяем туннель напрямую, минуя NDM RCI.
+	ent_iface=$(get_config_value INFACE_ENT 2>/dev/null | tr -d ' \r')
+	case "${ent_iface}" in
+		opkgtun*) awg_tunnel_check "${ent_iface}"; return ;;
+	esac
 
 	vpn_cli_desc=$(get_current_vpn_interface "cli_desc")
 	vpn_cli=$(get_current_vpn_interface "cli")
@@ -518,8 +555,6 @@ cmd_test_warning() {
 	print_line
 	echo "Проверка завершена."
 	echo "Для подробной отладки: kvas debug"
-	echo "Для проверки Hysteria: kvas hysteria test"
-	echo "Для проверки failover: kvas failover status"
 }
 
 # ------------------------------------------------------------------------------------------
@@ -550,34 +585,6 @@ cmd_state_checker() {
 		adblock_dnsmasq_check
 	fi
 	print_line
-#	Проверяем работу Hysteria 2
-	if [ -f "/opt/apps/kvas/hysteria/bin/hysteria" ]; then
-		ready "Проверка Hysteria 2"
-		if [ -f "/var/run/hysteria.pid" ] && kill -0 $(cat /var/run/hysteria.pid 2>/dev/null) 2>/dev/null; then
-			# Реальная проверка через прокси
-			local env_conf="/opt/apps/kvas/hysteria/etc/conf/env.sh"
-			if [ -f "$env_conf" ]; then
-				. "$env_conf"
-				if [ -n "$PROXY_LOCAL_IP" ] && [ -n "$PROXY_LOCAL_PORT_SOCKS" ]; then
-					local hysteria_ip=$(curl -s --connect-timeout 8 --max-time 12 -x "socks5://${PROXY_LOCAL_IP}:${PROXY_LOCAL_PORT_SOCKS}" "https://ifconfig.me" 2>/dev/null)
-					if [ -z "$hysteria_ip" ] || echo "$hysteria_ip" | grep -q -E "(Failed|Error|404|html)"; then
-						hysteria_ip=$(curl -s --connect-timeout 8 --max-time 12 -x "socks5://${PROXY_LOCAL_IP}:${PROXY_LOCAL_PORT_SOCKS}" "https://ipinfo.io/ip" 2>/dev/null)
-					fi
-					if [ -n "$hysteria_ip" ] && echo "$hysteria_ip" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$"; then
-						when_ok "РАБОТАЕТ (IP: $hysteria_ip)"
-					else
-						when_bad "РАБОТАЕТ (туннель не отвечает)"
-					fi
-				else
-					when_bad "КОНФИГ НЕ НАСТРОЕН"
-				fi
-			else
-				when_bad "КОНФИГ ОТСУТСТВУЕТ"
-			fi
-		else
-			when_bad "ОСТАНОВЛЕНА"
-		fi
-	fi
 	print_line
 #	По наличию файла ниже определяем наличие использования shadowsocks
 	if has_ssr_enable; then

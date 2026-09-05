@@ -54,16 +54,23 @@ cp -a "${REPO_DIR}/opt/." "${DATA}/opt/apps/kvas/"
 # 2. Системные точки входа, которые читает сама прошивка (init.d/ndm),
 #    дублируются в /opt/etc/ (как в отгружаемом релизе)
 cp -a "${REPO_DIR}/opt/etc/init.d/S96kvas"                    "${DATA}/opt/etc/init.d/"
+cp -a "${REPO_DIR}/opt/etc/init.d/S99kvas-awg-route"          "${DATA}/opt/etc/init.d/"
 cp -a "${REPO_DIR}/opt/etc/ndm/fs.d/15-kvas-start.sh"         "${DATA}/opt/etc/ndm/fs.d/"
 cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/100-dns-local"     "${DATA}/opt/etc/ndm/netfilter.d/"
+# 100-vpn-mark регистрируем в /opt/etc/ndm/ рядом с 100-dns-local, чтобы NDM
+# пересоздавал маркировку KVAS_MARK на netfilter-сбросах (иначе выживал только
+# DNS-редирект, а маркировка слетала — корень хрупкости KVAS_MARK).
+cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/100-vpn-mark"      "${DATA}/opt/etc/ndm/netfilter.d/"
 
 # Права на исполнение
 chmod -R +x "${DATA}/opt/apps/kvas/bin"          2>/dev/null || true
 chmod -R +x "${DATA}/opt/apps/kvas/etc/init.d"   2>/dev/null || true
 chmod -R +x "${DATA}/opt/apps/kvas/etc/ndm"      2>/dev/null || true
 chmod +x    "${DATA}/opt/etc/init.d/S96kvas" \
+            "${DATA}/opt/etc/init.d/S99kvas-awg-route" \
             "${DATA}/opt/etc/ndm/fs.d/15-kvas-start.sh" \
-            "${DATA}/opt/etc/ndm/netfilter.d/100-dns-local"
+            "${DATA}/opt/etc/ndm/netfilter.d/100-dns-local" \
+            "${DATA}/opt/etc/ndm/netfilter.d/100-vpn-mark"
 
 INSTALLED_SIZE="$(du -sb "${DATA}" | cut -f1)"
 
@@ -103,6 +110,9 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     # dnsmasq.conf: добавляем необходимые директивы если их нет.
     # conf-dir — загружает ipset=/домен/ правила из dnsmasq.d/kvas.dnsmasq.
     # server + no-resolv — форвардим через dnscrypt-proxy (порт из kvas.conf).
+    # port=9753 — ОБЯЗАТЕЛЬНО: kvas DNAT'ит LAN-запросы (br0:53) на 127.0.0.1:9753
+    #   (константа DNS_PORT=9753 в etc/ndm/ndm). Если dnsmasq слушает на 53, а не
+    #   на 9753 — LAN-клиенты получают timeout, интернет на устройствах «не работает».
     dnsmasq_conf=/opt/etc/dnsmasq.conf
     touch "\${dnsmasq_conf}"
     grep -q 'conf-dir=/opt/etc/dnsmasq.d' "\${dnsmasq_conf}" 2>/dev/null || \
@@ -112,6 +122,14 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
         dns_crypt_port=\${dns_crypt_port:-9153}
         printf 'no-resolv\nserver=127.0.0.1#%s\n' "\${dns_crypt_port}" >> "\${dnsmasq_conf}"
     fi
+    if ! grep -q '^port=9753' "\${dnsmasq_conf}" 2>/dev/null; then
+        sed -i '/^port=/d' "\${dnsmasq_conf}"
+        echo 'port=9753' >> "\${dnsmasq_conf}"
+    fi
+
+    # Блокировка DoH: сниппет с именами публичных DoH-серверов -> 0.0.0.0,
+    # чтобы браузеры не обходили dnsmasq (DoT/853 глушит watcher в iptables).
+    cp -f /opt/apps/kvas/etc/conf/kvas-doh-block.dnsmasq /opt/etc/dnsmasq.d/kvas-doh-block.dnsmasq 2>/dev/null
 
     chmod -R +x /opt/apps/kvas/bin/*        2>/dev/null
     chmod -R +x /opt/apps/kvas/etc/init.d/* 2>/dev/null
@@ -129,6 +147,28 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     else
         echo "APP_RELEASE=${PKG_RELEASE}" >> "\${kvas_conf}"
     fi
+
+    # Пересоздаём маршрутизацию kvas ПОСЛЕ установки (в фоне).
+    # Критично: при --force-reinstall/upgrade старый пакет при удалении флашит
+    # iptables (цепочка KVAS_MARK пропадает), а установка сама правила не создаёт →
+    # selective-routing не работает до ручного 'kvas update'. init пересоздаёт
+    # KVAS_MARK, таблицу 1001, ip rule (fwmark→1001) и наполняет ipset.
+    # Запускается только если интерфейс уже настроен (INFACE_ENT задан);
+    # на чистой установке маршрутизацию поднимет 'kvas setup'.
+    if grep -q '^INFACE_ENT=.\+' "\${kvas_conf}" 2>/dev/null; then
+        /opt/apps/kvas/bin/kvas init >/dev/null 2>&1 &
+    fi
+
+    # Watcher маршрутизации для НЕ-NDM AmneziaWG-туннеля (opkgtunNN).
+    # Держит default/rule/KVAS_MARK при переподключении туннеля и сбросах NDM.
+    # Для не-opkgtun интерфейсов демон сам сразу выходит — ставим всегда.
+    chmod +x /opt/etc/init.d/S99kvas-awg-route 2>/dev/null
+    /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1 &
+
+    # Web UI: если был включён (флаг в /opt/etc) — перезапускаем после upgrade,
+    # чтобы обновление не гасило интерфейс.
+    [ -f /opt/etc/kvas-monitor-web-enabled ] && \
+        /opt/apps/kvas/bin/kvas monitor web >/dev/null 2>&1 &
 fi
 exit 0
 POSTINST
