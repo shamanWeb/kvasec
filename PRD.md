@@ -418,12 +418,6 @@ gh release edit v1.1.9 --repo Anonimus2026/kvas --title "Kvas v164" --body "..."
 - PR обновляется автоматически при пуше в main
 - ipk загружается отдельно через `gh release upload`
 
-## 12. Авторы
-
-- KVAS: mail@zeleza.ru
-- Hysteria: jobgomel
-- Failover: Anonimus2026
-
 ## 13. Changelog
 
 ### v250 (24.07.2026)
