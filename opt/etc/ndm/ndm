@@ -20,7 +20,7 @@
 
 
 ROUTE_TABLE_ID=1001
-RULE_PRIORITY=1778
+RULE_PRIORITY=99
 MARK_NUM=0xd1000
 DNS_PORT=9753
 
@@ -1162,8 +1162,13 @@ ip4__route__add_table() {
 	submessage="таблицы маршрутизации ${ROUTE_TABLE_ID} для ${net_interface}${submessage}"
 
 	local route_show=$(ip4__route__show_table "${ROUTE_TABLE_ID}")
-	if [ -n "${route_show}" ] && ! echo "${route_show}" | grep -Fq "${subroute}" ; then
-		# таблица существует, но не содержит нужного роута
+	# Таблицу считаем валидной, если её default-маршрут уже смотрит на нужный
+	# интерфейс (с 'via ...' или без). Строгое сравнение со строкой subroute
+	# не совпадало с 'default via <ip> dev <iface>' (например от внешнего
+	# watcher'а для AmneziaWG opkgtun10) и вызывало лишний flush таблицы 1001
+	# на каждом kvas update — транзиентный обрыв тоннельной маршрутизации.
+	if [ -n "${route_show}" ] && ! echo "${route_show}" | grep '^default' | grep -Fq "dev ${net_interface}" ; then
+		# таблица существует, но её default не смотрит на нужный интерфейс
 		log_warning "Очистка таблицы маршрутизации ${ROUTE_TABLE_ID} из-за отсутствия ${subroute}"
 		/opt/sbin/ip route flush table "${ROUTE_TABLE_ID}" &>/dev/null
 

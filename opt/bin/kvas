@@ -98,15 +98,25 @@ case "${1}" in
 			[ -n "$_dom" ] && cmd_add_one_host "$_dom" "no" "$_wild" && _added=true
 		done
 		if $_added; then
-			update_ipset refresh &>/dev/null
-			if [ -f /opt/etc/init.d/S56dnsmasq ]; then
-				/opt/etc/init.d/S56dnsmasq restart &>/dev/null
-			else
-				/opt/etc/init.d/S99adguardhome restart &>/dev/null
-			fi
+			# Домен(ы) начинают работать сразу: заливаем текущие IP в ipset (быстро).
 			for _dom in $_domains; do
 				[ -n "$_dom" ] && ipset__fill_by_domain "$_dom" &>/dev/null
 			done
+			# Тяжёлое — в фоне, чтобы команда возвращалась сразу:
+			#  - refresh_dnsmasq_ipset_table пересобирает ipset=/домен/ директивы из
+			#    ПОЛНОГО kvas.list (ловит домены, добавленные по тегам/импорту);
+			#  - main/ipset добирает IP-литералы/подсети, если они были в аргументах;
+			#  - перезапуск DNS подхватывает новые директивы (для авто-добавления
+			#    будущих IP домена). Текущие IP уже в ipset — доступ работает до рестарта.
+			{
+				refresh_dnsmasq_ipset_table
+				/opt/apps/kvas/bin/main/ipset
+				if [ -f /opt/etc/init.d/S56dnsmasq ]; then
+					/opt/etc/init.d/S56dnsmasq restart
+				else
+					/opt/etc/init.d/S99adguardhome restart
+				fi
+			} &>/dev/null &
 		fi
 		;;
 	del | rm  )
