@@ -103,6 +103,9 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     # dnsmasq.conf: добавляем необходимые директивы если их нет.
     # conf-dir — загружает ipset=/домен/ правила из dnsmasq.d/kvas.dnsmasq.
     # server + no-resolv — форвардим через dnscrypt-proxy (порт из kvas.conf).
+    # port=9753 — ОБЯЗАТЕЛЬНО: kvas DNAT'ит LAN-запросы (br0:53) на 127.0.0.1:9753
+    #   (константа DNS_PORT=9753 в etc/ndm/ndm). Если dnsmasq слушает на 53, а не
+    #   на 9753 — LAN-клиенты получают timeout, интернет на устройствах «не работает».
     dnsmasq_conf=/opt/etc/dnsmasq.conf
     touch "\${dnsmasq_conf}"
     grep -q 'conf-dir=/opt/etc/dnsmasq.d' "\${dnsmasq_conf}" 2>/dev/null || \
@@ -111,6 +114,10 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
         dns_crypt_port=\$(grep '^DNS_CRYPT_PORT=' /opt/etc/kvas.conf 2>/dev/null | cut -d= -f2)
         dns_crypt_port=\${dns_crypt_port:-9153}
         printf 'no-resolv\nserver=127.0.0.1#%s\n' "\${dns_crypt_port}" >> "\${dnsmasq_conf}"
+    fi
+    if ! grep -q '^port=9753' "\${dnsmasq_conf}" 2>/dev/null; then
+        sed -i '/^port=/d' "\${dnsmasq_conf}"
+        echo 'port=9753' >> "\${dnsmasq_conf}"
     fi
 
     chmod -R +x /opt/apps/kvas/bin/*        2>/dev/null
