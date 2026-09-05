@@ -6,8 +6,8 @@
 . /opt/apps/kvas/bin/libs/tags
 . /opt/apps/kvas/bin/libs/update
 . /opt/apps/kvas/bin/libs/vless
-. /opt/apps/kvas/bin/libs/hysteria
-. /opt/apps/kvas/bin/libs/failover
+[ -f /opt/apps/kvas/bin/libs/hysteria ]  && . /opt/apps/kvas/bin/libs/hysteria
+[ -f /opt/apps/kvas/bin/libs/failover ]  && . /opt/apps/kvas/bin/libs/failover
 . /opt/apps/kvas/bin/libs/vpn
 . /opt/apps/kvas/bin/libs/monitor
 . /opt/apps/kvas/bin/main/setup
