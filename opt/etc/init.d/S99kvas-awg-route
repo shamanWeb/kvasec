@@ -23,7 +23,10 @@ PIDF=/opt/tmp/kvas-awg-route.pid
 MARK=0xd1000
 RTABLE=1001
 RPRIO=99
-NFHOOK=/opt/etc/ndm/netfilter.d/100-vpn-mark
+# 100-vpn-mark лежит в app-дереве; в /opt/etc/ndm/ его нет (NDM его не вызывает —
+# потому и нужен этот watcher). Пробуем app-путь, затем /opt/etc на всякий случай.
+NFHOOK_APP=/opt/apps/kvas/etc/ndm/netfilter.d/100-vpn-mark
+NFHOOK_ETC=/opt/etc/ndm/netfilter.d/100-vpn-mark
 
 watcher() {
   IFACE=$(sed -n 's/^INFACE_ENT=//p' "$CONF" | tr -d ' \r')
@@ -52,7 +55,9 @@ watcher() {
 
       # 3) цепочка KVAS_MARK в mangle — при пропаже пересоздать штатным хуком
       if ! iptables -t mangle -S KVAS_MARK >/dev/null 2>&1; then
-        [ -x "$NFHOOK" ] && type=iptables table=mangle "$NFHOOK" >/dev/null 2>&1
+        if   [ -x "$NFHOOK_APP" ]; then type=iptables table=mangle "$NFHOOK_APP" >/dev/null 2>&1
+        elif [ -x "$NFHOOK_ETC" ]; then type=iptables table=mangle "$NFHOOK_ETC" >/dev/null 2>&1
+        fi
         echo "$(date) fix: KVAS_MARK отсутствует -> перезапуск 100-vpn-mark" >>"$LOG"
       fi
     fi
