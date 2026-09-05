@@ -20,11 +20,18 @@
 4. **Правило + таблица:** `ip rule 99 fwmark 0xd1000 → table 1001` → `default dev opkgtun10`.
 5. **DNS-кэш КЛИЕНТА.** Если клиент резолвил домен ДО добавления — у него старый IP, которого
    нет в ipset → идёт мимо тоннеля. На клиенте: `resolvectl flush-caches` / `ipconfig /flushdns`.
-   Браузеры с DoH (Chrome/Firefox) минуют dnsmasq — тогда домены НЕ попадают в ipset (отключить DoH).
+6. **DoH/DoT-обход.** Браузеры (Chrome/Firefox) по умолчанию шлют DNS через свой DoH-сервер
+   мимо dnsmasq → домены не попадают в ipset. Закрыто: `kvas-doh-block.dnsmasq` (имена DoH-серверов
+   → 0.0.0.0, ставится postinst'ом в dnsmasq.d) + watcher держит iptables REJECT DoT (tcp/udp 853, br0).
 
 Массовое добавление доменов: писать прямо в `/opt/etc/kvas.list` (dedup `grep -qxF`),
 затем `bin/main/dnsmasq` (регенерация директив) + рестарт dnsmasq. НЕ через heredoc+pipe
 одновременно (stdin-конфликт: `while read` съест строки скрипта).
+
+**Регистрация NDM-хуков:** NDM вызывает только хуки из `/opt/etc/ndm/` (НЕ из `/opt/apps/kvas/etc/ndm/`).
+build.sh кладёт туда `100-dns-local` + `100-vpn-mark` (иначе KVAS_MARK слетала на сбросах NDM и не
+восстанавливалась). `kvas test` для opkgtun* использует прямую проверку туннеля (`awg_tunnel_check`),
+а не NDM RCI — не даёт ложного «ОСТАНОВЛЕНО».
 
 ## 1. Как устроена маршрутизация (то, что «идёт в тоннель»)
 
