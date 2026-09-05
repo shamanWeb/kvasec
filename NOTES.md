@@ -4,6 +4,28 @@
 > что уже изменено. Основной сценарий железа — см. `~/Dropbox/VPN/vpn-recovery-runbook.md`
 > (сервер AmneziaWG 3.1 + роутер Keenetic с kvas и не-NDM туннелем `opkgtun10`).
 
+## 0. КРИТИЧНО: полная цепочка «сайт из списка → тоннель» (диагностировано 2026-09-05)
+
+Чтобы домен из списка реально шёл в тоннель для LAN-клиентов, ВСЁ должно быть на месте:
+1. **DNS клиента → dnsmasq на роутере.** kvas DNAT'ит `br0:53 → 127.0.0.1:9753`
+   (константа `DNS_PORT=9753` в ndm). dnsmasq ОБЯЗАН слушать на **9753** (`port=9753`
+   в `/opt/etc/dnsmasq.conf`), иначе LAN-клиенты вообще без интернета (timeout).
+2. **dnsmasq грузит ipset-директивы.** Нужен `conf-dir=/opt/etc/dnsmasq.d/,*.dnsmasq`
+   + upstream `no-resolv` / `server=127.0.0.1#<DNS_CRYPT_PORT>`. Без conf-dir IP доменов
+   не попадают в KVAS_LIST. (Всё это чинит postinst в `build.sh`, идемпотентно.)
+3. **Маркировка.** Цепочка `KVAS_MARK` (mangle) + ссылки в PREROUTING (`-i br0 ... match-set
+   KVAS_LIST dst -j KVAS_MARK`). ⚠️ При `--force-reinstall`/upgrade старый пакет флашит
+   iptables → KVAS_MARK пропадает, и установка сама её НЕ создаёт → routing мёртв до
+   `kvas update`. **Фикс:** postinst в фоне запускает `kvas init` (если `INFACE_ENT` задан).
+4. **Правило + таблица:** `ip rule 99 fwmark 0xd1000 → table 1001` → `default dev opkgtun10`.
+5. **DNS-кэш КЛИЕНТА.** Если клиент резолвил домен ДО добавления — у него старый IP, которого
+   нет в ipset → идёт мимо тоннеля. На клиенте: `resolvectl flush-caches` / `ipconfig /flushdns`.
+   Браузеры с DoH (Chrome/Firefox) минуют dnsmasq — тогда домены НЕ попадают в ipset (отключить DoH).
+
+Массовое добавление доменов: писать прямо в `/opt/etc/kvas.list` (dedup `grep -qxF`),
+затем `bin/main/dnsmasq` (регенерация директив) + рестарт dnsmasq. НЕ через heredoc+pipe
+одновременно (stdin-конфликт: `while read` съест строки скрипта).
+
 ## 1. Как устроена маршрутизация (то, что «идёт в тоннель»)
 
 - **Метка / таблица:** `MARK_NUM=0xd1000` → `ROUTE_TABLE_ID=1001`, правило `ip rule fwmark 0xd1000 lookup 1001`
