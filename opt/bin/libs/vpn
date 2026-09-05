@@ -153,9 +153,13 @@ cmd_kvas_init(){
 	warning "${mess}"
 	print_line
 
-#	Производим перезапуск подключения к интернету
-#	если не режим update и если текущее подключение не ssr
-	if [ "${stage}" = refresh ] || ! has_ssr_enable ; then
+#	Производим перезапуск подключения к интернету,
+#	если НЕ режим update и если текущее подключение не ssr.
+#	В режиме update тоннель уже поднят — лишний бунс интерфейса/xray
+#	только рвёт связь и провоцирует флаш таблицы маршрутизации.
+#	Правила/таблица 1001 при update и так пересоздаются через update_iptables
+#	(ip4__mark__create_chain → ip4__route__add_table + ip4__rule__add_mark_to_table).
+	if [ "${stage}" != update ] && { [ "${stage}" = refresh ] || ! has_ssr_enable ; } ; then
 			reset_all_connection
 	fi
 
