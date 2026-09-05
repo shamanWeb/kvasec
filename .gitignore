@@ -89,3 +89,8 @@ fabric.properties
 !/Makefile
 !/tests/
 #ipk/
+
+# Локальные сборки и логи (build.sh / CI)
+/kvas_*.ipk
+/logs/
+*.log
