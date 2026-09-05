@@ -42,9 +42,13 @@
     `ifstatechanged.d/100-kvas-vpn` (по `INFACE_CLI`);
   - `ip4__mark__create_chain` (`ndm:531`) — при СОЗДАНИИ MARK-цепочки (после её флаша).
 - **⚠️ Не-NDM туннели (AmneziaWG `opkgtunNN`):** создаются awg-manager'ом в обход NDM →
-  NDM-хуки НЕ срабатывают → таблицу 1001 kvas сам не держит → нужен ВНЕШНИЙ watcher-демон
-  `S99kvas-awg-route` (см. runbook §7.1). Он держит `default via <ip> dev opkgtunNN` в table 1001,
-  но НЕ восстанавливает `ip rule` (его восстанавливает пересоздание MARK-цепочки).
+  NDM-хуки НЕ срабатывают → таблицу 1001/правило/KVAS_MARK kvas сам не держит после
+  переподключения туннеля и сбросов NDM-firewall. Решает watcher-демон
+  **`opt/etc/init.d/S99kvas-awg-route`** (теперь В ПАКЕТЕ, ставится и стартует из postinst).
+  Каждые 5с держит: (1) `default via <ip> dev opkgtunNN` в table 1001/4096; (2) `ip rule
+  fwmark 0xd1000 -> table 1001` (prio 99); (3) цепочку KVAS_MARK — при пропаже пересоздаёт
+  через `100-vpn-mark`. Для не-opkgtun интерфейсов сразу выходит. Лог: `/opt/tmp/kvas-awg-route.log`.
+  (Исторически был ручным артефактом runbook §7.1 — теперь заведён в репо.)
 - **Ложные тревоги (не авария):** `kvas test` / `check_vpn` опрашивают состояние через NDM RCI
   (`localhost:79/rci/...`) по `INFACE_CLI` → для `opkgtun10` (вне NDM) вернут «ОСТАНОВЛЕНО/пусто»,
   хотя туннель работает. Проверять надо `ip route get ... mark 0xd1000`, `ip route show table 1001`.
