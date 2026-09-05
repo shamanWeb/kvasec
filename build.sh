@@ -136,6 +136,17 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     else
         echo "APP_RELEASE=${PKG_RELEASE}" >> "\${kvas_conf}"
     fi
+
+    # Пересоздаём маршрутизацию kvas ПОСЛЕ установки (в фоне).
+    # Критично: при --force-reinstall/upgrade старый пакет при удалении флашит
+    # iptables (цепочка KVAS_MARK пропадает), а установка сама правила не создаёт →
+    # selective-routing не работает до ручного 'kvas update'. init пересоздаёт
+    # KVAS_MARK, таблицу 1001, ip rule (fwmark→1001) и наполняет ipset.
+    # Запускается только если интерфейс уже настроен (INFACE_ENT задан);
+    # на чистой установке маршрутизацию поднимет 'kvas setup'.
+    if grep -q '^INFACE_ENT=.\+' "\${kvas_conf}" 2>/dev/null; then
+        /opt/apps/kvas/bin/kvas init >/dev/null 2>&1 &
+    fi
 fi
 exit 0
 POSTINST
