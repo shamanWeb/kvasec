@@ -50,5 +50,5 @@ jobs:
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
           name: KVAS ${{ steps.rel.outputs.tag }}
-          files: kvas_*.ipk
+          files: kvas_1.1.9_beta-10-${{ steps.rel.outputs.num }}_all.ipk
           make_latest: true

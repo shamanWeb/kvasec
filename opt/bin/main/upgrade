@@ -210,7 +210,7 @@ gh_download(){
 	fi
 }
 # Получаем ссылку на крайний релиз пакета на GitHub
-package_url=$(gh_api "${release_url}/latest" | jq -r '.assets[]?.browser_download_url' | grep -E '\.ipk$' | head -1)
+package_url=$(gh_api "${release_url}/latest" | jq -r '.assets[]?.browser_download_url' | grep -E '\.ipk$' | sort | tail -1)
 # Выделяем имя пакета из ссылки
 package_name=$(get_package_name "${package_url}")
 # путь к файлу конфигурации пакета Квас

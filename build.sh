@@ -100,6 +100,19 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     [ -f /opt/etc/kvas.list ]            || cp -f /opt/apps/kvas/etc/conf/kvas.list     /opt/etc/kvas.list
     [ -f /opt/etc/adblock/sources.list ] || cp -f /opt/apps/kvas/etc/conf/adblock.sources /opt/etc/adblock/sources.list
 
+    # dnsmasq.conf: добавляем необходимые директивы если их нет.
+    # conf-dir — загружает ipset=/домен/ правила из dnsmasq.d/kvas.dnsmasq.
+    # server + no-resolv — форвардим через dnscrypt-proxy (порт из kvas.conf).
+    dnsmasq_conf=/opt/etc/dnsmasq.conf
+    touch "\${dnsmasq_conf}"
+    grep -q 'conf-dir=/opt/etc/dnsmasq.d' "\${dnsmasq_conf}" 2>/dev/null || \
+        echo 'conf-dir=/opt/etc/dnsmasq.d/,*.dnsmasq' >> "\${dnsmasq_conf}"
+    if ! grep -q '^server=' "\${dnsmasq_conf}" 2>/dev/null; then
+        dns_crypt_port=\$(grep '^DNS_CRYPT_PORT=' /opt/etc/kvas.conf 2>/dev/null | cut -d= -f2)
+        dns_crypt_port=\${dns_crypt_port:-9153}
+        printf 'no-resolv\nserver=127.0.0.1#%s\n' "\${dns_crypt_port}" >> "\${dnsmasq_conf}"
+    fi
+
     chmod -R +x /opt/apps/kvas/bin/*        2>/dev/null
     chmod -R +x /opt/apps/kvas/etc/init.d/* 2>/dev/null
     chmod -R +x /opt/apps/kvas/etc/ndm/*    2>/dev/null
