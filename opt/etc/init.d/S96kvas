@@ -30,5 +30,8 @@ case ${1} in
 				sleep 2
 			done
 		fi
+		# Автозапуск Web UI после ребута, если был включён (флаг в /opt/etc — persistent)
+		[ -f /opt/etc/kvas-monitor-web-enabled ] && \
+			/opt/apps/kvas/bin/kvas monitor web >/dev/null 2>&1 &
 	;;
 esac
