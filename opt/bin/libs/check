@@ -128,7 +128,47 @@ dnsmasq_check() {
 #	 Проверяем работу vpn
 #
 # ------------------------------------------------------------------------------------------
+#	Прямая проверка НЕ-NDM AmneziaWG-туннеля (opkgtunNN).
+#	NDM RCI его не видит (INFACE_CLI пуст), поэтому обычная vpn_check даёт
+#	ложное «ОСТАНОВЛЕНО» и пытается бунсить несуществующий интерфейс.
+awg_tunnel_check(){
+	local iface="${1}"
+
+	ready "Состояние AmneziaWG-туннеля ${iface}"
+	if /opt/sbin/ip a show "${iface}" 2>/dev/null | grep -q 'inet '; then
+		when_ok "ПОДКЛЮЧЕНО"
+	else
+		when_bad "ИНТЕРФЕЙС НЕ ПОДНЯТ"
+		return
+	fi
+
+	ready "Последнее рукопожатие"
+	local hs=$(awg show "${iface}" 2>/dev/null | sed -n 's/.*latest handshake: //p')
+	[ -n "${hs}" ] && when_ok "${hs}" || when_bad "НЕТ"
+
+	ready "Таблица маршрутов 1001 -> ${iface}"
+	/opt/sbin/ip route show table 1001 2>/dev/null | grep -q "^default.*dev ${iface}" \
+		&& when_ok "OK" || when_bad "НЕ НА ${iface}"
+
+	ready "Правило fwmark 0xd1000 -> table 1001"
+	/opt/sbin/ip rule show 2>/dev/null | grep -q '0xd1000' && when_ok "ЕСТЬ" || when_bad "НЕТ"
+
+	ready "Цепочка маркировки KVAS_MARK"
+	/opt/sbin/iptables -t mangle -S KVAS_MARK >/dev/null 2>&1 && when_ok "ЕСТЬ" || when_bad "НЕТ"
+
+	ready "Выход в интернет через туннель"
+	local wan=$(curl -s --connect-timeout 6 --interface "${iface}" https://api.ipify.org 2>/dev/null)
+	echo "${wan}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' \
+		&& when_ok "OK (${wan})" || when_bad "НЕТ ОТВЕТА"
+}
+
 vpn_check(){
+
+#	Ветка для НЕ-NDM AmneziaWG-туннеля — проверяем туннель напрямую, минуя NDM RCI.
+	ent_iface=$(get_config_value INFACE_ENT 2>/dev/null | tr -d ' \r')
+	case "${ent_iface}" in
+		opkgtun*) awg_tunnel_check "${ent_iface}"; return ;;
+	esac
 
 	vpn_cli_desc=$(get_current_vpn_interface "cli_desc")
 	vpn_cli=$(get_current_vpn_interface "cli")
