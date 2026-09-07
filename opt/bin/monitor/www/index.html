@@ -62,6 +62,9 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 .host-item:last-child { border-bottom: none; }
 .host-item .del { color: #f85149; cursor: pointer; padding: 0 4px; }
 .host-item .del:hover { background: #f8514922; border-radius: 3px; }
+.host-item .host-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wc-badge { font-size: 10px; color: #e3b341; background: #e3b34118; border: 1px solid #e3b34144; border-radius: 3px; padding: 1px 5px; margin: 0 6px; flex-shrink: 0; cursor: default; font-family: monospace; }
+.wc-add-hint { font-size: 11px; color: #8b949e; margin-top: 4px; }
 
 /* Monitor legacy styles */
 .device-list { margin-bottom: 12px; display: grid; grid-template-columns: repeat(2,1fr); gap: 4px; }
@@ -145,9 +148,10 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <h3>Список доменов</h3>
     <div id="hostList" class="host-list"><div class="status">Загрузка...</div></div>
     <div class="card-row" style="flex-wrap:wrap;gap:8px;">
-      <input type="text" id="hostInput" placeholder="domain.ru" style="flex:1;min-width:200px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:12px;">
+      <input type="text" id="hostInput" placeholder="domain.ru или *.domain.ru" style="flex:1;min-width:200px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:12px;" onkeydown="if(event.key==='Enter')hostAdd()">
       <button class="btn btn-sm primary" onclick="hostAdd()">+ Добавить</button>
     </div>
+    <div class="wc-add-hint">Используй <code style="background:#21262d;padding:1px 4px;border-radius:3px;">*.domain.ru</code> чтобы включить поддомены явно (обозначается <span style="color:#e3b341">*.sub</span> значком)</div>
     <div class="card-row" style="margin-top:8px;">
       <input type="text" id="hostSearch" placeholder="Поиск..." oninput="filterHosts()" style="flex:1;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:12px;">
       <button class="btn btn-sm success" onclick="saveHosts()">Сохранить список</button>
@@ -743,9 +747,13 @@ function loadHosts() {
     el.innerHTML = '';
     allHosts = d.hosts;
     d.hosts.forEach(function(h){
+      var isWild = h.charAt(0) === '*';
       var div = document.createElement('div');
       div.className = 'host-item';
-      div.innerHTML = '<span>' + h + '</span><span class="del" onclick="hostDel(\'' + h.replace(/'/g,"\\'") + '\')">✕</span>';
+      var badge = isWild ? '<span class="wc-badge" title="поддомены включены">*.sub</span>' : '';
+      div.innerHTML = '<span class="host-name">' + h + '</span>'
+        + badge
+        + '<span class="del" onclick="hostDel(\'' + h.replace(/'/g,"\\'") + '\')">✕</span>';
       el.appendChild(div);
     });
   });
@@ -757,14 +765,15 @@ function filterHosts() {
   var query = document.getElementById('hostSearch').value.toLowerCase();
   var items = document.querySelectorAll('#hostList .host-item');
   items.forEach(function(item) {
-    var text = item.textContent.toLowerCase();
+    var nameEl = item.querySelector('.host-name');
+    var text = (nameEl ? nameEl.textContent : item.textContent).toLowerCase();
     item.style.display = text.indexOf(query) > -1 ? '' : 'none';
   });
 }
 
 function saveHosts() {
   var hosts = [];
-  document.querySelectorAll('#hostList .host-item span:first-child').forEach(function(el) {
+  document.querySelectorAll('#hostList .host-item .host-name').forEach(function(el) {
     hosts.push(el.textContent);
   });
   if (hosts.length === 0) { alert('Список пуст'); return; }
@@ -854,6 +863,10 @@ function hostAdd() {
   var input = document.getElementById('hostInput');
   var domain = input.value.trim();
   if (!domain) return;
+  // Normalize wildcard: *example.com → *.example.com
+  if (domain.charAt(0) === '*' && domain.charAt(1) !== '.') {
+    domain = '*.' + domain.slice(1);
+  }
   var btn = document.querySelector('#hostInput + .btn');
   showProgress(0, 'Добавление <b>' + domain + '</b>');
   btn.disabled = true;
