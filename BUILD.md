@@ -47,6 +47,42 @@ Workflow `.github/workflows/build.yml`:
 
 Он запускает `build.sh` и публикует ipk как Release с тегом `v1.1.9_beta-10-<N>` (make_latest).
 
+### Пошагово: публикация нового релиза
+`N` — новый номер (напр. `46`).
+
+```sh
+# 1. рабочее дерево чистое, всё закоммичено
+git status --short
+
+# 2. bump версии
+printf '46\n' > VERSION
+git add VERSION
+git commit -m "chore: bump VERSION 45→46 (<что в релизе>)"
+
+# 3. тег vN (только триггер CI)
+git tag v46
+
+# 4. пуш ветки + тега
+git push origin build-from-repo
+git push origin v46          # push тега запускает сборку
+```
+
+Дальше автоматически: CI берёт номер из хвоста тега (`v46 → 46`) → `./build.sh 46` →
+публикует Release `v1.1.9_beta-10-46` (latest) → `kvas upgrade` видит его в `/releases/latest`.
+
+Проверка после пуша:
+```sh
+curl -s "https://api.github.com/repos/shamanWeb/kvasec/actions/runs?per_page=1" | grep -E '"status"|"conclusion"'
+curl -s "https://api.github.com/repos/shamanWeb/kvasec/releases/latest"      | grep -E '"tag_name"|"browser_download_url"'
+```
+
+Нюансы:
+- **Тег `vN` — только триггер;** сам релиз выходит под именем `v1.1.9_beta-10-N`. Не путать.
+- **Номер должен расти** — `upgrade` (фикс v43) не даунгрейдит: если в релизе `≤` установленного, скажет «Квас все еще свеж».
+- **VERSION bump необязателен для CI** (номер идёт из тега аргументом в `build.sh`), но держим в синхроне — гигиена + fallback для локального `./build.sh` без аргумента.
+- **Без тега:** Actions → `build-and-release` → Run workflow, ввести номер вручную (`workflow_dispatch`).
+- **На боевой роутер** ставить новый ipk через `opkg install --force-reinstall` вживую, НЕ `kvas upgrade` в фоне/не-интерактивно (риск даунгрейда/зависания, был инцидент с DNS).
+
 ### Приватный репозиторий → нужен токен на роутере
 Т.к. репозиторий приватный, `kvas upgrade` не увидит релизы без авторизации. Положите на роутер
 fine-grained PAT (права **Contents: read** на `shamanWeb/kvasec`) одной строкой:
