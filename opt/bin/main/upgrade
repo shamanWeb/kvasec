@@ -268,16 +268,13 @@ if echo "${*}" | grep -qv 'force' ; then
 		package_name=$(get_package_name "${package_url}")
 
 	elif [ -f /opt/bin/kvas ] && [ -f ${kvas_conf} ]; then
-	#	Если это не форсированная установка и не откат, то
-	#	проверяем - обнаружена ли предыдущая версия Кваса
-	#	и сравниваем ее версию с новой версией
-		prev_ver=$(cat < ${kvas_conf} \
-					| grep -E 'VERSION|RELEASE' \
-					| tr -d '\n' | tr '-' '_' \
-					| sed 's/^APP_VERSION=\(.*\)APP_RELEASE=\(.*\)/\1-\2\n/')
-		next_ver=$(echo "${package_name}" |  sed 's/kvas_\(.*\)_all.*/\1/')
-		if [ "${prev_ver}" = "${next_ver}" ] ; then
-			print_error "Квас все еще свеж, обновлений пока нет."
+	#	Сравниваем НОМЕР СБОРКИ. Обновляемся ТОЛЬКО если релиз новее установленного.
+	#	Равный/меньший номер — «нет обновлений» (иначе upgrade делал даунгрейд через
+	#	деструктивный uninstall — рушил dnsmasq/routing).
+		prev_num=$(grep '^APP_RELEASE=' ${kvas_conf} | cut -d= -f2 | tr -dc '0-9')
+		next_num=$(echo "${package_name}" | sed 's/_all\.ipk$//' | sed 's/.*-//' | tr -dc '0-9')
+		if [ -n "${prev_num}" ] && [ -n "${next_num}" ] && [ "${next_num}" -le "${prev_num}" ] 2>/dev/null ; then
+			print_error "Квас все еще свеж (установлено ${prev_num}, в релизе ${next_num})."
 			exit 1
 		fi
 	else
@@ -381,16 +378,26 @@ else
 		rci_post '[{"opkg": {"dns-override": true}},{"system": {"configuration": {"save": true}}}]' &>/dev/null 
 	}
 		# 	если файл пакета найден после установки пакета,
-	# 	то запускаем установку и затем тестирование пакета
-	kvas setup "${UPDATE_MODE}" && {
-		# подключаем гостевые сети, если они имется
-		connect_home_nets
+	# 	то запускаем установку и затем тестирование пакета.
+	# 	kvas setup интерактивен — запускаем ТОЛЬКО при наличии TTY, иначе
+	# 	зависнет на read (cron/скрипт/оборванный ssh). Базовую настройку
+	# 	(dnsmasq/routing/watcher) уже выполнил postinst.
+	if [ -t 0 ] ; then
+		kvas setup "${UPDATE_MODE}" && {
+			# подключаем гостевые сети, если они имется
+			connect_home_nets
+			print_line
+			echo 'Тестируем настройки...'
+#			В данном случае, чтобы не печатать линию после
+#			окончания тестирования дважды передаем параметр upgrade
+			kvas test upgrade
+		}
+	else
 		print_line
-		echo 'Тестируем настройки...'
-#		В данном случае, чтобы не печатать линию после
-#		окончания тестирования дважды передаем параметр upgrade
-		kvas test upgrade
-	}
+		echo "Не-интерактивный режим: пропускаем интерактивный kvas setup."
+		echo "При необходимости запустите 'kvas setup' вручную в терминале."
+		print_line
+	fi
 fi
 
 rm -f upgrade install

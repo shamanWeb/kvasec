@@ -18,6 +18,26 @@
    iptables → KVAS_MARK пропадает, и установка сама её НЕ создаёт → routing мёртв до
    `kvas update`. **Фикс:** postinst в фоне запускает `kvas init` (если `INFACE_ENT` задан).
 4. **Правило + таблица:** `ip rule 99 fwmark 0xd1000 → table 1001` → `default dev opkgtun10`.
+
+## 0a. IPv6-утечка → `ERR_NETWORK_CHANGED` (диагностировано 2026-09-07)
+
+Симптом: Chrome часто отдаёт `ERR_NETWORK_CHANGED` на dual-stack сайтах из списка
+(instagram/youtube/x). Это **клиентская** ошибка (сработал NetworkChangeNotifier), НЕ обрыв
+пути на роутере (10 МБ через тоннель качаются гладко, TLS к сайтам = 200).
+
+Причина — IPv6 мимо тоннеля:
+- WAN (`eth3`) **без IPv6** (роутер сам `ping6 → Network unreachable`), но `br0` раздаёт
+  клиентам **ULA** `fd36:.../64` (scope global) → клиент думает, что IPv6 у него есть.
+- dnsmasq отдавал **AAAA**-записи сайтов; `KVAS_LIST` — только IPv4 (`family inet`),
+  IPv6 fwmark-правила / `ip -6 route table 1001` нет → v6-трафик к kvas-доменам шёл бы мимо
+  тоннеля в любом случае.
+- Итог: клиент по Happy Eyeballs пробует IPv6 первым → пакеты в никуда → обрыв → откат на IPv4
+  → плавающий `ERR_NETWORK_CHANGED`.
+
+**Фикс:** `filter-AAAA` в `etc/conf/kvas-doh-block.dnsmasq` (dnsmasq 2.92 поддерживает).
+Клиенты перестают получать бесполезные AAAA → всё идёт по IPv4 → kvas-домены через тоннель.
+Downside ноль (v6-интернета нет). Применено на живой роутер (2026-09-07) и в репо/postinst
+(файл всегда копируется в `/opt/etc/dnsmasq.d/`).
 5. **DNS-кэш КЛИЕНТА.** Если клиент резолвил домен ДО добавления — у него старый IP, которого
    нет в ipset → идёт мимо тоннеля. На клиенте: `resolvectl flush-caches` / `ipconfig /flushdns`.
 6. **DoH/DoT-обход.** Браузеры (Chrome/Firefox) по умолчанию шлют DNS через свой DoH-сервер

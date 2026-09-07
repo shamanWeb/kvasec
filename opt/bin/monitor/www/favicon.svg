@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- ручка кружки -->
+  <path d="M22 13h3.3a3.7 3.7 0 0 1 0 7.4H22" fill="none" stroke="#6b3d16" stroke-width="3" stroke-linecap="round"/>
+  <!-- корпус кружки, полный кваса -->
+  <rect x="6.5" y="9" width="16" height="18" rx="2.6" fill="#a5642a" stroke="#4a2c0f" stroke-width="1.6"/>
+  <!-- тёмный квас под пеной -->
+  <rect x="8" y="12.5" width="13" height="4.2" fill="#5e340f"/>
+  <!-- стеклянный блик -->
+  <rect x="9.5" y="13.5" width="2.2" height="11" rx="1.1" fill="#e9b866" opacity="0.55"/>
+  <!-- пенная шапка -->
+  <ellipse cx="14.5" cy="9.6" rx="8.6" ry="3.1" fill="#f5e8cb" stroke="#4a2c0f" stroke-width="1.2"/>
+  <circle cx="10.2" cy="8.7" r="1.7" fill="#fcf5e4"/>
+  <circle cx="15" cy="8" r="2.2" fill="#fcf5e4"/>
+  <circle cx="19.4" cy="8.9" r="1.6" fill="#fcf5e4"/>
+</svg>

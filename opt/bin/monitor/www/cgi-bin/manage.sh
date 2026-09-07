@@ -117,7 +117,7 @@ check_service() {
 
 check_updates() {
 	local current_ver=$(opkg list-installed 2>/dev/null | grep kvas | awk '{print $3}')
-	local repo="Anonimus2026/kvas"
+	local repo="shamanWeb/kvasec"
 	# Get latest ipk build number from release assets
 	local latest_ver=$(curl -s --connect-timeout 5 "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null | \
 		grep 'browser_download_url.*kvas_.*ipk' | \
