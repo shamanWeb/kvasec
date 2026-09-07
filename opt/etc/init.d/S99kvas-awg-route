@@ -69,6 +69,16 @@ watcher() {
           echo "$(date) fix: DoT-блок ${P}/853 добавлен в FORWARD" >>"$LOG"
         fi
       done
+
+      # 5) QUIC-блок (HTTP/3, UDP 443) для LAN — форсируем HTTP/2 поверх TCP.
+      #    QUIC (UDP) не защищён MSS-клампингом → крупные пакеты не влезают в тоннель
+      #    (mtu 1280) и молча дропаются; на прямом пути провайдер ломает/троттлит QUIC.
+      #    Симптом в Chrome: ERR_QUIC_PROTOCOL_ERROR / ERR_NETWORK_CHANGED. REJECT с
+      #    icmp-port-unreachable → браузер мгновенно откатывается на TCP (работает).
+      if ! iptables -C FORWARD -i br0 -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null; then
+        iptables -I FORWARD -i br0 -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null
+        echo "$(date) fix: QUIC-блок udp/443 добавлен в FORWARD" >>"$LOG"
+      fi
     fi
     sleep 5
   done
