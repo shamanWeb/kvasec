@@ -217,17 +217,31 @@ main() {
 			domain=$(echo "$QUERY_STRING" | sed 's/.*domain=//; s/&.*//' 2>/dev/null)
 			[ "$domain" = "$QUERY_STRING" ] && domain=""
 			[ -z "$domain" ] && json_error "domain required"
-			out=$($KVAS_BIN add "$domain" 2>&1)
+			# Wildcard: *.example.com or *example.com → store *.example.com in kvas.list
+			wildcard=false
+			case "$domain" in
+				\**) wildcard=true; clean=$(echo "$domain" | sed 's/^\*\.*//');;
+				*)   clean="$domain";;
+			esac
+			out=$($KVAS_BIN add "$clean" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "add failed: $out"
-			json_ok "added $domain"
+			if $wildcard; then
+				# kvas add wrote clean entry; rename it to *.clean in kvas.list
+				sed -i "s|^${clean}$|*.${clean}|" "$KVAS_LIST" 2>/dev/null
+				json_ok "added *.${clean}"
+			else
+				json_ok "added $domain"
+			fi
 			;;
 		host_del)
 			check_token "$token"
 			domain=$(echo "$QUERY_STRING" | sed 's/.*domain=//; s/&.*//' 2>/dev/null)
 			[ "$domain" = "$QUERY_STRING" ] && domain=""
 			[ -z "$domain" ] && json_error "domain required"
-			out=$($KVAS_BIN del "$domain" 2>&1)
+			# Strip wildcard prefix: *.example.com → example.com for kvas del
+			clean=$(echo "$domain" | sed 's/^\*\.*//')
+			out=$($KVAS_BIN del "$clean" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "del failed: $out"
 			# Rebuild ipset and restart services
