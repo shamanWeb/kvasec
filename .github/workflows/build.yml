@@ -77,6 +77,9 @@ jobs:
           chmod +x build.sh
           ./build.sh "${{ steps.rel.outputs.version }}"
 
+      - name: Регрессионные тесты
+        run: make test
+
       - name: Публикация релиза
         uses: softprops/action-gh-release@v2
         with:

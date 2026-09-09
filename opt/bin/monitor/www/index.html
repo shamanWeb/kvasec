@@ -101,7 +101,10 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 <h1>KVAS</h1>
 <div class="subtitle" style="display:flex;justify-content:space-between;align-items:center;">
   <span>Защита ваших подключений</span>
-  <button class="btn btn-sm danger" onclick="doLogout()" id="logoutBtn" style="display:none;">Выход</button>
+  <span>
+    <button class="btn btn-sm" onclick="changePassword()" id="changePassBtn" style="display:none;">Пароль</button>
+    <button class="btn btn-sm danger" onclick="doLogout()" id="logoutBtn" style="display:none;">Выход</button>
+  </span>
 </div>
 
 <!-- Auth screen -->
@@ -416,7 +419,7 @@ function setPass() {
   var pass = document.getElementById('authPass').value;
   if (!pass || pass.length < 4) { showAuthMsg('Минимум 4 символа', 'err'); return; }
   var btn = document.getElementById('authBtn'); btn.disabled = true;
-  fetch('/cgi-bin/manage.sh?action=set_pass&pass=' + encodeURIComponent(pass)).then(function(r){return r.json()}).then(function(d){
+  fetch('/cgi-bin/manage.sh?action=set_pass&pass=' + encodeURIComponent(pass), {method:'POST'}).then(function(r){return r.json()}).then(function(d){
     btn.disabled = false;
     if (d.ok) { showAuthMsg('Пароль установлен. Войдите.', 'ok'); document.getElementById('authTitle').textContent = 'Вход'; document.getElementById('authBtn').textContent = 'Войти'; initAuth(); }
     else showAuthMsg(d.error || 'Ошибка', 'err');
@@ -463,6 +466,7 @@ function showMain() {
   document.getElementById('authScreen').style.display = 'none';
   document.getElementById('mainUi').style.display = 'block';
   document.getElementById('logoutBtn').style.display = '';
+  document.getElementById('changePassBtn').style.display = '';
   loadSystemStatus();
   loadHosts();
   loadRouteLists();
@@ -471,6 +475,21 @@ function showMain() {
   loadTags();
   fetchDevices();
   logMsg('log-info', 'Мониторинг трафика KVAS');
+}
+
+function changePassword() {
+  var current = prompt('Текущий пароль:');
+  if (current === null) return;
+  var next = prompt('Новый пароль (минимум 4 символа):');
+  if (next === null) return;
+  if (next.length < 4) { alert('Минимум 4 символа'); return; }
+  var repeat = prompt('Повторите новый пароль:');
+  if (repeat !== next) { alert('Пароли не совпадают'); return; }
+  var url = '/cgi-bin/manage.sh?action=change_pass&token=' + encodeURIComponent(AUTH_TOKEN) +
+    '&current=' + encodeURIComponent(current) + '&new_pass=' + encodeURIComponent(next);
+  fetch(url, {method:'POST'}).then(function(r){return r.json()}).then(function(d){
+    if (d.ok) alert('Пароль изменён'); else alert(d.error || 'Не удалось изменить пароль');
+  }).catch(function(e){ alert(e.message); });
 }
 
 /* ========== TABS ========== */
@@ -1257,6 +1276,7 @@ function doLogout() {
   AUTH_TOKEN = '';
   sessionStorage.removeItem('kvas_token');
   document.getElementById('logoutBtn').style.display = 'none';
+  document.getElementById('changePassBtn').style.display = 'none';
   document.getElementById('mainUi').style.display = 'none';
   document.getElementById('authPass').value = '';
   document.getElementById('authMsg').className = 'msg';

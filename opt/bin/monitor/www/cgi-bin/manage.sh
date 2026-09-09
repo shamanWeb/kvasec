@@ -15,6 +15,50 @@ json_str() { printf '%s' "$1" | jq -Rs '.' 2>/dev/null || printf '"%s"' "$1" | s
 json_error() { printf '{"error":%s}\n' "$(json_str "$1")"; exit 0; }
 json_ok()    { printf '{"ok":true,"msg":%s}\n' "$(json_str "$1")"; exit 0; }
 
+# Query values are URL-encoded by the WebUI.  Decode only after selecting a
+# field, so an encoded ampersand cannot change the query structure.
+url_decode() {
+	local encoded
+	encoded=$(printf '%s' "$1" | sed 's/+/ /g; s/%/\\x/g')
+	printf '%b' "$encoded"
+}
+
+query_param() {
+	local key="$1" raw
+	raw=$(printf '%s\n' "$QUERY_STRING" | tr '&' '\n' | sed -n "s/^${key}=//p" | head -1)
+	url_decode "$raw"
+}
+
+password_hash() { printf '%s' "$1" | sha256sum | awk '{print $1}'; }
+password_hash_legacy() { printf '%s' "$1" | md5sum | awk '{print $1}'; }
+
+write_password_hash() {
+	local hash="$1" tmp
+	mkdir -p "$(dirname "$PASS_FILE")" 2>/dev/null
+	tmp="${PASS_FILE}.$$"
+	( umask 077; printf 'sha256:%s\n' "$hash" > "$tmp" ) || return 1
+	chmod 600 "$tmp" 2>/dev/null
+	mv -f "$tmp" "$PASS_FILE"
+}
+
+# 0 = correct, 1 = incorrect.  A successful legacy MD5 login is migrated to
+# SHA-256 immediately, so existing installations keep working.
+verify_password() {
+	local pass="$1" stored expected
+	stored=$(cat "$PASS_FILE" 2>/dev/null | awk 'NR==1 {print $1}')
+	case "$stored" in
+		sha256:*)
+			expected=${stored#sha256:}
+			[ "$(password_hash "$pass")" = "$expected" ]
+			;;
+		?*)
+			[ "$(password_hash_legacy "$pass")" = "$stored" ] || return 1
+			write_password_hash "$(password_hash "$pass")"
+			;;
+		*) return 1 ;;
+	esac
+}
+
 # Brute-force protection (global)
 FAIL_COUNT=/tmp/kvas_fail_count
 FAIL_TIME=/tmp/kvas_fail_time
@@ -146,10 +190,8 @@ main() {
 	local vpn_mode vless_running host_count first
 	local domain out rc mode enabled primary interval threshold cmd path
 
-	action=$(echo "$QUERY_STRING" | sed 's/.*action=//; s/&.*//' 2>/dev/null)
-	token=$(echo "$QUERY_STRING" | sed 's/.*token=//; s/&.*//' 2>/dev/null)
-	[ "$action" = "$QUERY_STRING" ] && action=""
-	[ "$token" = "$QUERY_STRING" ] && token=""
+	action=$(query_param action)
+	token=$(query_param token)
 
 	case "$action" in
 		auth_status)
@@ -160,22 +202,37 @@ main() {
 			fi
 			;;
 		set_pass)
-			pass=$(echo "$QUERY_STRING" | sed 's/.*pass=//; s/&.*//' 2>/dev/null)
-			[ "$pass" = "$QUERY_STRING" ] && pass=""
+			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			[ -s "$PASS_FILE" ] && json_error "password already set; authenticate to change it"
+			pass=$(query_param pass)
 			[ -z "$pass" ] && json_error "pass required"
 			[ ${#pass} -lt 4 ] && json_error "min 4 symbols"
-			echo -n "$pass" | md5sum | awk '{print $1}' > "$PASS_FILE"
+			write_password_hash "$(password_hash "$pass")" || json_error "cannot save password"
 			json_ok "password set"
 			;;
 		auth)
-			pass=$(echo "$QUERY_STRING" | sed 's/.*pass=//; s/&.*//' 2>/dev/null)
-			[ "$pass" = "$QUERY_STRING" ] && pass=""
+			wait=$(check_bruteforce); check_rc=$?
+			[ "$check_rc" -ne 0 ] && printf '{"error":"too many attempts","wait":%s}\n' "${wait:-300}" && return
+			pass=$(query_param pass)
 			[ -z "$pass" ] && json_error "pass required"
-			hash=$(echo -n "$pass" | md5sum | awk '{print $1}')
-			stored=$(cat "$PASS_FILE" 2>/dev/null | awk '{print $1}')
-			[ "$hash" != "$stored" ] && json_error "wrong password"
+			if ! verify_password "$pass"; then
+				record_fail
+				json_error "wrong password"
+			fi
+			reset_fails
 			token=$(mk_token)
 			printf '{"ok":true,"token":"%s"}\n' "$token"
+			;;
+		change_pass)
+			check_token "$token"
+			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			current=$(query_param current)
+			new_pass=$(query_param new_pass)
+			[ -n "$current" ] && [ -n "$new_pass" ] || json_error "current and new password required"
+			[ ${#new_pass} -lt 4 ] && json_error "min 4 symbols"
+			verify_password "$current" || json_error "wrong current password"
+			write_password_hash "$(password_hash "$new_pass")" || json_error "cannot save password"
+			json_ok "password changed"
 			;;
 		system_status)
 			check_token "$token"

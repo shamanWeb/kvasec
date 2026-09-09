@@ -23,6 +23,15 @@ make build            # эквивалент ./build.sh $$(cat VERSION)
 `build.sh` — единственный поддерживаемый упаковщик. `Makefile` оставлен только как
 обёртка для `make build`/`make ipk`, поэтому оба способа создают идентичный IPK.
 
+Перед merge запускайте:
+
+```sh
+make test
+```
+
+Тесты не требуют роутера: они проверяют SemVer/IPK-сборку, миграционный parser updater
+и защитные свойства HTTP-handler. Workflow запускает их перед публикацией Release.
+
 Формат идентичен отгружаемым релизам: `gzip(tar( debian-binary + control.tar.gz + data.tar.gz ))`.
 Всё дерево `opt/` кладётся в `/opt/apps/kvas/`, плюс системные точки входа
 (`S96kvas`, `15-kvas-start.sh`, `100-dns-local`) дублируются в `/opt/etc/`.
