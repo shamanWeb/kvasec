@@ -71,8 +71,8 @@ kvas dnscrypt on|off         - включить/выключить dnscrypt-prox
 == БЛОКИРОВКА РЕКЛАМЫ ==
 
 kvas adblock                 - состояние блокировки рекламы
-kvas adblock add <домен>     - добавить в исключения
-kvas adblock del <домен>     - удалить из исключений
+kvas adblock add <домен>     - добавить домен в постоянную блокировку
+kvas adblock del <домен>     - убрать домен из постоянной блокировки
 kvas adblock on|off          - включить/выключить блокировку
 kvas adblock edit            - редактировать источники блокировки
 kvas adguard on              - AdGuard Home как DNS сервер
