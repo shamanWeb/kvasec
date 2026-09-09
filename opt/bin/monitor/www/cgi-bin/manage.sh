@@ -5,6 +5,7 @@
 PASS_FILE=/opt/kvas_web_pass
 TOKEN_DIR=/tmp/kvas_web_tokens
 KVAS_BIN=/opt/apps/kvas/bin/kvas
+UPGRADE_LOG=/tmp/kvas-web-upgrade.log
 KVAS_LIST=/opt/etc/kvas.list
 TAGS_FILE=/opt/etc/tags.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
@@ -416,7 +417,11 @@ main() {
 			;;
 		upgrade)
 			check_token "$token"
-			json_error "use CLI: kvas upgrade"
+			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			# Package postinst restarts this WebUI. Return before starting the
+			# updater, otherwise the browser loses its request with the old listener.
+			( sleep 1; "$KVAS_BIN" upgrade > "$UPGRADE_LOG" 2>&1 ) &
+			json_ok "upgrade started; WebUI will restart shortly"
 			;;
 		check_update)
 			check_token "$token"

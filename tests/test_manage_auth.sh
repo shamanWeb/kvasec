@@ -13,7 +13,12 @@ sed -i \
     -e "s|^TOKEN_DIR=.*|TOKEN_DIR=$WORK/tokens|" \
     -e "s|^FAIL_COUNT=.*|FAIL_COUNT=$WORK/fail-count|" \
     -e "s|^FAIL_TIME=.*|FAIL_TIME=$WORK/fail-time|" \
+    -e "s|^KVAS_BIN=.*|KVAS_BIN=$WORK/kvas|" \
     "$WORK/manage.sh"
+
+printf '%s\n' '#!/bin/sh' '[ "$1" = upgrade ] && : > "$TEST_UPGRADE_MARK"' > "$WORK/kvas"
+chmod +x "$WORK/kvas"
+export TEST_UPGRADE_MARK="$WORK/upgrade-called"
 
 run_api() {
     QUERY_STRING="$1" REQUEST_METHOD="$2" sh "$WORK/manage.sh"
@@ -48,3 +53,14 @@ run_api 'action=change_pass&current=legacy-password-123&new_pass=updated-passwor
 token=$(printf '%s' "$legacy_auth" | sed -n 's/.*"token":"\([0-9a-f]*\)".*/\1/p')
 run_api "action=change_pass&token=$token&current=legacy-password-123&new_pass=updated-password-123" POST | grep -F '"ok":true' >/dev/null
 run_api 'action=auth&pass=updated-password-123' GET | grep -Eq '"token":"[0-9a-f]+"'
+
+# The full-package updater is an authenticated POST and starts in background,
+# so the WebUI can reply before package postinst restarts its listener.
+run_api "action=upgrade&token=$token" GET | grep -F 'POST required' >/dev/null
+run_api "action=upgrade&token=$token" POST | grep -F '"ok":true' >/dev/null
+i=0
+while [ ! -f "$TEST_UPGRADE_MARK" ] && [ "$i" -lt 30 ]; do
+    sleep 0.1
+    i=$((i + 1))
+done
+test -f "$TEST_UPGRADE_MARK"

@@ -185,6 +185,7 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
   <div class="card">
     <h3>Действия</h3>
     <div class="card-row">
+      <button class="btn btn-sm primary" onclick="doUpgrade(this)">Установить обновление</button>
       <button class="btn btn-sm" onclick="doUpdate(this)">Обновить списки</button>
       <button class="btn btn-sm" onclick="doBackup(this)">Бэкап</button>
       <button class="btn btn-sm" onclick="doRestore(this)">Восстановить</button>
@@ -396,6 +397,12 @@ function apiBtn(url, btn, cb) {
   loadingBtn(btn, true);
   var u = url.indexOf('?') > -1 ? url + '&token=' + AUTH_TOKEN : url + '?token=' + AUTH_TOKEN;
   fetch(u).then(function(r){return r.json()}).then(function(d){ loadingBtn(btn, false); cb(d); }).catch(function(e){ loadingBtn(btn, false); cb({error:e.message}); });
+}
+
+function apiPostBtn(url, btn, cb) {
+  loadingBtn(btn, true);
+  var u = url.indexOf('?') > -1 ? url + '&token=' + AUTH_TOKEN : url + '?token=' + AUTH_TOKEN;
+  fetch(u, {method:'POST'}).then(function(r){return r.json()}).then(function(d){ loadingBtn(btn, false); cb(d); }).catch(function(e){ loadingBtn(btn, false); cb({error:e.message}); });
 }
 
 function doAuth() {
@@ -925,6 +932,20 @@ function vpnSet(proto, btn) {
 }
 
 /* ========== ACTIONS ========== */
+function doUpgrade(btn) {
+  if (!confirm('Скачать и установить последнюю версию KVAS? WebUI перезапустится.')) return;
+  apiPostBtn('/cgi-bin/manage.sh?action=upgrade', btn, function(d){
+    var el = document.getElementById('sysMsg');
+    if (d.ok) {
+      el.className = 'msg ok';
+      el.textContent = d.msg + '. Обновите страницу через несколько секунд.';
+    } else {
+      el.className = 'msg err';
+      el.textContent = d.error || 'Не удалось запустить обновление';
+    }
+  });
+}
+
 function doUpdate(btn) {
   apiBtn('/cgi-bin/manage.sh?action=update', btn, function(d){
     var el = document.getElementById('sysMsg');

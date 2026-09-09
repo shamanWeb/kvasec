@@ -22,6 +22,7 @@ tar -xzf "$IPK" -C "$UNPACKED"
 tar -xOzf "$UNPACKED/control.tar.gz" ./control | grep -Fx 'Package: kvas' >/dev/null
 tar -xOzf "$UNPACKED/control.tar.gz" ./control | grep -Fx 'Version: 1.2.42' >/dev/null
 tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'APP_VERSION=1.2.42' >/dev/null
+tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F '/opt/apps/kvas/bin/monitor/launcher.sh stop' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/kvas' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/etc/ndm/netfilter.d/100-vpn-mark' >/dev/null
 

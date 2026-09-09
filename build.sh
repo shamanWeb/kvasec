@@ -170,10 +170,13 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     chmod +x /opt/etc/init.d/S99kvas-awg-route 2>/dev/null
     /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1 &
 
-    # Web UI: если был включён (флаг в /opt/etc) — перезапускаем после upgrade,
-    # чтобы обновление не гасило интерфейс.
-    [ -f /opt/etc/kvas-monitor-web-enabled ] && \
+    # Web UI: если был включён, обязательно останавливаем старый socat/handler
+    # перед стартом. Иначе `kvas monitor web` видит занятый порт и после upgrade
+    # продолжает обслуживать старый handler из /tmp.
+    if [ -f /opt/etc/kvas-monitor-web-enabled ]; then
+        /opt/apps/kvas/bin/monitor/launcher.sh stop >/dev/null 2>&1
         /opt/apps/kvas/bin/kvas monitor web >/dev/null 2>&1 &
+    fi
 fi
 exit 0
 POSTINST
