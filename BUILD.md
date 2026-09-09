@@ -13,11 +13,15 @@ Hysteria и failover полностью удалены из проекта.
 ```sh
 ./build.sh            # версия MAJOR.MINOR.PATCH берётся из файла VERSION
 ./build.sh 1.2.0      # или явным аргументом
+make build            # эквивалент ./build.sh $$(cat VERSION)
 ```
 
 Результат — `kvasec_<MAJOR.MINOR.PATCH>.ipk` в корне репозитория. Внутреннее имя
 пакета в opkg остаётся `kvas`, поэтому существующие команда `kvas` и установки обновляются
 без переименования.
+
+`build.sh` — единственный поддерживаемый упаковщик. `Makefile` оставлен только как
+обёртка для `make build`/`make ipk`, поэтому оба способа создают идентичный IPK.
 
 Формат идентичен отгружаемым релизам: `gzip(tar( debian-binary + control.tar.gz + data.tar.gz ))`.
 Всё дерево `opt/` кладётся в `/opt/apps/kvas/`, плюс системные точки входа
