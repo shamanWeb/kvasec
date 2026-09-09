@@ -11,7 +11,7 @@ RESULT_FILE=${BYPASS_RESULT_FILE:-/tmp/kvas-bypass-check.json}
 LOCK_FILE=${BYPASS_LOCK_FILE:-/tmp/kvas-bypass-check.lock}
 LOCK_DIR=${BYPASS_LOCK_DIR:-${LOCK_FILE}.d}
 MAX_DOMAINS=${BYPASS_MAX_DOMAINS:-40}
-SOCKS_ADDR=${BYPASS_SOCKS_ADDR:-127.0.0.1:1097}
+KVAS_CONF=${KVAS_CONF:-/opt/etc/kvas.conf}
 TMP_FILE="${RESULT_FILE}.$$"
 
 umask 077
@@ -48,12 +48,12 @@ resolve_ipv4() {
 }
 
 http_code() {
-    # $1 domain, $2 optional SOCKS address.  A 4xx response still proves that
+    # $1 domain, $2 optional outgoing interface. A 4xx response still proves that
     # the resource was reached (many sites reject curl or HEAD requests).
-    local domain="$1" proxy="${2:-}" code
-    if [ -n "$proxy" ]; then
+    local domain="$1" iface="${2:-}" code
+    if [ -n "$iface" ]; then
         code=$(curl -sS -L -r 0-0 --connect-timeout 4 --max-time 8 \
-            --socks5-hostname "$proxy" -o /dev/null -w '%{http_code}' "https://${domain}/" 2>/dev/null)
+            --interface "$iface" -o /dev/null -w '%{http_code}' "https://${domain}/" 2>/dev/null)
     else
         code=$(curl -sS -L -r 0-0 --connect-timeout 4 --max-time 8 \
             -o /dev/null -w '%{http_code}' "https://${domain}/" 2>/dev/null)
@@ -61,15 +61,18 @@ http_code() {
     case "$code" in [1-5][0-9][0-9]) printf '%s' "$code";; *) printf '000';; esac
 }
 
-has_socks() {
-    if command -v ss >/dev/null 2>&1; then
-        ss -tln 2>/dev/null | grep -q ':1097 ' && return 0
-    fi
-    if command -v netstat >/dev/null 2>&1; then
-        netstat -tln 2>/dev/null | grep -q ':1097 ' && return 0
-    fi
-    return 1
+get_awg_iface() {
+    local iface
+    iface=$(sed -n 's/^INFACE_ENT=//p' "$KVAS_CONF" 2>/dev/null | head -1)
+    case "$iface" in opkgtun*) printf '%s' "$iface";; esac
 }
+
+awg_is_up() {
+    local iface="$1"
+    [ -n "$iface" ] && ip link show dev "$iface" 2>/dev/null | grep -q 'UP'
+}
+
+AWG_IFACE=$(get_awg_iface)
 
 # Reserve half the budget for newly observed DNS domains.  Without this split,
 # a large kvas.list would hide every candidate that is not yet routed via VPN.
@@ -105,34 +108,34 @@ while IFS= read -r domain; do
         status="dns_failed"
         detail="DNS не вернул адрес"
     elif [ "$listed" = true ]; then
-        if has_socks; then
-            tunnel=$(http_code "$domain" "$SOCKS_ADDR")
+        if awg_is_up "$AWG_IFACE"; then
+            tunnel=$(http_code "$domain" "$AWG_IFACE")
             if [ "$tunnel" = "000" ]; then
-                status="vpn_failed"
-                detail="в VPN-списке, но через туннель недоступен"
+                status="awg_failed"
+                detail="в VPN-списке, но через AWG недоступен"
             else
                 status="ok"
-                detail="доступен через VPN (HTTP ${tunnel})"
+                detail="доступен через AWG (HTTP ${tunnel})"
             fi
         else
-            status="tunnel_unavailable"
-            detail="в VPN-списке, но SOCKS-туннель не запущен"
+            status="awg_unavailable"
+            detail="в VPN-списке, но AWG-туннель отключён"
         fi
     else
         direct=$(http_code "$domain")
         if [ "$direct" = "000" ]; then
-            if has_socks; then
-                tunnel=$(http_code "$domain" "$SOCKS_ADDR")
+            if awg_is_up "$AWG_IFACE"; then
+                tunnel=$(http_code "$domain" "$AWG_IFACE")
                 if [ "$tunnel" = "000" ]; then
                     status="direct_failed"
                     detail="напрямую и через VPN недоступен"
                 else
-                    status="direct_failed_tunnel_ok"
-                    detail="напрямую недоступен; через VPN доступен (HTTP ${tunnel})"
+                    status="direct_failed_awg_ok"
+                    detail="напрямую недоступен; через AWG доступен (HTTP ${tunnel})"
                 fi
             else
                 status="direct_failed"
-                detail="напрямую недоступен; VPN-туннель не запущен"
+                detail="напрямую недоступен; AWG-туннель отключён"
             fi
         else
             status="ok"
