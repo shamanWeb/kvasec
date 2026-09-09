@@ -1,95 +1,21 @@
-include $(TOPDIR)/rules.mk
+# Единственная поддерживаемая упаковка KVAS находится в build.sh.
+#
+# Этот Makefile намеренно не содержит старый OpenWrt/molot-SDK recipe: тот
+# дублировал metadata, postinst и раскладку файлов, из-за чего IPK из `make`
+# отличался от IPK из `./build.sh`. Оставлен как удобная совместимая точка входа.
 
-PKG_NAME:=kvas
-PKG_VERSION:=1.2.0
-PKG_RELEASE:= 1
-PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)-$(PKG_RELEASE)
-MOLOT_UNINSTALL:=kvas uninstall full
+VERSION := $(strip $(shell tr -d '[:space:]' < VERSION))
 
-include $(INCLUDE_DIR)/package.mk
+.PHONY: all build ipk verify help
 
-define Package/kvas
-	SECTION:=utils
-	CATEGORY:=Keendev
-	# DEPENDS:=+jq +curl +knot-dig +libpcre +nano-full +cron +bind-dig +dnsmasq-full +ipset +dnscrypt-proxy2 +iptables +libopenssl +shadowsocks-rust   
-	DEPENDS:=+libpcre +jq +curl +knot-dig +nano-full +cron +bind-dig +dnsmasq-full +ipset +dnscrypt-proxy2 +iptables +shadowsocks-libev-ss-redir +shadowsocks-libev-config +libmbedtls
-	URL:=no
-	TITLE:=VPN клиент для обработки запросов по внесению хостов в белый список.
-	PKGARCH:=all
-endef
-# +libstdcpp 
-define Package/kvas/description
-	Данный пакет позволяет осуществлять контроль и поддерживать в актуальном состоянии
-	защищенный список хостов или "Белый список". При обращении к любому хосту из
-	этого списка, весь трафик будет идти через любое VPN или через Shadowsocks соединение,
-	заранее настроенное на роутере.
-endef
+all build ipk:
+	./build.sh $(VERSION)
 
-define Build/Prepare
-endef
-define Build/Configure
-endef
-define Build/Compile
-endef
+# Быстрая локальная проверка скриптов и конфигурации workflow без публикации.
+verify:
+	sh -n build.sh opt/bin/main/upgrade opt/bin/monitor/www/cgi-bin/manage.sh
+	python3 -c 'import yaml; yaml.safe_load(open(".github/workflows/build.yml", encoding="utf-8")); print("workflow YAML: OK")'
 
-# Во время инсталляции задаем папку в которую будем
-# копировать наш скрипт и затем копируем его в эту папку
-define Package/kvas/install
-	$(INSTALL_DIR) $(1)/opt/etc/init.d
-	$(INSTALL_DIR) $(1)/opt/etc/ndm/fs.d
-	$(INSTALL_DIR) $(1)/opt/etc/ndm/netfilter.d
-	$(INSTALL_DIR) $(1)/opt/apps/kvas
-
-	$(INSTALL_BIN) opt/etc/ndm/fs.d/15-kvas-start.sh $(1)/opt/etc/ndm/fs.d
-	$(INSTALL_BIN) opt/etc/ndm/netfilter.d/100-dns-local $(1)/opt/etc/ndm/netfilter.d
-
-	$(INSTALL_BIN) opt/etc/init.d/S96kvas $(1)/opt/etc/init.d
-	$(CP) ./opt/. $(1)/opt/apps/kvas
-endef
-
-#---------------------------------------------------------------------
-# Скрипт создаем, который выполняется после инсталляции пакета
-# Задаем в кроне время обновления ip адресов хостов
-#---------------------------------------------------------------------
-define Package/kvas/postinst
-
-#!/bin/sh
-
-BLUE="\033[36m";
-NOCL="\033[m";
-
-print_line()(printf "%83s\n" | tr " " "=")
-
-chmod -R +x /opt/apps/kvas/bin/*
-# chmod -R +x /opt/apps/kvas/sbin/dnsmasq/*
-chmod -R +x /opt/apps/kvas/etc/init.d/*
-chmod -R +x /opt/apps/kvas/etc/ndm/*
-
-ln -sf /opt/apps/kvas/bin/kvas /opt/bin/kvas
-
-cp -f /opt/apps/kvas/etc/conf/kvas.conf /opt/etc/kvas.conf
-[ -f /opt/etc/kvas.list ] || cp -f /opt/apps/kvas/etc/conf/kvas.list /opt/etc/kvas.list
-mkdir -p /opt/etc/adblock /opt/etc/dnsmasq.d
-cp -f /opt/apps/kvas/etc/conf/adblock.sources /opt/etc/adblock/sources.list
-cp -f /opt/apps/kvas/etc/ndm/ndm /opt/apps/kvas/bin/libs/ndm
-
-sed -i "s/\(APP_VERSION=\).*/\1$(PKG_VERSION)/; s/^,//; s/\,/ /g;" "/opt/etc/kvas.conf"
-sed -i "s/\(APP_RELEASE=\).*/\1/; s/^,//; s/\,/ /g;" "/opt/etc/kvas.conf"
-
-print_line
-echo -e "Для настройки пакета КВАС наберите \033[36mkvas setup\033[m"
-print_line
-
-endef
-
-#---------------------------------------------------------------------
-# Создаем скрипт, который выполняется при удалении пакета
-# Удаляем из крона запись об обновлении ip адресов
-#---------------------------------------------------------------------
-define Package/kvas/postrm
-
-#!/bin/sh
-
-endef
-
-$(eval $(call BuildPackage,kvas))
+help:
+	@echo "make build   — собрать kvasec_$(VERSION).ipk"
+	@echo "make verify  — проверить shell-синтаксис и workflow YAML"
