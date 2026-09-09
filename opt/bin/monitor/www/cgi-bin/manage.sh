@@ -5,6 +5,15 @@
 PASS_FILE=/opt/kvas_web_pass
 TOKEN_DIR=/tmp/kvas_web_tokens
 KVAS_BIN=/opt/apps/kvas/bin/kvas
+UPGRADE_LOG=/tmp/kvas-web-upgrade.log
+BYPASS_CHECK_BIN=/opt/apps/kvas/bin/monitor/bypass_check.sh
+BYPASS_CHECK_LOCK=/tmp/kvas-bypass-check.lock
+BYPASS_CHECK_LOCK_DIR=/tmp/kvas-bypass-check.lock.d
+BYPASS_CHECK_RESULT=/tmp/kvas-bypass-check.json
+BYPASS_CHECK_LOG=/tmp/kvas-bypass-check.log
+BLOCK_WATCH_BIN=/opt/apps/kvas/bin/monitor/block_watch.sh
+BLOCK_WATCH_PID=/tmp/kvas-block-watch.pid
+BLOCK_WATCH_EVENTS=/tmp/kvas-block-watch.events
 KVAS_LIST=/opt/etc/kvas.list
 TAGS_FILE=/opt/etc/tags.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
@@ -192,6 +201,7 @@ main() {
 
 	action=$(query_param action)
 	token=$(query_param token)
+	[ -z "$token" ] && token="$HTTP_X_KVAS_TOKEN"
 
 	case "$action" in
 		auth_status)
@@ -204,7 +214,7 @@ main() {
 		set_pass)
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
 			[ -s "$PASS_FILE" ] && json_error "password already set; authenticate to change it"
-			pass=$(query_param pass)
+			pass=$(query_param pass); [ -z "$pass" ] && pass=$(url_decode "$HTTP_X_KVAS_PASS")
 			[ -z "$pass" ] && json_error "pass required"
 			[ ${#pass} -lt 4 ] && json_error "min 4 symbols"
 			write_password_hash "$(password_hash "$pass")" || json_error "cannot save password"
@@ -213,7 +223,8 @@ main() {
 		auth)
 			wait=$(check_bruteforce); check_rc=$?
 			[ "$check_rc" -ne 0 ] && printf '{"error":"too many attempts","wait":%s}\n' "${wait:-300}" && return
-			pass=$(query_param pass)
+			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			pass=$(query_param pass); [ -z "$pass" ] && pass=$(url_decode "$HTTP_X_KVAS_PASS")
 			[ -z "$pass" ] && json_error "pass required"
 			if ! verify_password "$pass"; then
 				record_fail
@@ -226,8 +237,8 @@ main() {
 		change_pass)
 			check_token "$token"
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
-			current=$(query_param current)
-			new_pass=$(query_param new_pass)
+			current=$(query_param current); [ -z "$current" ] && current=$(url_decode "$HTTP_X_KVAS_CURRENT")
+			new_pass=$(query_param new_pass); [ -z "$new_pass" ] && new_pass=$(url_decode "$HTTP_X_KVAS_NEW_PASS")
 			[ -n "$current" ] && [ -n "$new_pass" ] || json_error "current and new password required"
 			[ ${#new_pass} -lt 4 ] && json_error "min 4 symbols"
 			verify_password "$current" || json_error "wrong current password"
@@ -416,12 +427,76 @@ main() {
 			;;
 		upgrade)
 			check_token "$token"
-			json_error "use CLI: kvas upgrade"
+			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			# Package postinst restarts this WebUI. Return before starting the
+			# updater, otherwise the browser loses its request with the old listener.
+			( sleep 1; "$KVAS_BIN" upgrade > "$UPGRADE_LOG" 2>&1 ) &
+			json_ok "upgrade started; WebUI will restart shortly"
 			;;
 		check_update)
 			check_token "$token"
 			update_info=$(check_updates 2>/dev/null)
 			printf '{"ok":true,"update":%s}\n' "$(json_str "$update_info")"
+			;;
+		bypass_check_start)
+			check_token "$token"
+			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			# mkdir is atomic on the router filesystem, unlike check-then-create
+			# of a regular file.  It prevents concurrent expensive scans.
+			if ! mkdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null; then
+				json_error "check already running"
+			fi
+			if [ ! -x "$BYPASS_CHECK_BIN" ]; then rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null; json_error "bypass checker is not installed"; fi
+			rm -f "$BYPASS_CHECK_RESULT"
+			( BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 ) &
+			json_ok "bypass check started"
+			;;
+		bypass_check_status)
+			check_token "$token"
+			if [ -d "$BYPASS_CHECK_LOCK_DIR" ]; then
+				echo '{"ok":true,"running":true,"checked":[]}'
+				return
+			fi
+			if [ -s "$BYPASS_CHECK_RESULT" ]; then
+				cat "$BYPASS_CHECK_RESULT"
+			else
+				echo '{"ok":true,"running":false,"checked":[]}'
+			fi
+			;;
+		block_watch_start)
+			check_token "$token"
+			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			if [ -f "$BLOCK_WATCH_PID" ] && kill -0 "$(cat "$BLOCK_WATCH_PID" 2>/dev/null)" 2>/dev/null; then json_error "watcher already running"; fi
+			[ -x "$BLOCK_WATCH_BIN" ] || json_error "block watcher is not installed"
+			( "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 ) &
+			json_ok "block watcher started"
+			;;
+		block_watch_stop)
+			check_token "$token"
+			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			[ -f "$BLOCK_WATCH_PID" ] && kill "$(cat "$BLOCK_WATCH_PID" 2>/dev/null)" 2>/dev/null
+			rm -f "$BLOCK_WATCH_PID"
+			json_ok "block watcher stopped"
+			;;
+		block_watch_status)
+			check_token "$token"
+			watch_running=false
+			[ -f "$BLOCK_WATCH_PID" ] && kill -0 "$(cat "$BLOCK_WATCH_PID" 2>/dev/null)" 2>/dev/null && watch_running=true
+			printf '{"ok":true,"running":%s,"events":[' "$watch_running"
+			first=1
+			now=$(date +%s)
+			if [ -s "$BLOCK_WATCH_EVENTS" ]; then
+				awk -F'|' -v cutoff=$((now - 60)) '
+					$1>=cutoff && $2=="map" { domain[$3]=$4 }
+					$1>=cutoff && $2=="fail" { key=$3"|"$4; count[key]++ }
+					END { for (key in count) { split(key,a,"|"); print a[1]"|"a[2]"|"(domain[substr(a[2],1,index(a[2],":")-1)] ? domain[substr(a[2],1,index(a[2],":")-1)] : "")"|"count[key] } }
+				' "$BLOCK_WATCH_EVENTS" | while IFS='|' read -r src destination domain attempts; do
+					[ "$first" -eq 0 ] && printf ','
+					first=0
+					printf '{"src":%s,"destination":%s,"domain":%s,"attempts":%s}' "$(json_str "$src")" "$(json_str "$destination")" "$(json_str "$domain")" "${attempts:-1}"
+				done
+			fi
+			echo ']}'
 			;;
 		backup)
 			check_token "$token"

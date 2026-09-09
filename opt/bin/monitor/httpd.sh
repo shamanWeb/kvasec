@@ -50,15 +50,27 @@ log() {
 }
 R=""
 L=""
+T=""
+AP=""
+AC=""
+AN=""
 while IFS='' read -r L; do
     L=$(echo "$L" | tr -d '\r')
     [ -z "$L" ] && break
     [ -z "$R" ] && R="$L"
+    case "$L" in
+        [Xx]-[Kk][Vv][Aa][Ss]-[Tt]oken:*) T=$(echo "${L#*:}" | sed 's/^[[:space:]]*//');;
+        [Xx]-[Kk][Vv][Aa][Ss]-[Pp]ass:*) AP=$(echo "${L#*:}" | sed 's/^[[:space:]]*//');;
+        [Xx]-[Kk][Vv][Aa][Ss]-[Cc]urrent:*) AC=$(echo "${L#*:}" | sed 's/^[[:space:]]*//');;
+        [Xx]-[Kk][Vv][Aa][Ss]-[Nn]ew-[Pp]ass:*) AN=$(echo "${L#*:}" | sed 's/^[[:space:]]*//');;
+    esac
 done
 M=$(echo "$R" | awk '{print $1}')
 P=$(echo "$R" | awk '{print $2}')
 S=$(echo "$P" | sed 's/[?#].*//')
-log "request method=${M:-unknown} path=${P:-/}"
+# Do not log query strings: they historically contained WebUI session tokens
+# and older clients may still send credentials there.
+log "request method=${M:-unknown} path=${S:-/}"
 
 case "$M" in
     GET|POST) ;;
@@ -81,6 +93,10 @@ case "$S" in
         if [ -x "$X" ]; then
             export QUERY_STRING="$Q"
             export REQUEST_METHOD="$M"
+            export HTTP_X_KVAS_TOKEN="$T"
+            export HTTP_X_KVAS_PASS="$AP"
+            export HTTP_X_KVAS_CURRENT="$AC"
+            export HTTP_X_KVAS_NEW_PASS="$AN"
             printf "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\n\r\n"
             "$X"
             log "cgi ok path=$S"

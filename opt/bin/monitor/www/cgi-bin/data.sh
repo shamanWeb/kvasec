@@ -7,6 +7,29 @@ json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\n/\\n/g'
 }
 
+TOKEN_DIR=/tmp/kvas_web_tokens
+
+json_error() {
+	printf '{"error":"%s"}\n' "$1"
+	exit 0
+}
+
+# This endpoint exposes DNS and conntrack data.  It must use the same session
+# token as manage.sh; otherwise any machine in the allowed LAN could inspect
+# other clients' traffic.
+require_token() {
+	local token created now
+	token=$(printf '%s\n' "$QUERY_STRING" | tr '&' '\n' | sed -n 's/^token=//p' | head -1)
+	[ -z "$token" ] && token="$HTTP_X_KVAS_TOKEN"
+	echo "$token" | grep -Eq '^[0-9a-f]{32}$' || json_error "auth required"
+	[ -f "$TOKEN_DIR/$token" ] || json_error "invalid token"
+	created=$(cat "$TOKEN_DIR/$token" 2>/dev/null)
+	[ -n "$created" ] || json_error "token expired"
+	now=$(date +%s 2>/dev/null || echo 0)
+	[ $((now - created)) -le 3600 ] 2>/dev/null || { rm -f "$TOKEN_DIR/$token"; json_error "token expired"; }
+	echo "$now" > "$TOKEN_DIR/$token"
+}
+
 DNS_LOG=/tmp/kvas-dns.log
 
 # Build IP→domain cache from DNS log (one pass, fast)
@@ -271,6 +294,7 @@ print_devices_json() {
 	done | awk 'BEGIN{printf"["; n=0} {if(n++) printf","; printf"%s",$0} END{printf"]"}'
 }
 
+require_token
 action=$(echo "$QUERY_STRING" | sed 's/&.*//')
 
 case "$action" in

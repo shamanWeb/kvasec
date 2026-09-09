@@ -32,3 +32,5 @@ if grep -Fq 'Access-Control-Allow-Origin: *' "$HTTPD"; then
     echo 'HTTP handler must not enable wildcard CORS' >&2
     exit 1
 fi
+
+grep -Fq 'path=${S:-/}' "$HTTPD"

@@ -22,6 +22,8 @@ make build            # эквивалент ./build.sh $$(cat VERSION)
 
 `build.sh` — единственный поддерживаемый упаковщик. `Makefile` оставлен только как
 обёртка для `make build`/`make ipk`, поэтому оба способа создают идентичный IPK.
+Если WebUI был включён до обновления, postinst перезапускает его, чтобы новый HTTP-handler
+применился сразу, а не после ручного `kvas monitor web stop`/`web`.
 
 Перед merge запускайте:
 
@@ -97,7 +99,9 @@ curl -s "https://api.github.com/repos/shamanWeb/kvasec/releases/latest"      | g
 - **VERSION** — стартовая SemVer и версия по умолчанию для локального `./build.sh`; CI
   автоматически увеличивает PATCH после последнего SemVer-release.
 - **Без merge и тега:** Actions → `build-and-release` → Run workflow, ввести номер вручную (`workflow_dispatch`).
-- **На боевой роутер** ставить новый ipk через `opkg install --force-reinstall` вживую, НЕ `kvas upgrade` в фоне/не-интерактивно (риск даунгрейда/зависания, был инцидент с DNS).
+- **Из WebUI:** кнопка «Установить обновление» запускает защищённый POST-запрос и выполняет
+  `kvas upgrade` в фоне. После установки WebUI сам перезапускается; обновите страницу через
+  несколько секунд. Журнал updater: `/tmp/kvas-web-upgrade.log`.
 
 ### Приватный репозиторий → нужен токен на роутере
 Т.к. репозиторий приватный, `kvas upgrade` не увидит релизы без авторизации. Положите на роутер
