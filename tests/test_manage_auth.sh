@@ -36,23 +36,27 @@ run_api 'action=set_pass&pass=attacker-password-123' POST | grep -F 'password al
 # Лимит действительно срабатывает после пяти ошибочных попыток.
 i=1
 while [ "$i" -le 5 ]; do
-    run_api 'action=auth&pass=wrong-password-123' GET | grep -F 'wrong password' >/dev/null
+    run_api 'action=auth&pass=wrong-password-123' POST | grep -F 'wrong password' >/dev/null
     i=$((i + 1))
 done
-run_api 'action=auth&pass=wrong-password-123' GET | grep -F 'too many attempts' >/dev/null
+run_api 'action=auth&pass=wrong-password-123' POST | grep -F 'too many attempts' >/dev/null
 rm -f "$WORK/fail-count" "$WORK/fail-time"
 
 # Успешный вход по старому MD5 мигрирует файл на SHA-256.
 printf '%s' 'legacy-password-123' | md5sum | awk '{print $1}' > "$WORK/pass"
-legacy_auth=$(run_api 'action=auth&pass=legacy-password-123' GET)
+legacy_auth=$(run_api 'action=auth&pass=legacy-password-123' POST)
 printf '%s' "$legacy_auth" | grep -Eq '"token":"[0-9a-f]+"'
 grep -Eq '^sha256:[0-9a-f]{64}$' "$WORK/pass"
+
+# Новые клиенты передают пароль в заголовке, не оставляя его в URL.
+header_auth=$(QUERY_STRING='action=auth' REQUEST_METHOD=POST HTTP_X_KVAS_PASS=legacy-password-123 sh "$WORK/manage.sh")
+printf '%s' "$header_auth" | grep -Eq '"token":"[0-9a-f]+"'
 
 # Смена требует действующий token, POST и текущий пароль.
 run_api 'action=change_pass&current=legacy-password-123&new_pass=updated-password-123' POST | grep -F 'auth required' >/dev/null
 token=$(printf '%s' "$legacy_auth" | sed -n 's/.*"token":"\([0-9a-f]*\)".*/\1/p')
 run_api "action=change_pass&token=$token&current=legacy-password-123&new_pass=updated-password-123" POST | grep -F '"ok":true' >/dev/null
-run_api 'action=auth&pass=updated-password-123' GET | grep -Eq '"token":"[0-9a-f]+"'
+run_api 'action=auth&pass=updated-password-123' POST | grep -Eq '"token":"[0-9a-f]+"'
 
 # The full-package updater is an authenticated POST and starts in background,
 # so the WebUI can reply before package postinst restarts its listener.
