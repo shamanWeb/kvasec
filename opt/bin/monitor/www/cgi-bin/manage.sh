@@ -10,6 +10,7 @@ BYPASS_CHECK_BIN=/opt/apps/kvas/bin/monitor/bypass_check.sh
 BYPASS_CHECK_LOCK=/tmp/kvas-bypass-check.lock
 BYPASS_CHECK_LOCK_DIR=/tmp/kvas-bypass-check.lock.d
 BYPASS_CHECK_RESULT=/tmp/kvas-bypass-check.json
+BYPASS_CHECK_PROGRESS=/tmp/kvas-bypass-check.progress
 BYPASS_CHECK_LOG=/tmp/kvas-bypass-check.log
 BLOCK_WATCH_BIN=/opt/apps/kvas/bin/monitor/block_watch.sh
 BLOCK_WATCH_PID=/tmp/kvas-block-watch.pid
@@ -441,6 +442,9 @@ main() {
 		bypass_check_start)
 			check_token "$token"
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			mode=$(query_param mode)
+			case "$mode" in all|dns|mixed|'') ;; *) json_error "invalid check mode";; esac
+			[ -z "$mode" ] && mode=mixed
 			# mkdir is atomic on the router filesystem, unlike check-then-create
 			# of a regular file.  It prevents concurrent expensive scans.
 			if ! mkdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null; then
@@ -448,13 +452,20 @@ main() {
 			fi
 			if [ ! -x "$BYPASS_CHECK_BIN" ]; then rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null; json_error "bypass checker is not installed"; fi
 			rm -f "$BYPASS_CHECK_RESULT"
-			( BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 ) &
+			rm -f "$BYPASS_CHECK_PROGRESS"
+			( BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" BYPASS_MODE="$mode" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 ) &
 			json_ok "bypass check started"
 			;;
 		bypass_check_status)
 			check_token "$token"
 			if [ -d "$BYPASS_CHECK_LOCK_DIR" ]; then
-				echo '{"ok":true,"running":true,"checked":[]}'
+				progress_done=0; progress_total=0
+				if [ -f "$BYPASS_CHECK_PROGRESS" ]; then
+					IFS='|' read -r progress_done progress_total < "$BYPASS_CHECK_PROGRESS"
+					case "$progress_done" in ''|*[!0-9]*) progress_done=0;; esac
+					case "$progress_total" in ''|*[!0-9]*) progress_total=0;; esac
+				fi
+				printf '{"ok":true,"running":true,"done":%s,"total":%s,"checked":[]}\n' "${progress_done:-0}" "${progress_total:-0}"
 				return
 			fi
 			if [ -s "$BYPASS_CHECK_RESULT" ]; then
@@ -491,9 +502,11 @@ main() {
 					$1>=cutoff && $2=="fail" { key=$3"|"$4; count[key]++ }
 					END { for (key in count) { split(key,a,"|"); print a[1]"|"a[2]"|"(domain[substr(a[2],1,index(a[2],":")-1)] ? domain[substr(a[2],1,index(a[2],":")-1)] : "")"|"count[key] } }
 				' "$BLOCK_WATCH_EVENTS" | while IFS='|' read -r src destination domain attempts; do
+					in_vpn=false
+					if [ -n "$domain" ] && { grep -qxF "$domain" "$KVAS_LIST" 2>/dev/null || grep -qxF "*.${domain}" "$KVAS_LIST" 2>/dev/null; }; then in_vpn=true; fi
 					[ "$first" -eq 0 ] && printf ','
 					first=0
-					printf '{"src":%s,"destination":%s,"domain":%s,"attempts":%s}' "$(json_str "$src")" "$(json_str "$destination")" "$(json_str "$domain")" "${attempts:-1}"
+					printf '{"src":%s,"destination":%s,"domain":%s,"attempts":%s,"in_vpn":%s}' "$(json_str "$src")" "$(json_str "$destination")" "$(json_str "$domain")" "${attempts:-1}" "$in_vpn"
 				done
 			fi
 			echo ']}'

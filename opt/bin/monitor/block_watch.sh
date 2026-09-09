@@ -6,6 +6,7 @@ EVENTS=${BLOCK_WATCH_EVENTS:-/tmp/kvas-block-watch.events}
 PID_FILE=${BLOCK_WATCH_PID:-/tmp/kvas-block-watch.pid}
 INTERVAL=${BLOCK_WATCH_INTERVAL:-5}
 WINDOW=60
+ROUTER_IP=${BLOCK_WATCH_ROUTER_IP:-$(ip -4 addr show br0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -1)}
 umask 077
 trap 'rm -f "$PID_FILE"' EXIT HUP INT TERM
 printf '%s\n' "$$" > "$PID_FILE"
@@ -31,7 +32,23 @@ while :; do
     else
         ct=$(cat /proc/net/nf_conntrack 2>/dev/null || true)
     fi
-    printf '%s\n' "$ct" | awk '/UNREPLIED/ {s=d=p=""; for(i=1;i<=NF;i++){if($i~/^src=/&&!s){sub(/^src=/,"",$i);s=$i} if($i~/^dst=/&&!d){sub(/^dst=/,"",$i);d=$i} if($i~/^dport=/&&!p){sub(/^dport=/,"",$i);p=$i}} if(s&&d&&p)print s"|"d":"p}' | \
+    printf '%s\n' "$ct" | awk -v router="$ROUTER_IP" '
+        function non_public(ip, a) {
+            split(ip, a, ".")
+            return a[1]==0 || a[1]==10 || a[1]==127 || a[1]>=224 ||
+                (a[1]==169 && a[2]==254) ||
+                (a[1]==172 && a[2]>=16 && a[2]<=31) || a[1]==192 && a[2]==168
+        }
+        /UNREPLIED/ && $3=="tcp" {
+            s=d=p=""
+            for(i=1;i<=NF;i++) {
+                if($i~/^src=/&&!s){sub(/^src=/,"",$i);s=$i}
+                if($i~/^dst=/&&!d){sub(/^dst=/,"",$i);d=$i}
+                if($i~/^dport=/&&!p){sub(/^dport=/,"",$i);p=$i}
+            }
+            if(s && d && p && s!=router && !non_public(d)) print s"|"d":"p
+        }
+    ' | \
     while IFS='|' read -r src destination; do
         append_once fail "$src" "$destination"
     done
