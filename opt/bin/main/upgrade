@@ -231,7 +231,10 @@ kvas_conf=/opt/etc/kvas.conf
 # Вычисляем текущую ширину экрана для печати линий определенной ширины
 length=$(stty size 2>/dev/null | cut -d' ' -f2)
 # длина распечатываемой линии символов будет меньше на 12 символов чем ширина экрана
-[ "${length}" -gt 80 ] && WIDTH=$((length*2/3)) || WIDTH=68
+case "${length}" in
+	''|*[!0-9]*) WIDTH=68 ;;
+	*) [ "${length}" -gt 80 ] && WIDTH=$((length*2/3)) || WIDTH=68 ;;
+esac
 
 sed -i 's/\(export TERM=\).*/\1xterm-256color/' /opt/etc/profile
 
