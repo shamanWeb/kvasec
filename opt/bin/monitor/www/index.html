@@ -313,10 +313,15 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 <div id="tab-bypass" class="tab-content">
   <div class="card">
     <h3>Мониторинг обхода блокировок</h3>
-    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Проверяет до 40 доменов: сначала из VPN-списка, затем из последних DNS-запросов. Проверка запускается только вручную и делает короткие запросы с роутера.</p>
+    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Проверка запускается только вручную. Полный VPN-список выполняется в фоне и может занять несколько минут; DNS-режим берёт последние 100 доменов.</p>
     <div class="card-row" style="gap:8px;flex-wrap:wrap;">
-      <button class="btn btn-sm primary" id="bypassCheckBtn" onclick="bypassCheckStart(this)">Проверить сейчас</button>
+      <button class="btn btn-sm primary" id="bypassCheckBtn" onclick="bypassCheckStart('all',this)">Проверить весь VPN-список</button>
+      <button class="btn btn-sm" onclick="bypassCheckStart('dns',this)">Проверить последние 100 DNS</button>
       <span id="bypassCheckStatus" class="status">Проверка ещё не запускалась</span>
+    </div>
+    <div id="bypassProgress" style="display:none;margin-top:10px;max-width:520px;">
+      <div class="progress-bar"><div class="progress-fill" id="bypassProgressFill"></div></div>
+      <div class="progress-text" id="bypassProgressText"></div>
     </div>
     <div id="bypassCheckList" class="host-list" style="max-height:500px;margin-top:12px;"><div class="status">Нет результатов</div></div>
   </div>
@@ -1030,19 +1035,27 @@ function blockWatchPoll() {
     rows.forEach(function(row){
       var item = document.createElement('div'); item.style.cssText = 'padding:6px 8px;border-bottom:1px solid #30363d;display:flex;gap:8px;flex-wrap:wrap;';
       var text = document.createElement('span'); text.style.color = '#f85149'; text.textContent = (row.domain || row.destination) + ' — нет ответа, попыток: ' + row.attempts + ' (клиент ' + row.src + ')'; item.appendChild(text);
-      if (row.domain) { var add = document.createElement('button'); add.className='btn btn-sm primary'; add.textContent='Добавить в VPN'; add.onclick=function(){bypassAddDomain(row.domain, add);}; item.appendChild(add); }
+      if (row.domain) {
+        var action = document.createElement('button');
+        action.className = 'btn btn-sm ' + (row.in_vpn ? 'danger' : 'primary');
+        action.textContent = row.in_vpn ? 'Убрать из VPN' : 'Добавить *.domain в VPN';
+        action.onclick = function(){ if (row.in_vpn) bypassRemoveDomain(row.domain, action); else bypassAddDomain(row.domain, action); };
+        item.appendChild(action);
+      }
       list.appendChild(item);
     });
   });
 }
 
-function bypassCheckStart(btn) {
-  if (!confirm('Проверить доступность доменов? Роутер выполнит до 40 коротких запросов.')) return;
-  apiPostBtn('/cgi-bin/manage.sh?action=bypass_check_start', btn, function(d){
+function bypassCheckStart(mode, btn) {
+  var label = mode === 'all' ? 'весь VPN-список' : 'последние 100 DNS-доменов';
+  if (!confirm('Проверить ' + label + '? Проверка выполняется в фоне.')) return;
+  apiPostBtn('/cgi-bin/manage.sh?action=bypass_check_start&mode=' + mode, btn, function(d){
     var status = document.getElementById('bypassCheckStatus');
     if (!d.ok) { status.className = 'status status-err'; status.textContent = d.error || 'Не удалось запустить проверку'; return; }
     status.className = 'status status-warn';
     status.textContent = 'Проверка выполняется…';
+    setBypassProgress(0, 0, true);
     document.getElementById('bypassCheckList').innerHTML = '<div class="status">Проверяем доступность…</div>';
     if (bypassPollTimer) clearInterval(bypassPollTimer);
     bypassCheckPoll();
@@ -1050,15 +1063,26 @@ function bypassCheckStart(btn) {
   });
 }
 
+function setBypassProgress(done, total, active) {
+  var wrap = document.getElementById('bypassProgress');
+  var fill = document.getElementById('bypassProgressFill');
+  var text = document.getElementById('bypassProgressText');
+  wrap.style.display = active ? '' : 'none';
+  var pct = total > 0 ? Math.min(100, Math.round(done * 100 / total)) : 0;
+  fill.style.width = pct + '%';
+  text.textContent = total > 0 ? 'Проверено: ' + done + ' из ' + total + ' (' + pct + '%)' : 'Подготовка списка доменов…';
+}
+
 function bypassCheckPoll() {
   api('/cgi-bin/manage.sh?action=bypass_check_status', function(d){
     var status = document.getElementById('bypassCheckStatus');
     if (!d.ok) { status.className = 'status status-err'; status.textContent = d.error || 'Ошибка проверки'; if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; } return; }
-    if (d.running) { status.className = 'status status-warn'; status.textContent = 'Проверка выполняется…'; return; }
+    if (d.running) { status.className = 'status status-warn'; status.textContent = 'Проверка выполняется…'; setBypassProgress(d.done || 0, d.total || 0, true); return; }
     if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; }
     var rows = d.checked || [];
     status.className = 'status status-ok';
     status.textContent = rows.length ? 'Проверено доменов: ' + rows.length : 'Нет доменов для проверки';
+    setBypassProgress(rows.length, rows.length, true);
     renderBypassResults(rows);
   });
 }
@@ -1087,13 +1111,13 @@ function renderBypassResults(rows) {
     result.style.cssText = 'font-size:12px;color:' + (row.status === 'ok' ? '#3fb950' : '#f85149') + ';flex:2;';
     item.appendChild(domain); item.appendChild(result);
     if (row.in_vpn) {
-      var mark = document.createElement('span');
-      mark.textContent = 'в VPN';
-      mark.style.cssText = 'font-size:11px;color:#e3b341;';
-      item.appendChild(mark);
-    } else if (row.status !== 'ok') {
+      var remove = document.createElement('button');
+      remove.className = 'btn btn-sm danger'; remove.textContent = 'Убрать из VPN';
+      remove.onclick = function(){ bypassRemoveDomain(row.domain, remove); };
+      item.appendChild(remove);
+    } else {
       var add = document.createElement('button');
-      add.className = 'btn btn-sm primary'; add.textContent = 'Добавить в VPN';
+      add.className = 'btn btn-sm primary'; add.textContent = 'Добавить *.domain в VPN';
       add.onclick = function(){ bypassAddDomain(row.domain, add); };
       item.appendChild(add);
     }
@@ -1102,9 +1126,17 @@ function renderBypassResults(rows) {
 }
 
 function bypassAddDomain(domain, btn) {
-  apiBtn('/cgi-bin/manage.sh?action=host_add&domain=' + encodeURIComponent(domain), btn, function(d){
+  apiBtn('/cgi-bin/manage.sh?action=host_add&domain=' + encodeURIComponent('*.' + domain), btn, function(d){
     if (d.ok) { btn.textContent = 'Добавлен'; btn.disabled = true; }
     else alert(d.error || 'Не удалось добавить домен');
+  });
+}
+
+function bypassRemoveDomain(domain, btn) {
+  if (!confirm('Убрать ' + domain + ' из VPN-списка?')) return;
+  apiBtn('/cgi-bin/manage.sh?action=host_del&domain=' + encodeURIComponent(domain), btn, function(d){
+    if (d.ok) { btn.textContent = 'Убран'; btn.disabled = true; }
+    else alert(d.error || 'Не удалось убрать домен');
   });
 }
 

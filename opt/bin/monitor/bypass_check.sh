@@ -8,9 +8,11 @@ set -u
 KVAS_LIST=${KVAS_LIST:-/opt/etc/kvas.list}
 DNS_LOG=${DNS_LOG:-/tmp/kvas-dns.log}
 RESULT_FILE=${BYPASS_RESULT_FILE:-/tmp/kvas-bypass-check.json}
+PROGRESS_FILE=${BYPASS_PROGRESS_FILE:-/tmp/kvas-bypass-check.progress}
 LOCK_FILE=${BYPASS_LOCK_FILE:-/tmp/kvas-bypass-check.lock}
 LOCK_DIR=${BYPASS_LOCK_DIR:-${LOCK_FILE}.d}
 MAX_DOMAINS=${BYPASS_MAX_DOMAINS:-40}
+MODE=${BYPASS_MODE:-mixed}
 KVAS_CONF=${KVAS_CONF:-/opt/etc/kvas.conf}
 TMP_FILE="${RESULT_FILE}.$$"
 
@@ -74,23 +76,39 @@ awg_is_up() {
 
 AWG_IFACE=$(get_awg_iface)
 
-# Reserve half the budget for newly observed DNS domains.  Without this split,
-# a large kvas.list would hide every candidate that is not yet routed via VPN.
-VPN_LIMIT=$(( (MAX_DOMAINS + 1) / 2 ))
-DNS_LIMIT=$(( MAX_DOMAINS - VPN_LIMIT ))
+# `all` checks the complete VPN list; `dns` checks the latest 100 observed
+# DNS names; the default mixed mode remains a short diagnostic sample.
 domain_filter() {
     tr '[:upper:]' '[:lower:]' | awk '
         /^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z0-9.-]*[A-Za-z0-9]$/ && $0 !~ /\.\./ && !seen[$0]++ { print }
     '
 }
 
-[ -f "$KVAS_LIST" ] && sed 's/^[*][.]\?//' "$KVAS_LIST" | domain_filter | head -n "$VPN_LIMIT" > "${TMP_FILE}.vpn" || :
-{
-    [ -s "$DNS_LOG" ] && tail -1000 "$DNS_LOG" 2>/dev/null
-    command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\[A'
-} | sed -n 's/.*query\[A[^]]*\] \([^ ]*\) from.*/\1/p' | domain_filter | head -n "$DNS_LIMIT" > "${TMP_FILE}.dns"
+case "$MODE" in
+    all)
+        [ -f "$KVAS_LIST" ] && sed 's/^[*][.]\?//' "$KVAS_LIST" | domain_filter > "${TMP_FILE}.domains" || :
+        ;;
+    dns)
+        {
+            [ -s "$DNS_LOG" ] && tail -2000 "$DNS_LOG" 2>/dev/null
+            command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\[A'
+        } | sed -n 's/.*query\[A[^]]*\] \([^ ]*\) from.*/\1/p' | domain_filter | tail -n 100 > "${TMP_FILE}.domains"
+        ;;
+    *)
+        VPN_LIMIT=$(( (MAX_DOMAINS + 1) / 2 ))
+        DNS_LIMIT=$(( MAX_DOMAINS - VPN_LIMIT ))
+        [ -f "$KVAS_LIST" ] && sed 's/^[*][.]\?//' "$KVAS_LIST" | domain_filter | head -n "$VPN_LIMIT" > "${TMP_FILE}.vpn" || :
+        {
+            [ -s "$DNS_LOG" ] && tail -1000 "$DNS_LOG" 2>/dev/null
+            command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\[A'
+        } | sed -n 's/.*query\[A[^]]*\] \([^ ]*\) from.*/\1/p' | domain_filter | head -n "$DNS_LIMIT" > "${TMP_FILE}.dns"
+        cat "${TMP_FILE}.vpn" "${TMP_FILE}.dns" 2>/dev/null | awk '!seen[$0]++' | head -n "$MAX_DOMAINS" > "${TMP_FILE}.domains"
+        ;;
+esac
 
-cat "${TMP_FILE}.vpn" "${TMP_FILE}.dns" 2>/dev/null | awk '!seen[$0]++' | head -n "$MAX_DOMAINS" > "${TMP_FILE}.domains"
+total=$(wc -l < "${TMP_FILE}.domains" 2>/dev/null || echo 0)
+done_count=0
+printf '%s|%s\n' "$done_count" "$total" > "$PROGRESS_FILE"
 
 printf '{"ok":true,"running":false,"checked":[' > "$TMP_FILE"
 first=1
@@ -146,6 +164,8 @@ while IFS= read -r domain; do
     first=0
     printf '{"domain":%s,"in_vpn":%s,"status":%s,"detail":%s}' \
         "$(json_str "$domain")" "$listed" "$(json_str "$status")" "$(json_str "$detail")" >> "$TMP_FILE"
+    done_count=$((done_count + 1))
+    printf '%s|%s\n' "$done_count" "$total" > "$PROGRESS_FILE"
 done < "${TMP_FILE}.domains"
 printf ']}\n' >> "$TMP_FILE"
 rm -f "${TMP_FILE}.domains"
