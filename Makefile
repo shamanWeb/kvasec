@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=kvas
-PKG_VERSION:=1.1.9_beta-10
-PKG_RELEASE:= 25
+PKG_VERSION:=1.2.0
+PKG_RELEASE:= 1
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)-$(PKG_RELEASE)
 MOLOT_UNINSTALL:=kvas uninstall full
 
@@ -74,7 +74,7 @@ cp -f /opt/apps/kvas/etc/conf/adblock.sources /opt/etc/adblock/sources.list
 cp -f /opt/apps/kvas/etc/ndm/ndm /opt/apps/kvas/bin/libs/ndm
 
 sed -i "s/\(APP_VERSION=\).*/\1$(PKG_VERSION)/; s/^,//; s/\,/ /g;" "/opt/etc/kvas.conf"
-sed -i "s/\(APP_RELEASE=\).*/\1$(PKG_RELEASE)/; s/^,//; s/\,/ /g;" "/opt/etc/kvas.conf"
+sed -i "s/\(APP_RELEASE=\).*/\1/; s/^,//; s/\,/ /g;" "/opt/etc/kvas.conf"
 
 print_line
 echo -e "Для настройки пакета КВАС наберите \033[36mkvas setup\033[m"

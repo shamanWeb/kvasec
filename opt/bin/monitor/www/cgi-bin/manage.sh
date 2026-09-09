@@ -118,15 +118,15 @@ check_service() {
 check_updates() {
 	local current_ver=$(opkg list-installed 2>/dev/null | grep kvas | awk '{print $3}')
 	local repo="shamanWeb/kvasec"
-	# Get latest ipk build number from release assets
+	# Новый формат: kvasec_1.2.0.ipk. Старый kvas_..._all.ipk здесь намеренно
+	# не предлагается как обновление нового пакета.
 	local latest_ver=$(curl -s --connect-timeout 5 "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null | \
-		grep 'browser_download_url.*kvas_.*ipk' | \
-		awk -F'kvas_' '{print $2}' | awk -F'_all' '{print $1}' | \
-		sort -t'-' -k3 -rn | head -1 | awk -F'-' '{print $NF}')
+		grep -o 'kvasec_[0-9]\+\.[0-9]\+\.[0-9]\+\.ipk' | head -1 | \
+		sed 's/^kvasec_//; s/\.ipk$//')
 	if [ -n "$latest_ver" ]; then
-		# Extract build number from current version (e.g. 1.1.9_beta-10-239 -> 239)
-		local current_num=$(echo "$current_ver" | sed 's/.*beta-10-//')
-		if [ -n "$current_num" ] && [ "$latest_ver" -gt "$current_num" ] 2>/dev/null; then
+		local current_key=$(echo "$current_ver" | awk -F. '/^[0-9]+\.[0-9]+\.[0-9]+$/ {printf "%d%03d%03d", $1, $2, $3}')
+		local latest_key=$(echo "$latest_ver" | awk -F. '/^[0-9]+\.[0-9]+\.[0-9]+$/ {printf "%d%03d%03d", $1, $2, $3}')
+		if [ -n "$latest_key" ] && { [ -z "$current_key" ] || [ "$latest_key" -gt "$current_key" ]; }; then
 			echo "available:v${latest_ver}"
 		else
 			echo "up_to_date"

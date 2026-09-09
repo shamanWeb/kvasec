@@ -4,21 +4,20 @@ name: build-and-release
 # откуда его тянет `kvas upgrade` (см. opt/bin/main/upgrade → release_url).
 #
 # Запуск:
-#   • merge/push в master — выпускает следующий доступный номер автоматически;
-#   • вручную (Actions → build-and-release → Run workflow), поле release = номер сборки;
-#   • или пушем тега вида v27 (номер берётся из хвоста тега).
+#   • merge/push в master — увеличивает PATCH-версию и выпускает новый IPK;
+#   • вручную (Actions → build-and-release → Run workflow), поле version;
+#   • или пушем тега вида v1.2.0.
 #
-# Автоматический номер при master — max(VERSION, последний release + 1).
-# Поэтому новая Release всегда новее установленного пакета и будет обнаружена
-# командой `kvas upgrade`, даже если VERSION забыли поднять в PR.
+# VERSION задаёт стартовую/следующую базовую SemVer-версию. После первого релиза
+# CI увеличивает только PATCH: 1.2.0 → 1.2.1 → 1.2.2.
 
 on:
   workflow_dispatch:
     inputs:
-      release:
-        description: 'Номер релиза (например 27)'
+      version:
+        description: 'Версия MAJOR.MINOR.PATCH (например 1.2.0)'
         required: true
-        default: '27'
+        default: '1.2.0'
   push:
     branches:
       - master
@@ -39,44 +38,49 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Определяем номер релиза
+      - name: Определяем версию релиза
         id: rel
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            num="${{ github.event.inputs.release }}"
+            version="${{ github.event.inputs.version }}"
           elif [ "${GITHUB_REF_TYPE}" = "branch" ]; then
-            # При merge в master создаём новый номер, который точно больше
-            # опубликованного. VERSION остаётся предпочтительным минимумом.
-            requested=$(tr -cd '0-9' < VERSION)
-            case "$requested" in
-              ''|*[!0-9]*) echo "VERSION must contain a positive integer" >&2; exit 1 ;;
-            esac
+            # VERSION используется для первой новой SemVer-версии. После неё
+            # каждый merge автоматически увеличивает только PATCH.
+            baseline=$(tr -d '[:space:]' < VERSION)
+            echo "$baseline" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+              echo "VERSION must contain MAJOR.MINOR.PATCH" >&2; exit 1;
+            }
             latest=$(curl -fsSL \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/latest" \
-              2>/dev/null | jq -r '.tag_name // empty' | sed 's/.*-//' || true)
-            case "$latest" in ''|*[!0-9]*) latest=0 ;; esac
-            if [ "$requested" -gt "$latest" ]; then
-              num="$requested"
+              2>/dev/null | jq -r '.tag_name // empty' | sed 's/^v//' || true)
+            echo "$latest" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || latest=''
+            if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "$baseline" "$latest" | sort -V | tail -1)" = "$latest" ]; then
+              major=${latest%%.*}
+              rest=${latest#*.}
+              minor=${rest%%.*}
+              patch=${rest##*.}
+              version="${major}.${minor}.$((patch + 1))"
             else
-              num=$((latest + 1))
+              version="$baseline"
             fi
           else
-            # тег v27 → 27 ; тег v1.1.9_beta-10-27 → 27
-            num="${GITHUB_REF_NAME##*[!0-9]}"
+            version="${GITHUB_REF_NAME#v}"
           fi
-          case "$num" in ''|*[!0-9]*) echo "Не удалось определить номер релиза" >&2; exit 1 ;; esac
-          echo "num=$num" >> "$GITHUB_OUTPUT"
-          echo "tag=v1.1.9_beta-10-$num" >> "$GITHUB_OUTPUT"
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "Не удалось определить SemVer-версию" >&2; exit 1;
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
       - name: Сборка ipk
         run: |
           chmod +x build.sh
-          ./build.sh "${{ steps.rel.outputs.num }}"
+          ./build.sh "${{ steps.rel.outputs.version }}"
 
       - name: Публикация релиза
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
           name: KVAS ${{ steps.rel.outputs.tag }}
-          files: kvas_1.1.9_beta-10-${{ steps.rel.outputs.num }}_all.ipk
+          files: kvasec_${{ steps.rel.outputs.version }}.ipk
           make_latest: true

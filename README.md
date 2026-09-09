@@ -20,14 +20,14 @@ KVAS — пакет Entware для **селективной маршрутиза
 На машине для сборки:
 
 ```sh
-./build.sh                  # номер берётся из VERSION
-scp kvas_1.1.9_beta-10-*_all.ipk root@192.168.1.1:/opt/tmp/
+./build.sh                  # версия MAJOR.MINOR.PATCH берётся из VERSION
+scp kvasec_*.ipk root@192.168.1.1:/opt/tmp/
 ```
 
 На роутере (при SSH-порте 222 добавьте `-p 222`):
 
 ```sh
-opkg install --force-reinstall /opt/tmp/kvas_*.ipk
+opkg install --force-reinstall /opt/tmp/kvasec_*.ipk
 kvas setup
 kvas add example.com
 kvas test
@@ -40,7 +40,8 @@ kvas test
 ## Релизы и обновление
 
 Merge в `master` автоматически собирает IPK и публикует его как GitHub Release `latest`.
-Номер нового пакета всегда выше предыдущего релиза, поэтому роутер увидит обновление при:
+Стартовая версия — `1.2.0`; каждый следующий merge увеличивает PATCH-часть
+(`1.2.1`, `1.2.2`, …), поэтому роутер увидит обновление при:
 
 ```sh
 kvas upgrade

@@ -1,6 +1,6 @@
 # PRD: KVAS — селективный VPN-роутинг для Keenetic (форк под AmneziaWG)
 
-**Версия:** 1.1.9_beta-10-47+
+**Версия:** 1.2.0+
 **Репозиторий:** https://github.com/shamanWeb/kvasec (личный форк)
 **Основа:** https://github.com/qzeleza/kvas (Apache 2.0)
 **Железо:** Keenetic (aarch64), KeeneticOS 5.x + Entware
@@ -47,7 +47,7 @@ iptables метит трафик к этим IP, `ip rule` заворачива�
 
 ## 3. Сборка и установка (подробно — `BUILD.md`)
 
-- **Локально:** `./build.sh [N]` → `kvas_1.1.9_beta-10-<N>_all.ipk` (номер из `VERSION`).
+- **Локально:** `./build.sh [X.Y.Z]` → `kvasec_<X.Y.Z>.ipk` (SemVer из `VERSION`).
 - **CI:** `.github/workflows/build.yml` собирает и публикует GitHub Release при merge/push
   в `master`; теги `vN` и ручной запуск остаются альтернативными сценариями.
 - **На роутер:** `opkg install --force-reinstall`; postinst сам поднимает DNS (9753/conf-dir/DoH),

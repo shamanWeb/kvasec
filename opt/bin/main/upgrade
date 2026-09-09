@@ -106,6 +106,19 @@ get_package_name(){
 	echo "${1}" | sed 's/.*\/\(.*ipk\)$/\1/'
 }
 
+# Из имени IPK извлекаем SemVer. Старый формат kvas_1.1.9_beta-10-47_all.ipk
+# нормализуется до 1.1.9, поэтому переход на kvasec_1.2.0.ipk не требует force.
+get_package_version(){
+	echo "${1}" | sed -n \
+		-e 's/^kvasec_\([0-9][0-9.]*\)\.ipk$/\1/p' \
+		-e 's/^kvas_\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*_all\.ipk$/\1/p' | head -1
+}
+
+# SemVer → число для сравнения в BusyBox ash: 1.2.0 → 1002000.
+version_key(){
+	echo "${1}" | awk -F. '/^[0-9]+\.[0-9]+\.[0-9]+$/ { printf "%d%03d%03d", $1, $2, $3 }'
+}
+
 #--------------------------------------------------------------------------------------------------------------
 rm_tmp_cache(){
 #	Функция удаляет все временные файлы при установке пакета,
@@ -210,7 +223,7 @@ gh_download(){
 	fi
 }
 # Получаем ссылку на крайний релиз пакета на GitHub
-package_url=$(gh_api "${release_url}/latest" | jq -r '.assets[]?.browser_download_url' | grep -E '\.ipk$' | sort | tail -1)
+package_url=$(gh_api "${release_url}/latest" | jq -r '.assets[]?.browser_download_url' | grep -E '/(kvasec_[0-9]+\.[0-9]+\.[0-9]+\.ipk|kvas_.*_all\.ipk)$' | sort | tail -1)
 # Выделяем имя пакета из ссылки
 package_name=$(get_package_name "${package_url}")
 # путь к файлу конфигурации пакета Квас
@@ -268,13 +281,14 @@ if echo "${*}" | grep -qv 'force' ; then
 		package_name=$(get_package_name "${package_url}")
 
 	elif [ -f /opt/bin/kvas ] && [ -f ${kvas_conf} ]; then
-	#	Сравниваем НОМЕР СБОРКИ. Обновляемся ТОЛЬКО если релиз новее установленного.
-	#	Равный/меньший номер — «нет обновлений» (иначе upgrade делал даунгрейд через
-	#	деструктивный uninstall — рушил dnsmasq/routing).
-		prev_num=$(grep '^APP_RELEASE=' ${kvas_conf} | cut -d= -f2 | tr -dc '0-9')
-		next_num=$(echo "${package_name}" | sed 's/_all\.ipk$//' | sed 's/.*-//' | tr -dc '0-9')
-		if [ -n "${prev_num}" ] && [ -n "${next_num}" ] && [ "${next_num}" -le "${prev_num}" ] 2>/dev/null ; then
-			print_error "Квас все еще свеж (установлено ${prev_num}, в релизе ${next_num})."
+	# Сравниваем SemVer, а не прежний номер сборки. Это сохраняет защиту от
+	# даунгрейда и позволяет старому 1.1.9_beta-10-44 обновиться до 1.2.0.
+		prev_version=$(grep '^APP_VERSION=' ${kvas_conf} | cut -d= -f2)
+		next_version=$(get_package_version "${package_name}")
+		prev_key=$(version_key "${prev_version}")
+		next_key=$(version_key "${next_version}")
+		if [ -n "${prev_key}" ] && [ -n "${next_key}" ] && [ "${next_key}" -le "${prev_key}" ] 2>/dev/null ; then
+			print_error "Квас все еще свеж (установлено ${prev_version}, в релизе ${next_version})."
 			exit 1
 		fi
 	else
@@ -285,8 +299,9 @@ if echo "${*}" | grep -qv 'force' ; then
 fi
 
 #--------------------------------------------------------------------------------------------------------------
-# получаем из имени файла его номер версии
-version=$(echo "${package_name}" | sed 's/kvas_\(.*\)_all.*/\1/; s/-/ /g; s/_/-/' )
+# Получаем версию из имени файла (поддерживаются новый и старый форматы IPK).
+version=$(get_package_version "${package_name}")
+[ -n "${version}" ] || version="неизвестная"
 
 # если в параметрах нет аргумента rollback, то выводим линию
 echo "${*}" | grep -q 'rollback' && CL_VER=${RED} || { 
@@ -401,4 +416,3 @@ else
 fi
 
 rm -f upgrade install
-
