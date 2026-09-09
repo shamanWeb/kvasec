@@ -42,6 +42,8 @@ kvas setup          # или перезагрузка роутера, чтобы
 
 ### CI: сборка и публикация релиза
 Workflow `.github/workflows/build.yml`:
+- **автоматически:** каждый merge/push в `master` собирает IPK и публикует новую
+  GitHub Release; номер = `max(VERSION, предыдущий release + 1)`;
 - **вручную:** Actions → `build-and-release` → Run workflow, поле `release` = номер;
 - **или** пуш тега `v27` (номер берётся из хвоста тега).
 
@@ -80,7 +82,9 @@ curl -s "https://api.github.com/repos/shamanWeb/kvasec/releases/latest"      | g
 - **Тег `vN` — только триггер;** сам релиз выходит под именем `v1.1.9_beta-10-N`. Не путать.
 - **Номер должен расти** — `upgrade` (фикс v43) не даунгрейдит: если в релизе `≤` установленного, скажет «Квас все еще свеж».
 - **VERSION bump необязателен для CI** (номер идёт из тега аргументом в `build.sh`), но держим в синхроне — гигиена + fallback для локального `./build.sh` без аргумента.
-- **Без тега:** Actions → `build-and-release` → Run workflow, ввести номер вручную (`workflow_dispatch`).
+- **Обычный релиз:** достаточно merge в `master`; тег вручную не нужен. CI сам выберет
+  номер выше последнего опубликованного, поэтому `kvas upgrade` на роутере увидит обновление.
+- **Без merge и тега:** Actions → `build-and-release` → Run workflow, ввести номер вручную (`workflow_dispatch`).
 - **На боевой роутер** ставить новый ipk через `opkg install --force-reinstall` вживую, НЕ `kvas upgrade` в фоне/не-интерактивно (риск даунгрейда/зависания, был инцидент с DNS).
 
 ### Приватный репозиторий → нужен токен на роутере
