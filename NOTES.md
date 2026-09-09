@@ -152,8 +152,8 @@ build.sh кладёт туда `100-dns-local` + `100-vpn-mark` (иначе KVAS
 
 ## 5. Сборка / установка (кратко; подробно — `BUILD.md`)
 
-- `./build.sh [N]` — номер релиза из аргумента / `VERSION` / `Makefile`. Merge в `master`
-  публикует следующий номер автоматически; формат IPK идентичен отгружаемым релизам.
+- `./build.sh [X.Y.Z]` — SemVer из аргумента / `VERSION` / `Makefile`. Merge в `master`
+  увеличивает PATCH-часть и публикует `kvasec_<X.Y.Z>.ipk` автоматически.
   `bin/libs/ndm` генерится postinst'ом из `etc/ndm/ndm` (несёт RULE_PRIORITY).
 - Ставим `opkg install --force-reinstall`, затем `kvas setup` или ребут.
 - Собираем **core** (Hysteria и failover удалены из проекта).

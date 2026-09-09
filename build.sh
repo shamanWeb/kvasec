@@ -6,9 +6,9 @@
 #  идентичный отгружаемым релизам (проверено на v352).
 #
 #  Использование:
-#     ./build.sh [RELEASE]      # RELEASE — номер сборки, по умолчанию из VERSION
+#     ./build.sh [VERSION]      # VERSION в формате MAJOR.MINOR.PATCH, по умолчанию из VERSION
 #
-#  Результат: ./kvas_<VERSION>-<RELEASE>_all.ipk
+#  Результат: ./kvasec_<VERSION>.ipk
 #
 #  Установка на роутер:
 #     scp kvas_*.ipk root@192.168.1.1:/opt/tmp/     # порт 222 при необходимости
@@ -20,21 +20,24 @@ set -eu
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 PKG_NAME='kvas'
-PKG_VERSION='1.1.9_beta-10'
-# Номер релиза: аргумент → файл VERSION → PKG_RELEASE из Makefile → 0
+# Версия: аргумент → файл VERSION → PKG_VERSION из Makefile.
+# Имя пакета в opkg остаётся kvas для бесшовного обновления старых установок.
 if [ "${1:-}" ]; then
-	PKG_RELEASE="$1"
+	PKG_VERSION="$1"
 elif [ -f "${REPO_DIR}/VERSION" ]; then
-	PKG_RELEASE="$(cat "${REPO_DIR}/VERSION")"
+	PKG_VERSION="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION")"
 else
-	PKG_RELEASE="$(grep -E '^PKG_RELEASE' "${REPO_DIR}/Makefile" 2>/dev/null | grep -oE '[0-9]+' | head -1)"
-	[ "${PKG_RELEASE}" ] || PKG_RELEASE=0
+	PKG_VERSION="$(grep -E '^PKG_VERSION' "${REPO_DIR}/Makefile" 2>/dev/null | sed 's/.*:= *//' | tr -d '[:space:]')"
 fi
+[ -n "${PKG_VERSION:-}" ] || PKG_VERSION=1.2.0
+echo "${PKG_VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+	echo "ERROR: version must use MAJOR.MINOR.PATCH, got: ${PKG_VERSION}" >&2
+	exit 2
+}
 
-FULL_VERSION="${PKG_VERSION}-${PKG_RELEASE}"
-OUT_IPK="${REPO_DIR}/${PKG_NAME}_${FULL_VERSION}_all.ipk"
+OUT_IPK="${REPO_DIR}/kvasec_${PKG_VERSION}.ipk"
 
-echo "==> Сборка ${PKG_NAME} ${FULL_VERSION}"
+echo "==> Сборка ${PKG_NAME} ${PKG_VERSION}"
 
 BUILD="$(mktemp -d)"
 trap 'rm -rf "${BUILD}"' EXIT
@@ -77,12 +80,12 @@ INSTALLED_SIZE="$(du -sb "${DATA}" | cut -f1)"
 # 3. control
 cat > "${CTRL}/control" <<EOF
 Package: ${PKG_NAME}
-Version: ${FULL_VERSION}
+Version: ${PKG_VERSION}
 Depends: libpcre, jq, curl, knot-dig, nano-full, cron, bind-dig, dnsmasq-full, ipset, dnscrypt-proxy2, iptables, shadowsocks-libev-ss-redir, shadowsocks-libev-config, libmbedtls
 Source: https://github.com/shamanWeb/kvasec
 Maintainer: shamanWeb
 Architecture: all
-Description: VPN клиент для Keenetic (${FULL_VERSION})
+Description: VPN клиент для Keenetic (${PKG_VERSION})
 Section: utils
 Priority: optional
 Installed-Size: ${INSTALLED_SIZE}
@@ -142,10 +145,12 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     else
         echo "APP_VERSION=${PKG_VERSION}" >> "\${kvas_conf}"
     fi
+    # В прежнем формате номер сборки хранился отдельно в APP_RELEASE.
+    # SemVer теперь целиком в APP_VERSION; очищаем старое значение при миграции.
     if grep -q "^APP_RELEASE=" "\${kvas_conf}" 2>/dev/null; then
-        sed -i "s/^APP_RELEASE=.*/APP_RELEASE=${PKG_RELEASE}/" "\${kvas_conf}"
+        sed -i "s/^APP_RELEASE=.*/APP_RELEASE=/" "\${kvas_conf}"
     else
-        echo "APP_RELEASE=${PKG_RELEASE}" >> "\${kvas_conf}"
+        echo "APP_RELEASE=" >> "\${kvas_conf}"
     fi
 
     # Пересоздаём маршрутизацию kvas ПОСЛЕ установки (в фоне).
