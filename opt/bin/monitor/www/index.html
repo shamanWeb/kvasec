@@ -1064,11 +1064,11 @@ function bypassCheckPoll() {
 }
 
 function bypassStatusText(row) {
-  if (row.status === 'vpn_failed') return 'В VPN-списке, но недоступен';
-  if (row.status === 'direct_failed_tunnel_ok') return 'Напрямую недоступен, VPN помогает';
+  if (row.status === 'awg_failed') return 'В VPN-списке, но через AWG недоступен';
+  if (row.status === 'direct_failed_awg_ok') return 'Напрямую недоступен, AWG помогает';
   if (row.status === 'direct_failed') return 'Недоступен';
   if (row.status === 'dns_failed') return 'Ошибка DNS';
-  if (row.status === 'tunnel_unavailable') return 'VPN-туннель не запущен';
+  if (row.status === 'awg_unavailable') return 'AWG-туннель отключён';
   return 'Доступен';
 }
 
