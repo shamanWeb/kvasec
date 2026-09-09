@@ -4,8 +4,13 @@ name: build-and-release
 # откуда его тянет `kvas upgrade` (см. opt/bin/main/upgrade → release_url).
 #
 # Запуск:
+#   • merge/push в master — выпускает следующий доступный номер автоматически;
 #   • вручную (Actions → build-and-release → Run workflow), поле release = номер сборки;
-#   • или пушем тега вида v27  (номер берётся из хвоста тега).
+#   • или пушем тега вида v27 (номер берётся из хвоста тега).
+#
+# Автоматический номер при master — max(VERSION, последний release + 1).
+# Поэтому новая Release всегда новее установленного пакета и будет обнаружена
+# командой `kvas upgrade`, даже если VERSION забыли поднять в PR.
 
 on:
   workflow_dispatch:
@@ -15,11 +20,18 @@ on:
         required: true
         default: '27'
   push:
+    branches:
+      - master
     tags:
       - 'v*'
 
 permissions:
   contents: write
+
+# Не допускаем одновременный расчёт одного номера двумя merge.
+concurrency:
+  group: kvas-release-master
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -32,11 +44,27 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             num="${{ github.event.inputs.release }}"
+          elif [ "${GITHUB_REF_TYPE}" = "branch" ]; then
+            # При merge в master создаём новый номер, который точно больше
+            # опубликованного. VERSION остаётся предпочтительным минимумом.
+            requested=$(tr -cd '0-9' < VERSION)
+            case "$requested" in
+              ''|*[!0-9]*) echo "VERSION must contain a positive integer" >&2; exit 1 ;;
+            esac
+            latest=$(curl -fsSL \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/latest" \
+              2>/dev/null | jq -r '.tag_name // empty' | sed 's/.*-//' || true)
+            case "$latest" in ''|*[!0-9]*) latest=0 ;; esac
+            if [ "$requested" -gt "$latest" ]; then
+              num="$requested"
+            else
+              num=$((latest + 1))
+            fi
           else
             # тег v27 → 27 ; тег v1.1.9_beta-10-27 → 27
             num="${GITHUB_REF_NAME##*[!0-9]}"
           fi
-          [ -n "$num" ] || { echo "Не удалось определить номер релиза"; exit 1; }
+          case "$num" in ''|*[!0-9]*) echo "Не удалось определить номер релиза" >&2; exit 1 ;; esac
           echo "num=$num" >> "$GITHUB_OUTPUT"
           echo "tag=v1.1.9_beta-10-$num" >> "$GITHUB_OUTPUT"
 
