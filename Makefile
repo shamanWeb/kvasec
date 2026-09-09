@@ -6,10 +6,13 @@
 
 VERSION := $(strip $(shell tr -d '[:space:]' < VERSION))
 
-.PHONY: all build ipk verify help
+.PHONY: all build ipk test verify help
 
 all build ipk:
 	./build.sh $(VERSION)
+
+test:
+	./tests/run.sh
 
 # Быстрая локальная проверка скриптов и конфигурации workflow без публикации.
 verify:
@@ -18,4 +21,5 @@ verify:
 
 help:
 	@echo "make build   — собрать kvasec_$(VERSION).ipk"
+	@echo "make test    — запустить регрессионные тесты без роутера"
 	@echo "make verify  — проверить shell-синтаксис и workflow YAML"

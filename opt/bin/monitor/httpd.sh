@@ -5,6 +5,11 @@ PORT=${1:-8085}
 WWW_DIR=/opt/apps/kvas/bin/monitor/www
 PID_FILE=/var/run/kvas-monitor-web.pid
 LOG_FILE=${MONITOR_WEB_LOG:-/tmp/kvas-monitor-web.log}
+# Web UI is administration access, not a public HTTP service.  Override only
+# deliberately (for example MONITOR_BIND=192.168.4.1) when the LAN changes.
+MONITOR_BIND=${MONITOR_BIND:-192.168.1.1}
+# socat 1.8 uses address:netmask syntax for range (not CIDR notation).
+MONITOR_ALLOW_RANGE=${MONITOR_ALLOW_RANGE:-192.168.1.0:255.255.255.0}
 
 log() {
     local ts
@@ -55,50 +60,55 @@ P=$(echo "$R" | awk '{print $2}')
 S=$(echo "$P" | sed 's/[?#].*//')
 log "request method=${M:-unknown} path=${P:-/}"
 
-if echo "$S" | grep -q '^/cgi-bin/'; then
-    Q="${P#*\?}"
-    [ "$Q" = "$P" ] && Q=""
-    X="$W$S"
-    if [ -x "$X" ]; then
-        export QUERY_STRING="$Q"
-        export REQUEST_METHOD="$M"
-        printf "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
-        "$X"
-        log "cgi ok script=$X query=${Q:-<empty>}"
-    else
-        log "cgi missing script=$X"
-        printf "HTTP/1.0 404 Not Found\r\nContent-Type: application/json\r\n\r\n{\"error\":\"script not found\"}"
-    fi
-else
-    if [ -z "$S" ] || [ "$S" = "/" ]; then
-        S="/index.html"
-    fi
-    F="$W$S"
-    if [ -f "$F" ]; then
-        T="text/html"
+case "$M" in
+    GET|POST) ;;
+    *)
+        printf "HTTP/1.0 405 Method Not Allowed\r\nContent-Type: text/plain\r\nX-Content-Type-Options: nosniff\r\n\r\nMethod not allowed"
+        exit 0
+        ;;
+esac
+
+# Do not append an untrusted request path to W.  This explicit allow-list is
+# both simpler and safer than trying to normalise ../ or encoded path variants.
+case "$S" in
+    /cgi-bin/manage.sh|/cgi-bin/data.sh)
+        Q="${P#*\?}"
+        [ "$Q" = "$P" ] && Q=""
         case "$S" in
-            *.css) T="text/css";;
-            *.js) T="application/javascript";;
-            *.json) T="application/json";;
-            *.png) T="image/png";;
-            *.jpg) T="image/jpeg";;
-            *.gif) T="image/gif";;
-            *.svg) T="image/svg+xml";;
-            *.ico) T="image/x-icon";;
+            /cgi-bin/manage.sh) X="$W/cgi-bin/manage.sh" ;;
+            /cgi-bin/data.sh)   X="$W/cgi-bin/data.sh" ;;
         esac
-        log "static ok file=$F type=$T"
-        printf "HTTP/1.0 200 OK\r\nContent-Type: %s\r\nCache-Control: no-cache\r\n\r\n" "$T"
-        cat "$F"
-    else
-        log "static missing file=$F"
-        printf "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\n\r\nNot found: %s" "$S"
-    fi
-fi
+        if [ -x "$X" ]; then
+            export QUERY_STRING="$Q"
+            export REQUEST_METHOD="$M"
+            printf "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\n\r\n"
+            "$X"
+            log "cgi ok path=$S"
+        else
+            log "cgi missing path=$S"
+            printf "{\"error\":\"script not found\"}"
+        fi
+        ;;
+    /|/index.html)
+        printf "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-cache\r\n\r\n"
+        cat "$W/index.html"
+        log "static ok path=/index.html"
+        ;;
+    /favicon.svg)
+        printf "HTTP/1.0 200 OK\r\nContent-Type: image/svg+xml\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-cache\r\n\r\n"
+        cat "$W/favicon.svg"
+        log "static ok path=/favicon.svg"
+        ;;
+    *)
+        log "request rejected path=${S:-<empty>}"
+        printf "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nX-Content-Type-Options: nosniff\r\n\r\nNot found"
+        ;;
+esac
 HANDLER_EOF
 chmod +x /tmp/kvas-httpd-handler.sh
 
-log "starting socat listener on port $PORT"
-MONITOR_WEB_LOG="$LOG_FILE" socat TCP-LISTEN:"$PORT",bind=0.0.0.0,reuseaddr,fork EXEC:"sh /tmp/kvas-httpd-handler.sh" >> "$LOG_FILE" 2>&1 &
+log "starting socat listener on ${MONITOR_BIND}:${PORT}, allowed=${MONITOR_ALLOW_RANGE}"
+MONITOR_WEB_LOG="$LOG_FILE" socat TCP-LISTEN:"$PORT",bind="$MONITOR_BIND",range="$MONITOR_ALLOW_RANGE",reuseaddr,fork EXEC:"sh /tmp/kvas-httpd-handler.sh" >> "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 sleep 1
 if kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
