@@ -21,3 +21,8 @@ grep -F 'block_watch_stop)' "$MANAGE" >/dev/null
 grep -F 'block_watch_status)' "$MANAGE" >/dev/null
 grep -F 'bypass_check_stop)' "$MANAGE" >/dev/null
 grep -F 'stop_bypass_check()' "$MANAGE" >/dev/null
+grep -F 'clear_stale_bypass_check()' "$MANAGE" >/dev/null
+grep -F 'BYPASS_PID_FILE="$BYPASS_CHECK_PID"' "$MANAGE" >/dev/null
+grep -F 'clear_stale_block_watch()' "$MANAGE" >/dev/null
+grep -F 'stop_block_watch()' "$MANAGE" >/dev/null
+grep -F 'BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR"' "$MANAGE" >/dev/null

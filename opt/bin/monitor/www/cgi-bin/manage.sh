@@ -44,6 +44,60 @@ stop_bypass_check() {
 	fi
 }
 
+bypass_check_running() {
+	local pid
+	pid=$(cat "$BYPASS_CHECK_PID" 2>/dev/null)
+	case "$pid" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ -r "/proc/$pid/cmdline" ] && \
+		tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]ypass_check.sh' && \
+		kill -0 "$pid" 2>/dev/null
+}
+
+clear_stale_bypass_check() {
+	# A power-off, package upgrade, or an older checker can leave its atomic
+	# lock behind.  Never let that stale directory make the UI report a scan
+	# forever or prevent the next one from starting.
+	bypass_check_running && return 1
+	rm -f "$BYPASS_CHECK_PID" "$BYPASS_CHECK_LOCK"
+	rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null || true
+	return 0
+}
+
+block_watch_running() {
+	local pid
+	pid=$(cat "$BLOCK_WATCH_PID" 2>/dev/null)
+	case "$pid" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ -r "/proc/$pid/cmdline" ] && \
+		tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]lock_watch.sh' && \
+		kill -0 "$pid" 2>/dev/null
+}
+
+stop_block_watch() {
+	local pid
+	pid=$(cat "$BLOCK_WATCH_PID" 2>/dev/null)
+	case "$pid" in
+		''|*[!0-9]*) return 0 ;;
+	esac
+	if [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]lock_watch.sh'; then
+		kill "$pid" 2>/dev/null || true
+		for wait_pid in 1 2 3; do
+			kill -0 "$pid" 2>/dev/null || break
+			sleep 1
+		done
+	fi
+}
+
+clear_stale_block_watch() {
+	block_watch_running && return 1
+	rm -f "$BLOCK_WATCH_PID"
+	rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null || true
+	return 0
+}
+
 # Query values are URL-encoded by the WebUI.  Decode only after selecting a
 # field, so an encoded ampersand cannot change the query structure.
 url_decode() {
@@ -464,6 +518,7 @@ main() {
 			mode=$(query_param mode)
 			case "$mode" in all|dns|mixed|'') ;; *) json_error "invalid check mode";; esac
 			[ -z "$mode" ] && mode=mixed
+			clear_stale_bypass_check || json_error "check already running"
 			# mkdir is atomic on the router filesystem, unlike check-then-create
 			# of a regular file.  It prevents concurrent expensive scans.
 			if ! mkdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null; then
@@ -472,7 +527,8 @@ main() {
 			if [ ! -x "$BYPASS_CHECK_BIN" ]; then rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null; json_error "bypass checker is not installed"; fi
 			rm -f "$BYPASS_CHECK_RESULT"
 			rm -f "$BYPASS_CHECK_PROGRESS"
-			( BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" BYPASS_PID_FILE="$BYPASS_CHECK_PID" BYPASS_MODE="$mode" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 ) &
+			BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" BYPASS_PID_FILE="$BYPASS_CHECK_PID" BYPASS_MODE="$mode" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 &
+			printf '%s\n' "$!" > "$BYPASS_CHECK_PID"
 			json_ok "bypass check started"
 			;;
 		bypass_check_stop)
@@ -485,7 +541,7 @@ main() {
 			;;
 		bypass_check_status)
 			check_token "$token"
-			if [ -d "$BYPASS_CHECK_LOCK_DIR" ]; then
+			if bypass_check_running; then
 				progress_done=0; progress_total=0
 				if [ -f "$BYPASS_CHECK_PROGRESS" ]; then
 					IFS='|' read -r progress_done progress_total < "$BYPASS_CHECK_PROGRESS"
@@ -495,6 +551,7 @@ main() {
 				printf '{"ok":true,"running":true,"done":%s,"total":%s,"checked":[]}\n' "${progress_done:-0}" "${progress_total:-0}"
 				return
 			fi
+			clear_stale_bypass_check
 			if [ -s "$BYPASS_CHECK_RESULT" ]; then
 				cat "$BYPASS_CHECK_RESULT"
 			else
@@ -504,22 +561,25 @@ main() {
 		block_watch_start)
 			check_token "$token"
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			clear_stale_block_watch || json_error "watcher already running"
 			if ! mkdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; then json_error "watcher already running"; fi
 			if [ ! -x "$BLOCK_WATCH_BIN" ]; then rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; json_error "block watcher is not installed"; fi
-			( BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 ) &
+			BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 &
+			printf '%s\n' "$!" > "$BLOCK_WATCH_PID"
 			json_ok "block watcher started"
 			;;
 		block_watch_stop)
 			check_token "$token"
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
-			[ -f "$BLOCK_WATCH_PID" ] && kill "$(cat "$BLOCK_WATCH_PID" 2>/dev/null)" 2>/dev/null
+			stop_block_watch
+			clear_stale_block_watch
 			json_ok "block watcher stopped"
 			;;
 		block_watch_status)
 			check_token "$token"
 			watch_running=false
-			[ -f "$BLOCK_WATCH_PID" ] && kill -0 "$(cat "$BLOCK_WATCH_PID" 2>/dev/null)" 2>/dev/null && watch_running=true
-			[ "$watch_running" = false ] && [ -d "$BLOCK_WATCH_LOCK_DIR" ] && rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null
+			block_watch_running && watch_running=true
+			[ "$watch_running" = false ] && clear_stale_block_watch
 			printf '{"ok":true,"running":%s,"events":[' "$watch_running"
 			first=1
 			now=$(date +%s)
