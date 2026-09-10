@@ -4,11 +4,21 @@
 set -u
 EVENTS=${BLOCK_WATCH_EVENTS:-/tmp/kvas-block-watch.events}
 PID_FILE=${BLOCK_WATCH_PID:-/tmp/kvas-block-watch.pid}
+LOCK_DIR=${BLOCK_WATCH_LOCK_DIR:-/tmp/kvas-block-watch.lock.d}
 INTERVAL=${BLOCK_WATCH_INTERVAL:-5}
 WINDOW=60
 ROUTER_IP=${BLOCK_WATCH_ROUTER_IP:-$(ip -4 addr show br0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -1)}
 umask 077
-trap 'rm -f "$PID_FILE"' EXIT HUP INT TERM
+if [ ! -d "$LOCK_DIR" ] && ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    exit 1
+fi
+cleanup() {
+    trap - EXIT HUP INT TERM
+    rm -f "$PID_FILE"
+    rmdir "$LOCK_DIR" 2>/dev/null
+    exit 0
+}
+trap cleanup EXIT HUP INT TERM
 printf '%s\n' "$$" > "$PID_FILE"
 : > "$EVENTS"
 

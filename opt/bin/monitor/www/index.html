@@ -1063,14 +1063,14 @@ function bypassCheckStart(mode, btn) {
   });
 }
 
-function setBypassProgress(done, total, active) {
+function setBypassProgress(done, total, active, finished) {
   var wrap = document.getElementById('bypassProgress');
   var fill = document.getElementById('bypassProgressFill');
   var text = document.getElementById('bypassProgressText');
   wrap.style.display = active ? '' : 'none';
   var pct = total > 0 ? Math.min(100, Math.round(done * 100 / total)) : 0;
   fill.style.width = pct + '%';
-  text.textContent = total > 0 ? 'Проверено: ' + done + ' из ' + total + ' (' + pct + '%)' : 'Подготовка списка доменов…';
+  text.textContent = total > 0 ? 'Проверено: ' + done + ' из ' + total + ' (' + pct + '%)' : (finished ? 'DNS-домены для проверки не найдены' : 'Подготовка списка доменов…');
 }
 
 function bypassCheckPoll() {
@@ -1082,7 +1082,7 @@ function bypassCheckPoll() {
     var rows = d.checked || [];
     status.className = 'status status-ok';
     status.textContent = rows.length ? 'Проверено доменов: ' + rows.length : 'Нет доменов для проверки';
-    setBypassProgress(rows.length, rows.length, true);
+    setBypassProgress(rows.length, rows.length, true, true);
     renderBypassResults(rows);
   });
 }
