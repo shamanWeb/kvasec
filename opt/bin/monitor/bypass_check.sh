@@ -91,8 +91,8 @@ case "$MODE" in
     dns)
         {
             [ -s "$DNS_LOG" ] && tail -2000 "$DNS_LOG" 2>/dev/null
-            command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\[A'
-        } | sed -n 's/.*query\[A[^]]*\] \([^ ]*\) from.*/\1/p' | domain_filter | tail -n 100 > "${TMP_FILE}.domains"
+            command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\['
+        } | sed -n 's/.*query\[[^]]*\] \([^ ]*\) from.*/\1/p' | domain_filter | tail -n 100 > "${TMP_FILE}.domains"
         ;;
     *)
         VPN_LIMIT=$(( (MAX_DOMAINS + 1) / 2 ))
@@ -100,8 +100,8 @@ case "$MODE" in
         [ -f "$KVAS_LIST" ] && sed 's/^[*][.]\?//' "$KVAS_LIST" | domain_filter | head -n "$VPN_LIMIT" > "${TMP_FILE}.vpn" || :
         {
             [ -s "$DNS_LOG" ] && tail -1000 "$DNS_LOG" 2>/dev/null
-            command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\[A'
-        } | sed -n 's/.*query\[A[^]]*\] \([^ ]*\) from.*/\1/p' | domain_filter | head -n "$DNS_LIMIT" > "${TMP_FILE}.dns"
+            command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\['
+        } | sed -n 's/.*query\[[^]]*\] \([^ ]*\) from.*/\1/p' | domain_filter | head -n "$DNS_LIMIT" > "${TMP_FILE}.dns"
         cat "${TMP_FILE}.vpn" "${TMP_FILE}.dns" 2>/dev/null | awk '!seen[$0]++' | head -n "$MAX_DOMAINS" > "${TMP_FILE}.domains"
         ;;
 esac

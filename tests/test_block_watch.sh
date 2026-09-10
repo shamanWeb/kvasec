@@ -10,6 +10,11 @@ grep -F 'UNREPLIED' "$WATCH" >/dev/null
 grep -F '$3=="tcp"' "$WATCH" >/dev/null
 grep -F 'function non_public' "$WATCH" >/dev/null
 grep -F 'trap cleanup EXIT HUP INT TERM' "$WATCH" >/dev/null
+grep -F 'log-queries=extra' "$WATCH" >/dev/null
+grep -F 'log-facility=%s' "$WATCH" >/dev/null
+grep -F 'disable_dns_capture' "$WATCH" >/dev/null
+grep -F 'rm -f "$DNS_LOG"' "$WATCH" >/dev/null
+grep -F 'tail -300 "$DNS_LOG"' "$WATCH" >/dev/null
 grep -F 'BLOCK_WATCH_LOCK_DIR' "$MANAGE" >/dev/null
 grep -F 'block_watch_start)' "$MANAGE" >/dev/null
 grep -F 'block_watch_stop)' "$MANAGE" >/dev/null
