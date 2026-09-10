@@ -100,6 +100,58 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     mkdir -p /opt/etc/ndm/watch.d /opt/etc/dnsmasq.d /opt/etc/adblock /opt/etc/xray /opt/var/log
     chown root:root /opt/etc/ndm/watch.d 2>/dev/null
 
+    # A shell script that is running during opkg upgrade keeps executing its
+    # deleted old inode. Stop the temporary block watcher, otherwise its lock
+    # remains and prevents the new package version from starting it.
+    watch_pid_file=/tmp/kvas-block-watch.pid
+    watch_lock_dir=/tmp/kvas-block-watch.lock.d
+    watch_dns_conf=/opt/etc/dnsmasq.d/kvas-monitor-dns.dnsmasq
+    bypass_pid_file=/tmp/kvas-bypass-check.pid
+    bypass_lock_file=/tmp/kvas-bypass-check.lock
+    bypass_lock_dir=/tmp/kvas-bypass-check.lock.d
+    # Releases before the dedicated PID file used the lock file as PID storage.
+    [ -s "\${bypass_pid_file}" ] || bypass_pid_file="\${bypass_lock_file}"
+    if [ -s "\${bypass_pid_file}" ]; then
+        bypass_pid=\$(cat "\${bypass_pid_file}" 2>/dev/null)
+        case "\${bypass_pid}" in
+            *[!0-9]*|'') ;;
+            *)
+                if [ -r "/proc/\${bypass_pid}/cmdline" ] && \
+                    tr '\000' ' ' < "/proc/\${bypass_pid}/cmdline" | grep -q '[b]ypass_check.sh'; then
+                    kill "\${bypass_pid}" 2>/dev/null || true
+                    for bypass_wait in 1 2 3; do
+                        kill -0 "\${bypass_pid}" 2>/dev/null || break
+                        sleep 1
+                    done
+                fi
+                ;;
+        esac
+    fi
+    rm -f /tmp/kvas-bypass-check.pid "\${bypass_lock_file}" /tmp/kvas-bypass-check.progress /tmp/kvas-bypass-check.json /tmp/kvas-bypass-check.log
+    rmdir "\${bypass_lock_dir}" 2>/dev/null || true
+    if [ -s "\${watch_pid_file}" ]; then
+        watch_pid=\$(cat "\${watch_pid_file}" 2>/dev/null)
+        case "\${watch_pid}" in
+            *[!0-9]*|'') ;;
+            *)
+                if [ -r "/proc/\${watch_pid}/cmdline" ] && \
+                    tr '\000' ' ' < "/proc/\${watch_pid}/cmdline" | grep -q '[b]lock_watch.sh'; then
+                    kill "\${watch_pid}" 2>/dev/null || true
+                    for watch_wait in 1 2 3; do
+                        kill -0 "\${watch_pid}" 2>/dev/null || break
+                        sleep 1
+                    done
+                fi
+                ;;
+        esac
+    fi
+    rm -f "\${watch_pid_file}" /tmp/kvas-block-watch.events /tmp/kvas-dns.log
+    rmdir "\${watch_lock_dir}" 2>/dev/null || true
+    if [ -f "\${watch_dns_conf}" ]; then
+        rm -f "\${watch_dns_conf}"
+        [ -x /opt/etc/init.d/S56dnsmasq ] && /opt/etc/init.d/S56dnsmasq restart >/dev/null 2>&1
+    fi
+
     ln -sf /opt/apps/kvas/bin/kvas /opt/bin/kvas
 
     # bin/libs/ndm генерируется из etc/ndm/ndm — так фикс RULE_PRIORITY попадает в рантайм-хук

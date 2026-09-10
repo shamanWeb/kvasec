@@ -317,6 +317,7 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <div class="card-row" style="gap:8px;flex-wrap:wrap;">
       <button class="btn btn-sm primary" id="bypassCheckBtn" onclick="bypassCheckStart('all',this)">Проверить весь VPN-список</button>
       <button class="btn btn-sm" onclick="bypassCheckStart('dns',this)">Проверить последние 100 DNS</button>
+	  <button class="btn btn-sm danger" onclick="bypassCheckStop(this)">Остановить проверку</button>
       <span id="bypassCheckStatus" class="status">Проверка ещё не запускалась</span>
     </div>
     <div id="bypassProgress" style="display:none;margin-top:10px;max-width:520px;">
@@ -1010,6 +1011,15 @@ function doRestore(btn) {
 /* ========== BYPASS MONITOR ========== */
 var bypassPollTimer = null;
 var blockWatchTimer = null;
+
+function bypassCheckStop(btn) {
+  apiPostBtn('/cgi-bin/manage.sh?action=bypass_check_stop', btn, function(d){
+    if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; }
+    document.getElementById('bypassProgress').style.display = 'none';
+    document.getElementById('bypassCheckStatus').textContent = d.ok ? 'Проверка остановлена' : (d.error || 'Не удалось остановить проверку');
+    if (d.ok) document.getElementById('bypassCheckList').innerHTML = '<div class="status">Нет результатов</div>';
+  });
+}
 
 function blockWatchStart(btn) {
   apiPostBtn('/cgi-bin/manage.sh?action=block_watch_start', btn, function(d){

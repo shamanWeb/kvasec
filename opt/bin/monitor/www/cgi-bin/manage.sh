@@ -9,6 +9,7 @@ UPGRADE_LOG=/tmp/kvas-web-upgrade.log
 BYPASS_CHECK_BIN=/opt/apps/kvas/bin/monitor/bypass_check.sh
 BYPASS_CHECK_LOCK=/tmp/kvas-bypass-check.lock
 BYPASS_CHECK_LOCK_DIR=/tmp/kvas-bypass-check.lock.d
+BYPASS_CHECK_PID=/tmp/kvas-bypass-check.pid
 BYPASS_CHECK_RESULT=/tmp/kvas-bypass-check.json
 BYPASS_CHECK_PROGRESS=/tmp/kvas-bypass-check.progress
 BYPASS_CHECK_LOG=/tmp/kvas-bypass-check.log
@@ -25,6 +26,23 @@ PARENTAL_PAGE=/opt/apps/kvas/bin/monitor/www/blocked.html
 json_str() { printf '%s' "$1" | jq -Rs '.' 2>/dev/null || printf '"%s"' "$1" | sed 's/"/\\"/g'; }
 json_error() { printf '{"error":%s}\n' "$(json_str "$1")"; exit 0; }
 json_ok()    { printf '{"ok":true,"msg":%s}\n' "$(json_str "$1")"; exit 0; }
+
+# Kill only the checker that KVAS started.  The cmdline guard prevents a stale
+# PID file from ever signalling an unrelated router process.
+stop_bypass_check() {
+	local pid
+	pid=$(cat "$BYPASS_CHECK_PID" 2>/dev/null)
+	case "$pid" in
+		''|*[!0-9]*) return 0 ;;
+	esac
+	if [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]ypass_check.sh'; then
+		kill "$pid" 2>/dev/null || true
+		for wait_pid in 1 2 3; do
+			kill -0 "$pid" 2>/dev/null || break
+			sleep 1
+		done
+	fi
+}
 
 # Query values are URL-encoded by the WebUI.  Decode only after selecting a
 # field, so an encoded ampersand cannot change the query structure.
@@ -454,8 +472,16 @@ main() {
 			if [ ! -x "$BYPASS_CHECK_BIN" ]; then rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null; json_error "bypass checker is not installed"; fi
 			rm -f "$BYPASS_CHECK_RESULT"
 			rm -f "$BYPASS_CHECK_PROGRESS"
-			( BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" BYPASS_MODE="$mode" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 ) &
+			( BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" BYPASS_PID_FILE="$BYPASS_CHECK_PID" BYPASS_MODE="$mode" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 ) &
 			json_ok "bypass check started"
+			;;
+		bypass_check_stop)
+			check_token "$token"
+			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			stop_bypass_check
+			rm -f "$BYPASS_CHECK_PID" "$BYPASS_CHECK_LOCK" "$BYPASS_CHECK_PROGRESS" "$BYPASS_CHECK_RESULT"
+			rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null || true
+			json_ok "bypass check stopped"
 			;;
 		bypass_check_status)
 			check_token "$token"
