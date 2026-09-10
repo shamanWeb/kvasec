@@ -10,6 +10,7 @@ DNS_LOG=${BLOCK_WATCH_DNS_LOG:-/tmp/kvas-dns.log}
 DNS_RESTART_BIN=${BLOCK_WATCH_DNS_RESTART_BIN:-/opt/etc/init.d/S56dnsmasq}
 INTERVAL=${BLOCK_WATCH_INTERVAL:-5}
 WINDOW=60
+MAP_WINDOW=600
 ROUTER_IP=${BLOCK_WATCH_ROUTER_IP:-$(ip -4 addr show br0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -1)}
 umask 077
 if [ ! -d "$LOCK_DIR" ] && ! mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -58,6 +59,17 @@ append_once() {
     grep -Fq "|$1|$2|$3" "$EVENTS" 2>/dev/null || printf '%s|%s|%s|%s\n' "$(date +%s)" "$1" "$2" "$3" >> "$EVENTS"
 }
 
+reverse_name() {
+    # PTR is only a best-effort owner hint: it cannot identify the exact site
+    # on a shared CDN address.  It is useful when a VPN client bypasses the
+    # router DNS and therefore there is no DNS name to correlate.
+    local ip="$1" name
+    command -v dig >/dev/null 2>&1 || return 0
+    name=$(dig +time=2 +tries=1 +short -x "$ip" 2>/dev/null | head -1 | sed 's/\.$//')
+    printf '%s\n' "$name" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$' || return 0
+    printf '%s' "$name"
+}
+
 while :; do
     now=$(date +%s)
     # DNS replies map an address back to a requested domain.  The dedicated
@@ -95,8 +107,19 @@ while :; do
         }
     ' | \
     while IFS='|' read -r src destination; do
+        destination_ip=${destination%:*}
+        # DNS mappings take precedence.  Only look up PTR for IPs that have
+        # never been seen in DNS and have no cached owner hint yet.
+        if ! grep -Fq "|map|${destination_ip}|" "$EVENTS" 2>/dev/null && \
+           ! grep -Fq "|ptr|${destination_ip}|" "$EVENTS" 2>/dev/null; then
+            ptr=$(reverse_name "$destination_ip")
+            [ -n "$ptr" ] && append_once ptr "$destination_ip" "$ptr"
+        fi
         append_once fail "$src" "$destination"
     done
-    awk -F'|' -v cutoff=$((now - WINDOW)) '$1 >= cutoff' "$EVENTS" > "${EVENTS}.tmp" && mv -f "${EVENTS}.tmp" "$EVENTS"
+    awk -F'|' -v fail_cutoff=$((now - WINDOW)) -v map_cutoff=$((now - MAP_WINDOW)) '
+        ($2 == "map" || $2 == "ptr") { if ($1 >= map_cutoff) print; next }
+        $1 >= fail_cutoff
+    ' "$EVENTS" > "${EVENTS}.tmp" && mv -f "${EVENTS}.tmp" "$EVENTS"
     sleep "$INTERVAL"
 done

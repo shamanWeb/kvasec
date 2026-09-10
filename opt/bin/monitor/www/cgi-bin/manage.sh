@@ -584,16 +584,17 @@ main() {
 			first=1
 			now=$(date +%s)
 			if [ -s "$BLOCK_WATCH_EVENTS" ]; then
-				awk -F'|' -v cutoff=$((now - 60)) '
-					$1>=cutoff && $2=="map" { domain[$3]=$4 }
+				awk -F'|' -v cutoff=$((now - 60)) -v map_cutoff=$((now - 600)) '
+					$1>=map_cutoff && $2=="map" { domain[$3]=$4 }
+					$1>=map_cutoff && $2=="ptr" { owner[$3]=$4 }
 					$1>=cutoff && $2=="fail" { key=$3"|"$4; count[key]++ }
-					END { for (key in count) { split(key,a,"|"); print a[1]"|"a[2]"|"(domain[substr(a[2],1,index(a[2],":")-1)] ? domain[substr(a[2],1,index(a[2],":")-1)] : "")"|"count[key] } }
-				' "$BLOCK_WATCH_EVENTS" | while IFS='|' read -r src destination domain attempts; do
+					END { for (key in count) { split(key,a,"|"); ip=substr(a[2],1,index(a[2],":")-1); print a[1]"|"a[2]"|"(domain[ip] ? domain[ip] : "")"|"(owner[ip] ? owner[ip] : "")"|"count[key] } }
+				' "$BLOCK_WATCH_EVENTS" | while IFS='|' read -r src destination domain owner attempts; do
 					in_vpn=false
 					if [ -n "$domain" ] && { grep -qxF "$domain" "$KVAS_LIST" 2>/dev/null || grep -qxF "*.${domain}" "$KVAS_LIST" 2>/dev/null; }; then in_vpn=true; fi
 					[ "$first" -eq 0 ] && printf ','
 					first=0
-					printf '{"src":%s,"destination":%s,"domain":%s,"attempts":%s,"in_vpn":%s}' "$(json_str "$src")" "$(json_str "$destination")" "$(json_str "$domain")" "${attempts:-1}" "$in_vpn"
+					printf '{"src":%s,"destination":%s,"domain":%s,"owner":%s,"attempts":%s,"in_vpn":%s}' "$(json_str "$src")" "$(json_str "$destination")" "$(json_str "$domain")" "$(json_str "$owner")" "${attempts:-1}" "$in_vpn"
 				done
 			fi
 			echo ']}'

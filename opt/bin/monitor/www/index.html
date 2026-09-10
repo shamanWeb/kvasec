@@ -1052,7 +1052,9 @@ function blockWatchPoll() {
     if (!rows.length) { list.innerHTML = '<div class="status">Подозрительных TCP-попыток за последнюю минуту нет</div>'; return; }
     rows.forEach(function(row){
       var item = document.createElement('div'); item.style.cssText = 'padding:6px 8px;border-bottom:1px solid #30363d;display:flex;gap:8px;flex-wrap:wrap;';
-      var text = document.createElement('span'); text.style.color = '#f85149'; text.textContent = (row.domain || row.destination) + ' — нет ответа, попыток: ' + row.attempts + ' (клиент ' + row.src + ')'; item.appendChild(text);
+      var target = row.domain || row.destination;
+      var owner = !row.domain && row.owner ? ' (PTR: ' + row.owner + ')' : '';
+      var text = document.createElement('span'); text.style.color = '#f85149'; text.textContent = target + owner + ' — нет ответа, попыток: ' + row.attempts + ' (клиент ' + row.src + ')'; item.appendChild(text);
       if (row.domain) {
         var action = document.createElement('button');
         action.className = 'btn btn-sm ' + (row.in_vpn ? 'danger' : 'primary');
