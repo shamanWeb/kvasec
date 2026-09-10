@@ -508,6 +508,7 @@ function showMain() {
   loadAdblockStatus();
   loadTags();
   fetchDevices();
+  blockWatchPoll();
   logMsg('log-info', 'Мониторинг трафика KVAS');
 }
 
@@ -528,6 +529,13 @@ function changePassword() {
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('active', t.dataset.tab === name)});
   document.querySelectorAll('.tab-content').forEach(function(t){t.classList.toggle('active', t.id === 'tab-' + name)});
+  if (name === 'bypass') {
+    blockWatchPoll();
+    if (!blockWatchTimer) blockWatchTimer = setInterval(blockWatchPoll, 3000);
+  } else if (blockWatchTimer) {
+    clearInterval(blockWatchTimer);
+    blockWatchTimer = null;
+  }
 }
 
 /* ========== TAGS ========== */
