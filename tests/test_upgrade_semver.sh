@@ -5,7 +5,13 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 UPGRADE="$ROOT/opt/bin/main/upgrade"
 
-FUNCTIONS=$(sed -n '/^get_package_name(){/,/^rm_tmp_cache(){/{ /^rm_tmp_cache(){/!p }' "$UPGRADE")
+# The legacy cleanup scanned the entire router filesystem and was unused.
+if grep -q '^rm_tmp_cache(){' "$UPGRADE" || grep -Eq '^[[:space:]]*find[[:space:]]+/' "$UPGRADE" || grep -Fq 'xargs rm -rf' "$UPGRADE"; then
+    echo 'unsafe legacy cleanup remains in upgrade' >&2
+    exit 1
+fi
+
+FUNCTIONS=$(sed -n '/^get_package_name(){/,/^select_release_from_list(){/{ /^select_release_from_list(){/!p }' "$UPGRADE")
 
 result=$(sh -c "$FUNCTIONS
 printf '%s|%s|%s|%s\\n' \\
