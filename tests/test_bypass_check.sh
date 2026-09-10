@@ -51,3 +51,8 @@ printf '%s\n' 'dnsmasq[1]: query[A] timeout.example from 192.168.1.20' 'dnsmasq[
 PATH="$WORK/bin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/empty.list" DNS_LOG="$WORK/diagnostic.log" BYPASS_RESULT_FILE="$WORK/diagnostic.json" BYPASS_LOCK_FILE="$WORK/diagnostic.lock" BYPASS_MODE=dns sh "$CHECKER"
 grep -F 'таймаут TCP/TLS (curl 28)' "$WORK/diagnostic.json" >/dev/null
 grep -F 'TLS-handshake не прошёл (curl 35)' "$WORK/diagnostic.json" >/dev/null
+
+# A watcher event can request one exact domain without reading or modifying the
+# VPN list.  This is the path used by the "Проверить доступ" button.
+PATH="$WORK/bin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/empty.list" BYPASS_RESULT_FILE="$WORK/one.json" BYPASS_LOCK_FILE="$WORK/one.lock" BYPASS_MODE=domain BYPASS_DOMAIN=direct-blocked.example sh "$CHECKER"
+grep -F '"domain":"direct-blocked.example","in_vpn":false,"status":"direct_failed_awg_ok"' "$WORK/one.json" >/dev/null

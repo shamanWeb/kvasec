@@ -516,8 +516,14 @@ main() {
 			check_token "$token"
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
 			mode=$(query_param mode)
-			case "$mode" in all|dns|mixed|'') ;; *) json_error "invalid check mode";; esac
+			case "$mode" in all|dns|mixed|domain|'') ;; *) json_error "invalid check mode";; esac
 			[ -z "$mode" ] && mode=mixed
+			domain=""
+			if [ "$mode" = domain ]; then
+				domain=$(query_param domain | tr '[:upper:]' '[:lower:]')
+				printf '%s\n' "$domain" | grep -Eq '^[a-z0-9][a-z0-9.-]*\.[a-z0-9.-]*[a-z0-9]$' || json_error "invalid domain"
+				case "$domain" in *..*) json_error "invalid domain";; esac
+			fi
 			clear_stale_bypass_check || json_error "check already running"
 			# mkdir is atomic on the router filesystem, unlike check-then-create
 			# of a regular file.  It prevents concurrent expensive scans.
@@ -527,7 +533,7 @@ main() {
 			if [ ! -x "$BYPASS_CHECK_BIN" ]; then rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null; json_error "bypass checker is not installed"; fi
 			rm -f "$BYPASS_CHECK_RESULT"
 			rm -f "$BYPASS_CHECK_PROGRESS"
-			BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" BYPASS_PID_FILE="$BYPASS_CHECK_PID" BYPASS_MODE="$mode" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 &
+			BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" BYPASS_PID_FILE="$BYPASS_CHECK_PID" BYPASS_MODE="$mode" BYPASS_DOMAIN="$domain" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 &
 			printf '%s\n' "$!" > "$BYPASS_CHECK_PID"
 			json_ok "bypass check started"
 			;;

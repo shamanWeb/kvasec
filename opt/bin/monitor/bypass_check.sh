@@ -14,6 +14,7 @@ LOCK_DIR=${BYPASS_LOCK_DIR:-${LOCK_FILE}.d}
 PID_FILE=${BYPASS_PID_FILE:-/tmp/kvas-bypass-check.pid}
 MAX_DOMAINS=${BYPASS_MAX_DOMAINS:-40}
 MODE=${BYPASS_MODE:-mixed}
+BYPASS_DOMAIN=${BYPASS_DOMAIN:-}
 KVAS_CONF=${KVAS_CONF:-/opt/etc/kvas.conf}
 TMP_FILE="${RESULT_FILE}.$$"
 
@@ -143,6 +144,10 @@ case "$MODE" in
             [ -s "$DNS_LOG" ] && tail -2000 "$DNS_LOG" 2>/dev/null
             command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\['
         } | sed -n 's/.*query\[[^]]*\] \([^ ]*\) from.*/\1/p' | domain_filter | tail -n 100 > "${TMP_FILE}.domains"
+        ;;
+    domain)
+        valid_domain "$BYPASS_DOMAIN" || exit 1
+        printf '%s\n' "$BYPASS_DOMAIN" | domain_filter > "${TMP_FILE}.domains"
         ;;
     *)
         VPN_LIMIT=$(( (MAX_DOMAINS + 1) / 2 ))

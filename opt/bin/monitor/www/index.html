@@ -1056,6 +1056,10 @@ function blockWatchPoll() {
       var owner = !row.domain && row.owner ? ' (PTR: ' + row.owner + ')' : '';
       var text = document.createElement('span'); text.style.color = '#f85149'; text.textContent = target + owner + ' — нет ответа, попыток: ' + row.attempts + ' (клиент ' + row.src + ')'; item.appendChild(text);
       if (row.domain) {
+        var check = document.createElement('button');
+        check.className = 'btn btn-sm'; check.textContent = 'Проверить доступ';
+        check.onclick = function(){ bypassCheckStart('domain', check, row.domain); };
+        item.appendChild(check);
         var action = document.createElement('button');
         action.className = 'btn btn-sm ' + (row.in_vpn ? 'danger' : 'primary');
         action.textContent = row.in_vpn ? 'Убрать из VPN' : 'Добавить *.domain в VPN';
@@ -1067,16 +1071,19 @@ function blockWatchPoll() {
   });
 }
 
-function bypassCheckStart(mode, btn) {
-  var label = mode === 'all' ? 'весь VPN-список' : 'последние 100 DNS-доменов';
+function bypassCheckStart(mode, btn, domain) {
+  var label = mode === 'all' ? 'весь VPN-список' : (mode === 'domain' ? domain : 'последние 100 DNS-доменов');
   if (!confirm('Проверить ' + label + '? Проверка выполняется в фоне.')) return;
-  apiPostBtn('/cgi-bin/manage.sh?action=bypass_check_start&mode=' + mode, btn, function(d){
+  var url = '/cgi-bin/manage.sh?action=bypass_check_start&mode=' + mode;
+  if (mode === 'domain') url += '&domain=' + encodeURIComponent(domain || '');
+  apiPostBtn(url, btn, function(d){
     var status = document.getElementById('bypassCheckStatus');
     if (!d.ok) { status.className = 'status status-err'; status.textContent = d.error || 'Не удалось запустить проверку'; return; }
     status.className = 'status status-warn';
     status.textContent = 'Проверка выполняется…';
     setBypassProgress(0, 0, true);
     document.getElementById('bypassCheckList').innerHTML = '<div class="status">Проверяем доступность…</div>';
+    if (mode === 'domain') switchTab('bypass');
     if (bypassPollTimer) clearInterval(bypassPollTimer);
     bypassCheckPoll();
     bypassPollTimer = setInterval(bypassCheckPoll, 1000);
