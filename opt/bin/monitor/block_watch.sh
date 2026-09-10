@@ -7,6 +7,7 @@ PID_FILE=${BLOCK_WATCH_PID:-/tmp/kvas-block-watch.pid}
 LOCK_DIR=${BLOCK_WATCH_LOCK_DIR:-/tmp/kvas-block-watch.lock.d}
 DNS_CONF=${BLOCK_WATCH_DNS_CONF:-/opt/etc/dnsmasq.d/kvas-monitor-dns.dnsmasq}
 DNS_LOG=${BLOCK_WATCH_DNS_LOG:-/tmp/kvas-dns.log}
+DNS_RESTART_BIN=${BLOCK_WATCH_DNS_RESTART_BIN:-/opt/etc/init.d/S56dnsmasq}
 INTERVAL=${BLOCK_WATCH_INTERVAL:-5}
 WINDOW=60
 ROUTER_IP=${BLOCK_WATCH_ROUTER_IP:-$(ip -4 addr show br0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -1)}
@@ -18,7 +19,7 @@ fi
 reload_dnsmasq() {
     # dnsmasq only rereads hosts on HUP; log-queries and log-facility are
     # startup options, so a short restart is required when toggling capture.
-    [ -x /opt/etc/init.d/S56dnsmasq ] && /opt/etc/init.d/S56dnsmasq restart >/dev/null 2>&1
+    [ -x "$DNS_RESTART_BIN" ] && "$DNS_RESTART_BIN" restart >/dev/null 2>&1
 }
 
 # DNS history is opt-in and exists only while this watcher is active.  Keeping
@@ -81,7 +82,9 @@ while :; do
                 (a[1]==169 && a[2]==254) ||
                 (a[1]==172 && a[2]>=16 && a[2]<=31) || a[1]==192 && a[2]==168
         }
-        /UNREPLIED/ && $3=="tcp" {
+        # conntrack -L begins with "tcp 6 …"; /proc/net/nf_conntrack
+        # begins with "ipv4 2 tcp 6 …".  Support both formats.
+        /UNREPLIED/ && ($1=="tcp" || $3=="tcp") {
             s=d=p=""
             for(i=1;i<=NF;i++) {
                 if($i~/^src=/&&!s){sub(/^src=/,"",$i);s=$i}
