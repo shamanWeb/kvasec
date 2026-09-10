@@ -15,6 +15,7 @@ BYPASS_CHECK_LOG=/tmp/kvas-bypass-check.log
 BLOCK_WATCH_BIN=/opt/apps/kvas/bin/monitor/block_watch.sh
 BLOCK_WATCH_PID=/tmp/kvas-block-watch.pid
 BLOCK_WATCH_EVENTS=/tmp/kvas-block-watch.events
+BLOCK_WATCH_LOCK_DIR=/tmp/kvas-block-watch.lock.d
 KVAS_LIST=/opt/etc/kvas.list
 TAGS_FILE=/opt/etc/tags.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
@@ -477,22 +478,22 @@ main() {
 		block_watch_start)
 			check_token "$token"
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
-			if [ -f "$BLOCK_WATCH_PID" ] && kill -0 "$(cat "$BLOCK_WATCH_PID" 2>/dev/null)" 2>/dev/null; then json_error "watcher already running"; fi
-			[ -x "$BLOCK_WATCH_BIN" ] || json_error "block watcher is not installed"
-			( "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 ) &
+			if ! mkdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; then json_error "watcher already running"; fi
+			if [ ! -x "$BLOCK_WATCH_BIN" ]; then rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; json_error "block watcher is not installed"; fi
+			( BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 ) &
 			json_ok "block watcher started"
 			;;
 		block_watch_stop)
 			check_token "$token"
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
 			[ -f "$BLOCK_WATCH_PID" ] && kill "$(cat "$BLOCK_WATCH_PID" 2>/dev/null)" 2>/dev/null
-			rm -f "$BLOCK_WATCH_PID"
 			json_ok "block watcher stopped"
 			;;
 		block_watch_status)
 			check_token "$token"
 			watch_running=false
 			[ -f "$BLOCK_WATCH_PID" ] && kill -0 "$(cat "$BLOCK_WATCH_PID" 2>/dev/null)" 2>/dev/null && watch_running=true
+			[ "$watch_running" = false ] && [ -d "$BLOCK_WATCH_LOCK_DIR" ] && rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null
 			printf '{"ok":true,"running":%s,"events":[' "$watch_running"
 			first=1
 			now=$(date +%s)
