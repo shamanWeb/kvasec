@@ -1103,7 +1103,19 @@ function bypassStatusText(row) {
   if (row.status === 'direct_failed') return 'Недоступен';
   if (row.status === 'dns_failed') return 'Ошибка DNS';
   if (row.status === 'awg_unavailable') return 'AWG-туннель отключён';
+  if (row.status === 'http_denied') return 'Сайт или CDN отклонил запрос';
+  if (row.status === 'http_rate_limited') return 'Сайт ограничил запросы';
+  if (row.status === 'http_restricted') return 'Ограничение HTTP 451';
+  if (row.status === 'http_server_error') return 'Ошибка сервера сайта';
+  if (row.status === 'http_client_error') return 'Ответ сайта с ошибкой 4xx';
+  if (row.status === 'http_unexpected') return 'Неожиданный HTTP-ответ';
   return 'Доступен';
+}
+
+function bypassStatusColor(status) {
+  if (status === 'ok') return '#3fb950';
+  if (status === 'http_denied' || status === 'http_rate_limited' || status === 'http_client_error' || status === 'http_server_error') return '#d29922';
+  return '#f85149';
 }
 
 function renderBypassResults(rows) {
@@ -1118,7 +1130,7 @@ function renderBypassResults(rows) {
     domain.style.cssText = 'color:#58a6ff;min-width:180px;flex:1;';
     var result = document.createElement('span');
     result.textContent = bypassStatusText(row) + (row.detail ? ' — ' + row.detail : '');
-    result.style.cssText = 'font-size:12px;color:' + (row.status === 'ok' ? '#3fb950' : '#f85149') + ';flex:2;';
+    result.style.cssText = 'font-size:12px;color:' + bypassStatusColor(row.status) + ';flex:2;';
     item.appendChild(domain); item.appendChild(result);
     if (row.in_vpn) {
       var remove = document.createElement('button');
