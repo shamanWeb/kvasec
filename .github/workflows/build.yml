@@ -76,6 +76,7 @@ jobs:
         run: |
           chmod +x build.sh
           ./build.sh "${{ steps.rel.outputs.version }}"
+          sha256sum "kvasec_${{ steps.rel.outputs.version }}.ipk" > "kvasec_${{ steps.rel.outputs.version }}.ipk.sha256"
 
       - name: Регрессионные тесты
         run: make test
@@ -85,5 +86,7 @@ jobs:
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
           name: KVAS ${{ steps.rel.outputs.tag }}
-          files: kvasec_${{ steps.rel.outputs.version }}.ipk
+          files: |
+            kvasec_${{ steps.rel.outputs.version }}.ipk
+            kvasec_${{ steps.rel.outputs.version }}.ipk.sha256
           make_latest: true
