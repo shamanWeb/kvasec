@@ -65,6 +65,36 @@ http_code() {
     case "$code" in [1-5][0-9][0-9]) printf '%s' "$code";; *) printf '000';; esac
 }
 
+# A TCP/TLS connection and an HTTP response prove that the route works, but a
+# non-success HTTP status is still valuable diagnostic information.  Keep it
+# separate from network failures so Cloudflare challenges are not misreported
+# as censorship.
+http_result_status() {
+    case "$1" in
+        2[0-9][0-9]|3[0-9][0-9]) printf 'ok' ;;
+        401|403|407) printf 'http_denied' ;;
+        429) printf 'http_rate_limited' ;;
+        451) printf 'http_restricted' ;;
+        5[0-9][0-9]) printf 'http_server_error' ;;
+        4[0-9][0-9]) printf 'http_client_error' ;;
+        *) printf 'http_unexpected' ;;
+    esac
+}
+
+http_result_detail() {
+    local code="$1" route="$2"
+    case "$code" in
+        401) printf '%s: HTTP 401 — требуется авторизация' "$route" ;;
+        403) printf '%s: HTTP 403 — доступ отклонён сайтом/CDN (возможен Cloudflare Challenge)' "$route" ;;
+        407) printf '%s: HTTP 407 — требуется авторизация прокси' "$route" ;;
+        429) printf '%s: HTTP 429 — сайт временно ограничил запросы' "$route" ;;
+        451) printf '%s: HTTP 451 — ресурс ограничен сервером или сетью' "$route" ;;
+        5[0-9][0-9]) printf '%s: HTTP %s — ошибка сервера' "$route" "$code" ;;
+        4[0-9][0-9]) printf '%s: HTTP %s — сайт ответил, но отклонил запрос к /' "$route" "$code" ;;
+        *) printf '%s: HTTP %s' "$route" "$code" ;;
+    esac
+}
+
 get_awg_iface() {
     local iface
     iface=$(sed -n 's/^INFACE_ENT=//p' "$KVAS_CONF" 2>/dev/null | head -1)
@@ -124,6 +154,7 @@ while IFS= read -r domain; do
     detail=""
     direct=""
     tunnel=""
+    response_code=""
     if [ -z "$ip" ] || [ "$ip" = "0.0.0.0" ]; then
         status="dns_failed"
         detail="DNS не вернул адрес"
@@ -134,8 +165,9 @@ while IFS= read -r domain; do
                 status="awg_failed"
                 detail="в VPN-списке, но через AWG недоступен"
             else
-                status="ok"
-                detail="доступен через AWG (HTTP ${tunnel})"
+                response_code="$tunnel"
+                status=$(http_result_status "$tunnel")
+                detail=$(http_result_detail "$tunnel" "через AWG")
             fi
         else
             status="awg_unavailable"
@@ -158,14 +190,15 @@ while IFS= read -r domain; do
                 detail="напрямую недоступен; AWG-туннель отключён"
             fi
         else
-            status="ok"
-            detail="доступен напрямую (HTTP ${direct})"
+            response_code="$direct"
+            status=$(http_result_status "$direct")
+            detail=$(http_result_detail "$direct" "напрямую")
         fi
     fi
     [ "$first" -eq 0 ] && printf ',' >> "$TMP_FILE"
     first=0
-    printf '{"domain":%s,"in_vpn":%s,"status":%s,"detail":%s}' \
-        "$(json_str "$domain")" "$listed" "$(json_str "$status")" "$(json_str "$detail")" >> "$TMP_FILE"
+    printf '{"domain":%s,"in_vpn":%s,"status":%s,"detail":%s,"http_code":%s}' \
+        "$(json_str "$domain")" "$listed" "$(json_str "$status")" "$(json_str "$detail")" "$(json_str "$response_code")" >> "$TMP_FILE"
     done_count=$((done_count + 1))
     printf '%s|%s\n' "$done_count" "$total" > "$PROGRESS_FILE"
 done < "${TMP_FILE}.domains"

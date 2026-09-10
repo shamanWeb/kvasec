@@ -15,7 +15,7 @@ printf '%s\n' 'dnsmasq[1]: query[AAAA] ipv6-query.example from 192.168.1.20' >> 
 
 printf '%s\n' '#!/bin/sh' 'echo 203.0.113.10' > "$WORK/bin/dig"
 printf '%s\n' '#!/bin/sh' 'echo "10: opkgtun10: <UP>"' > "$WORK/bin/ip"
-printf '%s\n' '#!/bin/sh' 'case "$*" in' '  *vpn-failed.example*) echo 000 ;;' '  *direct-blocked.example*) case "$*" in *--interface*) echo 200 ;; *) echo 000 ;; esac ;;' '  *vpn-ok.example*) echo 204 ;;' '  *) echo 200 ;;' 'esac' > "$WORK/bin/curl"
+printf '%s\n' '#!/bin/sh' 'case "$*" in' '  *vpn-failed.example*) echo 000 ;;' '  *direct-blocked.example*) case "$*" in *--interface*) echo 200 ;; *) echo 000 ;; esac ;;' '  *forbidden.example*) echo 403 ;;' '  *vpn-ok.example*) echo 204 ;;' '  *) echo 200 ;;' 'esac' > "$WORK/bin/curl"
 chmod +x "$WORK/bin/dig" "$WORK/bin/ip" "$WORK/bin/curl"
 
 PATH="$WORK/bin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/kvas.list" DNS_LOG="$WORK/dns.log" BYPASS_RESULT_FILE="$WORK/result.json" BYPASS_PROGRESS_FILE="$WORK/progress" BYPASS_LOCK_FILE="$WORK/lock" BYPASS_PID_FILE="$WORK/pid" BYPASS_MAX_DOMAINS=10 sh "$CHECKER"
@@ -38,3 +38,9 @@ grep -F '"domain":"six.example"' "$WORK/all.json" >/dev/null
 PATH="$WORK/bin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/crowded.list" DNS_LOG="$WORK/dns.log" BYPASS_RESULT_FILE="$WORK/dns.json" BYPASS_LOCK_FILE="$WORK/dns.lock" BYPASS_MODE=dns sh "$CHECKER"
 grep -F '"domain":"direct-blocked.example"' "$WORK/dns.json" >/dev/null
 grep -F '"domain":"ipv6-query.example"' "$WORK/dns.json" >/dev/null
+
+# HTTP-level denials are reported separately from failed network connections.
+printf '%s\n' forbidden.example > "$WORK/forbidden.list"
+PATH="$WORK/bin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/forbidden.list" DNS_LOG="$WORK/dns.log" BYPASS_RESULT_FILE="$WORK/forbidden.json" BYPASS_LOCK_FILE="$WORK/forbidden.lock" BYPASS_MODE=all sh "$CHECKER"
+grep -F '"domain":"forbidden.example","in_vpn":true,"status":"http_denied"' "$WORK/forbidden.json" >/dev/null
+grep -F '"http_code":"403"' "$WORK/forbidden.json" >/dev/null
