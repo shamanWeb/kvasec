@@ -85,7 +85,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
-          name: KVAS ${{ steps.rel.outputs.tag }}
+          name: KVASEC ${{ steps.rel.outputs.tag }}
           files: |
             kvasec_${{ steps.rel.outputs.version }}.ipk
             kvasec_${{ steps.rel.outputs.version }}.ipk.sha256

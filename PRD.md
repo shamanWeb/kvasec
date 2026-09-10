@@ -1,4 +1,4 @@
-# PRD: KVAS — селективный VPN-роутинг для Keenetic (форк под AmneziaWG)
+# PRD: KVASEC — селективный VPN-роутинг для Keenetic (форк под AmneziaWG)
 
 **Версия:** 1.2.0+
 **Репозиторий:** https://github.com/shamanWeb/kvasec (личный форк)

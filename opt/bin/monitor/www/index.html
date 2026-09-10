@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<title>KVAS — Защита ваших подключений</title>
+<title>KVASEC — Защита ваших подключений</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 20px; font-size: 13px; }
@@ -98,7 +98,7 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 </head>
 <body>
 
-<h1>KVAS</h1>
+<h1>KVASEC</h1>
 <div class="subtitle" style="display:flex;justify-content:space-between;align-items:center;">
   <span>Защита ваших подключений</span>
   <span>
@@ -190,7 +190,7 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
       <button class="btn btn-sm" onclick="doUpdate(this)">Обновить списки</button>
       <button class="btn btn-sm" onclick="doBackup(this)">Бэкап</button>
       <button class="btn btn-sm" onclick="doRestore(this)">Восстановить</button>
-      <button class="btn btn-sm primary" onclick="doKvasInit(this)">Перезагрузка Квас — kvas init</button>
+      <button class="btn btn-sm primary" onclick="doKvasInit(this)">Перезагрузка KVASEC — kvas init</button>
     </div>
     <div id="sysMsg" class="msg"></div>
   </div>
@@ -255,7 +255,7 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
       <input type="text" id="routeIp" placeholder="IP или подсеть (номер или адрес)" style="flex:1;min-width:200px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:12px;">
       <select id="routeType" style="padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:12px;">
         <option value="full">Всё в тоннель</option>
-        <option value="list">По списку КВАС</option>
+        <option value="list">По списку KVASEC</option>
         <option value="exclude">Исключить из перехвата</option>
       </select>
       <button class="btn btn-sm primary" onclick="routeAdd()">Добавить</button>
@@ -509,7 +509,7 @@ function showMain() {
   loadTags();
   fetchDevices();
   blockWatchPoll();
-  logMsg('log-info', 'Мониторинг трафика KVAS');
+  logMsg('log-info', 'Мониторинг трафика KVASEC');
 }
 
 function changePassword() {
@@ -969,7 +969,7 @@ function vpnSet(proto, btn) {
 
 /* ========== ACTIONS ========== */
 function doUpgrade(btn) {
-  if (!confirm('Скачать и установить последнюю версию KVAS? WebUI перезапустится.')) return;
+  if (!confirm('Скачать и установить последнюю версию KVASEC? WebUI перезапустится.')) return;
   apiPostBtn('/cgi-bin/manage.sh?action=upgrade', btn, function(d){
     var el = document.getElementById('sysMsg');
     if (d.ok) {
@@ -991,7 +991,7 @@ function doUpdate(btn) {
 }
 
 function doKvasInit(btn) {
-  if (!confirm('Перезагрузить KVAS (kvas init)?')) return;
+  if (!confirm('Перезагрузить KVASEC (kvas init)?')) return;
   apiBtn('/cgi-bin/manage.sh?action=kvas_init', btn, function(d){
     var el = document.getElementById('sysMsg');
     if (d.ok) { el.className = 'msg ok'; el.textContent = d.msg; loadSystemStatus(); }

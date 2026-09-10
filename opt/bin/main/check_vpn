@@ -20,7 +20,7 @@ ENTWARE_INTERFACE=$(get_current_entware_vpn_interface)
 CLI_INTERFACE=$(get_current_cli_vpn_interface)
 
 reset_logger(){
-        logger -t "КВАС"  "Осуществляем перезапуск ${CLI_INTERFACE}::${ENTWARE_INTERFACE}"
+        logger -t "KVASEC"  "Осуществляем перезапуск ${CLI_INTERFACE}::${ENTWARE_INTERFACE}"
 }
 
 

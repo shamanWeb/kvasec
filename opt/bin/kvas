@@ -12,12 +12,12 @@
 
 #------------------------------------------------------------------------------
 #
-#	ПАКЕТ КВАС
+#	ПАКЕТ KVASEC
 #	файл ./kvas/bin/kvas -> /opt/bin/kvas
 #
 #------------------------------------------------------------------------------
 #
-#	Данный файл служит для запуска пакета КВАС из командной строки
+#	Данный файл служит для запуска пакета KVASEC из командной строки
 #	и содержит основные команды запуска пакета:
 #	Обработка получаемых аргументов скрипта
 #	$1 - команда для обработки
@@ -60,7 +60,7 @@ print_line
 case "${1}" in
 	setup)
 							cmd_install "${2}"
-							echo "Настройка пакета КВАС завершена!"
+							echo "Настройка пакета KVASEC завершена!"
 							echo "Для удаления пакета наберите 'kvas uninstall'"
 							;;
 
@@ -323,7 +323,7 @@ case "${1}" in
 				if [ "${3}" = "detail" ] || [ "${3}" = "full" ]; then
 					# Показываем ВСЕ ошибки из лог-файла
 					print_line
-					echo "Полные ошибки КВАС:"
+					echo "Полные ошибки KVASEC:"
 					print_line
 					if [ -f /opt/tmp/kvas_errors.log ] && [ -s /opt/tmp/kvas_errors.log ]; then
 						tail -n "${4:-50}" /opt/tmp/kvas_errors.log
@@ -334,24 +334,24 @@ case "${1}" in
 					# Показываем из лог-файла (полные сообщения)
 					if [ -f /opt/tmp/kvas_errors.log ] && [ -s /opt/tmp/kvas_errors.log ]; then
 						print_line
-						echo "Ошибки КВАС:"
+						echo "Ошибки KVASEC:"
 						print_line
 						tail -n "${3:-20}" /opt/tmp/kvas_errors.log
 					else
-						syslog__show "${2}" 'КВАС' 'Ошибки Кваса:' "${3}"
+						syslog__show "${2}" 'KVASEC' 'Ошибки KVASEC:' "${3}"
 					fi
 				fi
 			;;
-			info)        syslog__show "${2}" 'КВАС' 'Информационные сообщения Кваса:' "${3}" ;;
+			info)        syslog__show "${2}" 'KVASEC' 'Информационные сообщения KVASEC:' "${3}" ;;
 			clear)       > /opt/tmp/kvas_errors.log 2>/dev/null; echo "Лог очищен." ;;
-			*)           syslog__show ''     'КВАС' 'События Кваса:'                  "${2}" ;;
+			*)           syslog__show ''     'KVASEC' 'События KVASEC:'                  "${2}" ;;
 		esac
 	;;
 	syslog)
 		case "${2}" in
-			error | err) syslog__show "${2}" '!КВАС' 'Ошибки системы:'                   "${3}" ;;
-			info)        syslog__show "${2}" '!КВАС' 'Информационные сообщения системы:' "${3}" ;;
-			*)           syslog__show ''     '!КВАС' 'События системы:'                  "${2}" ;;
+			error | err) syslog__show "${2}" '!KVASEC' 'Ошибки системы:'                   "${3}" ;;
+			info)        syslog__show "${2}" '!KVASEC' 'Информационные сообщения системы:' "${3}" ;;
+			*)           syslog__show ''     '!KVASEC' 'События системы:'                  "${2}" ;;
 		esac
 	;;
 

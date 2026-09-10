@@ -136,7 +136,7 @@ reset_all_connection(){
 
 # ------------------------------------------------------------------------------------------
 #
-# 	Производим инициализацию пакета КВАС
+# 	Производим инициализацию пакета KVASEC
 # 	$1 	- режим запуска функции имеет следующие значения:
 #		update 		- режим обновления при выполнении kvas update
 #		refresh 	- режим обновления списка доменов при командах add/del/import
@@ -146,7 +146,7 @@ cmd_kvas_init(){
 
 	stage="${1:-no}"
 	prefix=''
-	mess="${prefix}Производим сброс пакета КВАС в исходное состояние."
+	mess="${prefix}Производим сброс пакета KVASEC в исходное состояние."
 	warning "${mess}"
 	print_line
 
@@ -174,7 +174,7 @@ cmd_kvas_init(){
 
 	[ "${stage}" = initd ] && update_time || all_services_restart
 
-	#log_alert "${prefix}Сброс пакета КВАС в исходное состояние ЗАВЕРШЕН!"
+	#log_alert "${prefix}Сброс пакета KVASEC в исходное состояние ЗАВЕРШЕН!"
 
 }
 
@@ -345,7 +345,7 @@ exit_when_adguard_on(){
 		[ -z "${2}" ] && {
 			echo -e "${SUFF}${BLUE}Сейчас функции DNS сервера, шифрования DNS трафика и функции блокировки рекламы ${NOCL}"
 			echo -e "${SUFF}${BLUE}исполняет AdGuard Home, заменяющий связку [dnsmasq + dnscrypt_proxy2 + adblock].${NOCL}"
-			echo -e "${SUFF}${BLUE}Единовременно Квас может работать только с одной из этих связок.${NOCL}"
+			echo -e "${SUFF}${BLUE}Одновременно KVASEC может работать только с одной из этих связок.${NOCL}"
 			echo -e "${SUFF}${BLUE}Для перехода на связку с dnsmasq запустите команду ${GREEN}kvas adguard off${NOCL}"
 		}
         eval "${1}=1";
@@ -358,7 +358,7 @@ exit_when_dnsmasq_on(){
 		[ -z "${2}" ] && {
 			echo -e "${SUFF}${BLUE}Сейчас функции DNS сервера, шифрования DNS трафика и функции блокировки рекламы${NOCL}"
 			echo -e "${SUFF}${BLUE}исполняет связка [dnsmasq + dnscrypt_proxy2 + adblock], заменяющая AdGuard Home.${NOCL}"
-			echo -e "${SUFF}${BLUE}Единовременно Квас может работать только с одной из этих связок.${NOCL}"
+			echo -e "${SUFF}${BLUE}Одновременно KVASEC может работать только с одной из этих связок.${NOCL}"
 			echo -e "${SUFF}${BLUE}Для перехода на AdGuard Home запустите команду ${GREEN}kvas adguard on${NOCL}"
 		}
         eval "${1}=1";
@@ -384,7 +384,7 @@ cmd_help() {
 		export RESET="${ESC}[m"
 		sed -e "s/^== \(.*\) ==\$/${GREEN} == \1 == ${RESET}/" \
 			-e "/^---/s/.*/${YELLOW}&${RESET}/" \
-			-e "/^Утилита КВАС\$/s/.*/${YELLOW}&${RESET}/" \
+			-e "/^Утилита KVASEC\$/s/.*/${YELLOW}&${RESET}/" \
 			-e "/^Пакет представляет/s/.*/${YELLOW}&${RESET}/" \
 			-e "/^для защиты/s/.*/${YELLOW}&${RESET}/" \
 			-e "/^Поддержка:/s/.*/${YELLOW}&${RESET}/" \
@@ -1242,7 +1242,7 @@ ikev2_net_access_add() {
 	ready "Добавление гостевого интерфейса \"VPN-сервер IKEv2\" [${net_pool}] завершено" && {
 		ip4__add_routing_by_list_for_net 'ikev2'
 
-		# сохранение в конфигурацию КВАС
+		# сохранение в конфигурацию KVASEC
 		add_ikev2_net_to_config
 	} && when_alert "УСПЕШНО" || when_bad "С ОШИБКОЙ"
 }
@@ -1420,7 +1420,7 @@ dnsmasq_install(){
 	ready "Настройка файлов конфигурации dnsmasq"
 	sed -i "s/@LOCAL_IP/${local_ip}/g; s/@INFACE/${inface}/g; s/@UPLEVEL_DNS/${uplevel_dns}/g;" /opt/etc/dnsmasq.conf 1> /dev/null 2> "${ERROR_LOG_FILE}"
 	ready_status "${?}" "Проблема при настройке файлов конфигурации dnsmasq"
-	# Если запуск функции был не при установке пакета Квас
+	# Если запуск функции был не при установке пакета KVASEC
 	[ -z "${is_install_stage}" ] && cmd_kvas_init "no"
 
 }
@@ -2613,7 +2613,7 @@ dns_crypt_install() {
 		cp /opt/etc/init.d/K09dnscrypt-proxy2 /opt/etc/init.d/S09dnscrypt-proxy2 1> /dev/null 2> "${ERROR_LOG_FILE}"
 		ready_status "${?}" "Ошибка при восстановлении S09dnscrypt-proxy2 из архива"
 	else
-		# Если запуск функции был не при установке пакета Квас
+		# Если запуск функции был не при установке пакета KVASEC
 			if [ -z "${is_install_stage}" ]; then
 		#		при его отсутствии - устанавливаем пакет
 				if ! [ -f /opt/etc/init.d/S09dnscrypt-proxy2 ]; then
@@ -2628,7 +2628,7 @@ dns_crypt_install() {
 	#				Если вызвана функция из postinst
 					error "Пакет dnscrypt-proxy2 был установлен с ошибками или поврежден!"
 					error "Файл запуска пакета /opt/etc/init.d/S09dnscrypt-proxy2 отсутствует!"
-					warning "Удалите Квас и затем переустановите пакет dnscrypt-proxy2"
+					warning "Удалите KVASEC и затем переустановите пакет dnscrypt-proxy2"
 					exit 1
 				fi
 			fi

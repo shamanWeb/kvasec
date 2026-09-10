@@ -407,10 +407,10 @@ DEVICES
 		echo ""
 		echo -e "${YELLOW}Действия:${NOCL}"
 		echo "  a) Добавить IP/подсеть в тоннель (всё)            — весь трафик устройства"
-		echo "  b) Добавить IP/подсеть в тоннель (по списку КВАС)  — только домены из kvas.list"
+		echo "  b) Добавить IP/подсеть в тоннель (по списку KVASEC)  — только домены из kvas.list"
 		echo "  c) Исключить IP/подсеть из перехвата               — DNS и трафик не проксируются"
 		echo "  d) Убрать IP/подсеть из списков                    — удалить из всех списков"
-		echo "  n) Добавить гостевую сеть (по списку КВАС)         — br1, br2..."
+		echo "  n) Добавить гостевую сеть (по списку KVASEC)         — br1, br2..."
 		echo "  N) Убрать гостевую сеть                            — удалить из route_by_list_net"
 		echo "  r) Применить (route refresh)                       — перечитать конфиг"
 		echo "  q) Выход"
@@ -563,7 +563,7 @@ cmd_route_add() {
 		echo ""
 		echo "Типы:"
 		echo "  full <IP>      - отправлять ВСЁ от IP в тоннель"
-		echo "  list <IP>      - отправлять в тоннель по списку КВАС"
+		echo "  list <IP>      - отправлять в тоннель по списку KVASEC"
 		echo "  exclude <IP>   - исключить IP из перехвата"
 		echo ""
 		echo "Пример:"
@@ -610,7 +610,7 @@ cmd_route_del() {
 		echo ""
 		echo "Типы:"
 		echo "  full <IP>      - убрать из 'всё в тоннель'"
-		echo "  list <IP>      - убрать из 'по списку КВАС'"
+		echo "  list <IP>      - убрать из 'по списку KVASEC'"
 		echo "  exclude <IP>   - убрать из 'исключённые'"
 		echo ""
 		echo "Пример:"
@@ -687,7 +687,7 @@ cmd_route_list() {
 	fi
 	echo ""
 
-	echo "По списку КВАС (list):"
+	echo "По списку KVASEC (list):"
 	if [ -n "${list}" ]; then
 		for ip in ${list}; do echo "  - ${ip}"; done
 	else
