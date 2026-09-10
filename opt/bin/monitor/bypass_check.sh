@@ -11,14 +11,16 @@ RESULT_FILE=${BYPASS_RESULT_FILE:-/tmp/kvas-bypass-check.json}
 PROGRESS_FILE=${BYPASS_PROGRESS_FILE:-/tmp/kvas-bypass-check.progress}
 LOCK_FILE=${BYPASS_LOCK_FILE:-/tmp/kvas-bypass-check.lock}
 LOCK_DIR=${BYPASS_LOCK_DIR:-${LOCK_FILE}.d}
+PID_FILE=${BYPASS_PID_FILE:-/tmp/kvas-bypass-check.pid}
 MAX_DOMAINS=${BYPASS_MAX_DOMAINS:-40}
 MODE=${BYPASS_MODE:-mixed}
 KVAS_CONF=${KVAS_CONF:-/opt/etc/kvas.conf}
 TMP_FILE="${RESULT_FILE}.$$"
 
 umask 077
-trap 'rm -f "$TMP_FILE" "$LOCK_FILE" "${TMP_FILE}.domains" "${TMP_FILE}.vpn" "${TMP_FILE}.dns"; rmdir "$LOCK_DIR" 2>/dev/null' EXIT HUP INT TERM
+trap 'rm -f "$TMP_FILE" "$LOCK_FILE" "$PID_FILE" "${TMP_FILE}.domains" "${TMP_FILE}.vpn" "${TMP_FILE}.dns"; rmdir "$LOCK_DIR" 2>/dev/null' EXIT HUP INT TERM
 printf '%s\n' "$$" > "$LOCK_FILE"
+printf '%s\n' "$$" > "$PID_FILE"
 
 json_str() {
     if command -v jq >/dev/null 2>&1; then

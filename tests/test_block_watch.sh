@@ -19,3 +19,5 @@ grep -F 'BLOCK_WATCH_LOCK_DIR' "$MANAGE" >/dev/null
 grep -F 'block_watch_start)' "$MANAGE" >/dev/null
 grep -F 'block_watch_stop)' "$MANAGE" >/dev/null
 grep -F 'block_watch_status)' "$MANAGE" >/dev/null
+grep -F 'bypass_check_stop)' "$MANAGE" >/dev/null
+grep -F 'stop_bypass_check()' "$MANAGE" >/dev/null
