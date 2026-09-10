@@ -44,6 +44,27 @@ stop_bypass_check() {
 	fi
 }
 
+bypass_check_running() {
+	local pid
+	pid=$(cat "$BYPASS_CHECK_PID" 2>/dev/null)
+	case "$pid" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ -r "/proc/$pid/cmdline" ] && \
+		tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]ypass_check.sh' && \
+		kill -0 "$pid" 2>/dev/null
+}
+
+clear_stale_bypass_check() {
+	# A power-off, package upgrade, or an older checker can leave its atomic
+	# lock behind.  Never let that stale directory make the UI report a scan
+	# forever or prevent the next one from starting.
+	bypass_check_running && return 1
+	rm -f "$BYPASS_CHECK_PID" "$BYPASS_CHECK_LOCK"
+	rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null || true
+	return 0
+}
+
 # Query values are URL-encoded by the WebUI.  Decode only after selecting a
 # field, so an encoded ampersand cannot change the query structure.
 url_decode() {
@@ -464,6 +485,7 @@ main() {
 			mode=$(query_param mode)
 			case "$mode" in all|dns|mixed|'') ;; *) json_error "invalid check mode";; esac
 			[ -z "$mode" ] && mode=mixed
+			clear_stale_bypass_check || json_error "check already running"
 			# mkdir is atomic on the router filesystem, unlike check-then-create
 			# of a regular file.  It prevents concurrent expensive scans.
 			if ! mkdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null; then
@@ -472,7 +494,8 @@ main() {
 			if [ ! -x "$BYPASS_CHECK_BIN" ]; then rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null; json_error "bypass checker is not installed"; fi
 			rm -f "$BYPASS_CHECK_RESULT"
 			rm -f "$BYPASS_CHECK_PROGRESS"
-			( BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" BYPASS_PID_FILE="$BYPASS_CHECK_PID" BYPASS_MODE="$mode" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 ) &
+			BYPASS_LOCK_DIR="$BYPASS_CHECK_LOCK_DIR" BYPASS_PID_FILE="$BYPASS_CHECK_PID" BYPASS_MODE="$mode" "$BYPASS_CHECK_BIN" > "$BYPASS_CHECK_LOG" 2>&1 &
+			printf '%s\n' "$!" > "$BYPASS_CHECK_PID"
 			json_ok "bypass check started"
 			;;
 		bypass_check_stop)
@@ -485,7 +508,7 @@ main() {
 			;;
 		bypass_check_status)
 			check_token "$token"
-			if [ -d "$BYPASS_CHECK_LOCK_DIR" ]; then
+			if bypass_check_running; then
 				progress_done=0; progress_total=0
 				if [ -f "$BYPASS_CHECK_PROGRESS" ]; then
 					IFS='|' read -r progress_done progress_total < "$BYPASS_CHECK_PROGRESS"
@@ -495,6 +518,7 @@ main() {
 				printf '{"ok":true,"running":true,"done":%s,"total":%s,"checked":[]}\n' "${progress_done:-0}" "${progress_total:-0}"
 				return
 			fi
+			clear_stale_bypass_check
 			if [ -s "$BYPASS_CHECK_RESULT" ]; then
 				cat "$BYPASS_CHECK_RESULT"
 			else
