@@ -51,18 +51,36 @@ resolve_ipv4() {
     printf '%s' "$out"
 }
 
-http_code() {
-    # $1 domain, $2 optional outgoing interface. A 4xx response still proves that
-    # the resource was reached (many sites reject curl or HEAD requests).
-    local domain="$1" iface="${2:-}" code
+http_probe() {
+    # Output is HTTP-code|curl-exit-code.  The latter lets the UI distinguish a
+    # timeout, TCP refusal and TLS failure instead of calling every failure a
+    # possible block.  A 4xx response still proves the resource was reached.
+    local domain="$1" iface="${2:-}" code rc
     if [ -n "$iface" ]; then
         code=$(curl -sS -L -r 0-0 --connect-timeout 4 --max-time 8 \
             --interface "$iface" -o /dev/null -w '%{http_code}' "https://${domain}/" 2>/dev/null)
+        rc=$?
     else
         code=$(curl -sS -L -r 0-0 --connect-timeout 4 --max-time 8 \
             -o /dev/null -w '%{http_code}' "https://${domain}/" 2>/dev/null)
+        rc=$?
     fi
-    case "$code" in [1-5][0-9][0-9]) printf '%s' "$code";; *) printf '000';; esac
+    case "$code" in [1-5][0-9][0-9]) :;; *) code=000;; esac
+    printf '%s|%s' "$code" "$rc"
+}
+
+probe_failure_detail() {
+    # curl exit codes are stable in both curl and the Entware curl package.
+    # Keep a generic fallback because old router builds may report another code.
+    local rc="$1" route="$2"
+    case "$rc" in
+        6) printf '%s: DNS не разрешил имя (curl 6)' "$route" ;;
+        7) printf '%s: TCP-соединение отклонено или недоступно (curl 7)' "$route" ;;
+        28) printf '%s: таймаут TCP/TLS (curl 28)' "$route" ;;
+        35|51|53|54|58|59|60|64|66|77|80|82|83|90) printf '%s: TLS-handshake не прошёл (curl %s)' "$route" "$rc" ;;
+        0) printf '%s: HTTP-ответ не получен' "$route" ;;
+        *) printf '%s: сетевой запрос не выполнен (curl %s)' "$route" "$rc" ;;
+    esac
 }
 
 # A TCP/TLS connection and an HTTP response prove that the route works, but a
@@ -154,16 +172,23 @@ while IFS= read -r domain; do
     detail=""
     direct=""
     tunnel=""
+    direct_rc=""
+    tunnel_rc=""
+    direct_detail=""
+    tunnel_detail=""
     response_code=""
     if [ -z "$ip" ] || [ "$ip" = "0.0.0.0" ]; then
         status="dns_failed"
-        detail="DNS не вернул адрес"
+        detail="DNS не вернул IPv4-адрес"
     elif [ "$listed" = true ]; then
         if awg_is_up "$AWG_IFACE"; then
-            tunnel=$(http_code "$domain" "$AWG_IFACE")
+            tunnel_probe=$(http_probe "$domain" "$AWG_IFACE")
+            tunnel=${tunnel_probe%%|*}
+            tunnel_rc=${tunnel_probe#*|}
             if [ "$tunnel" = "000" ]; then
                 status="awg_failed"
-                detail="в VPN-списке, но через AWG недоступен"
+                tunnel_detail=$(probe_failure_detail "$tunnel_rc" "через AWG")
+                detail="в VPN-списке, но ${tunnel_detail}"
             else
                 response_code="$tunnel"
                 status=$(http_result_status "$tunnel")
@@ -174,20 +199,26 @@ while IFS= read -r domain; do
             detail="в VPN-списке, но AWG-туннель отключён"
         fi
     else
-        direct=$(http_code "$domain")
+        direct_probe=$(http_probe "$domain")
+        direct=${direct_probe%%|*}
+        direct_rc=${direct_probe#*|}
         if [ "$direct" = "000" ]; then
+            direct_detail=$(probe_failure_detail "$direct_rc" "напрямую")
             if awg_is_up "$AWG_IFACE"; then
-                tunnel=$(http_code "$domain" "$AWG_IFACE")
+                tunnel_probe=$(http_probe "$domain" "$AWG_IFACE")
+                tunnel=${tunnel_probe%%|*}
+                tunnel_rc=${tunnel_probe#*|}
                 if [ "$tunnel" = "000" ]; then
                     status="direct_failed"
-                    detail="напрямую и через VPN недоступен"
+                    tunnel_detail=$(probe_failure_detail "$tunnel_rc" "через AWG")
+                    detail="${direct_detail}; ${tunnel_detail}"
                 else
                     status="direct_failed_awg_ok"
-                    detail="напрямую недоступен; через AWG доступен (HTTP ${tunnel})"
+                    detail="${direct_detail}; через AWG доступен (HTTP ${tunnel})"
                 fi
             else
                 status="direct_failed"
-                detail="напрямую недоступен; AWG-туннель отключён"
+                detail="${direct_detail}; AWG-туннель отключён"
             fi
         else
             response_code="$direct"
@@ -197,8 +228,8 @@ while IFS= read -r domain; do
     fi
     [ "$first" -eq 0 ] && printf ',' >> "$TMP_FILE"
     first=0
-    printf '{"domain":%s,"in_vpn":%s,"status":%s,"detail":%s,"http_code":%s}' \
-        "$(json_str "$domain")" "$listed" "$(json_str "$status")" "$(json_str "$detail")" "$(json_str "$response_code")" >> "$TMP_FILE"
+    printf '{"domain":%s,"in_vpn":%s,"status":%s,"detail":%s,"http_code":%s,"direct_curl":%s,"awg_curl":%s}' \
+        "$(json_str "$domain")" "$listed" "$(json_str "$status")" "$(json_str "$detail")" "$(json_str "$response_code")" "$(json_str "$direct_rc")" "$(json_str "$tunnel_rc")" >> "$TMP_FILE"
     done_count=$((done_count + 1))
     printf '%s|%s\n' "$done_count" "$total" > "$PROGRESS_FILE"
 done < "${TMP_FILE}.domains"
