@@ -1,10 +1,10 @@
 #!/bin/sh
 #------------------------------------------------------------------------------
-#	ПАКЕТ КВАС
+#	ПАКЕТ KVASEC
 #------------------------------------------------------------------------------
 #
 #	Данный файл содержит функции для отладки и выявления проблем
-#	в работе пакета КВАС
+#	в работе пакета KVASEC
 #
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------
@@ -969,17 +969,17 @@ print_debug() {
 	print_line
 	router_info
 	echo
-	syslog__show 'info'  '!КВАС' 'Последние информационные сообщения [kvas syslog info]:' 20
-	syslog__show 'error' '!КВАС' 'Последние ошибки [kvas syslog error]:'                  20
+	syslog__show 'info'  '!KVASEC' 'Последние информационные сообщения [kvas syslog info]:' 20
+	syslog__show 'error' '!KVASEC' 'Последние ошибки [kvas syslog error]:'                  20
 
 	print_line
-	echo -e " ${BLUE}КВАС${NOCL}"
+	echo -e " ${BLUE}KVASEC${NOCL}"
 	print_line
 	kvas__show_config
 	echo
 	kvas__show_install_log
-	syslog__show 'info'  'КВАС' 'Последние информационные сообщения [kvas log info]:' 20
-	syslog__show 'error' 'КВАС' 'Последние ошибки [kvas log error]:'                  20
+	syslog__show 'info'  'KVASEC' 'Последние информационные сообщения [kvas log info]:' 20
+	syslog__show 'error' 'KVASEC' 'Последние ошибки [kvas log error]:'                  20
 
 	print_line
 	echo -e " ${BLUE}Сетевые правила [kvas debug iptables]${NOCL}"

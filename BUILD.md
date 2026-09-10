@@ -1,9 +1,9 @@
-# Сборка и установка из этого репозитория (Linux)
+# Сборка и установка KVASEC из этого репозитория (Linux)
 
 Этот форк собирается и ставится **напрямую из репозитория**, без Windows-папки и molot-SDK
 (старый путь через Windows/molot-SDK удалён из репозитория).
 
-Собирается **core как есть**: ядро kvas + vless + adblock + селективный роутинг.
+Собирается **core KVASEC**: ядро kvas + vless + adblock + селективный роутинг.
 Hysteria и failover полностью удалены из проекта.
 
 ---
@@ -103,18 +103,13 @@ curl -s "https://api.github.com/repos/shamanWeb/kvasec/releases/latest"      | g
   `kvas upgrade` в фоне. После установки WebUI сам перезапускается; обновите страницу через
   несколько секунд. Журнал updater: `/tmp/kvas-web-upgrade.log`.
 
-### Приватный репозиторий → нужен токен на роутере
-Т.к. репозиторий приватный, `kvas upgrade` не увидит релизы без авторизации. Положите на роутер
-fine-grained PAT (права **Contents: read** на `shamanWeb/kvasec`) одной строкой:
+### Публичный репозиторий
 
-```sh
-echo 'github_pat_XXXX' > /opt/etc/kvas.github.token
-chmod 600 /opt/etc/kvas.github.token
-```
+Репозиторий `shamanWeb/kvasec` и его Releases публичные, поэтому `kvas upgrade` и
+`install.sh` не требуют токен GitHub.
 
-`upgrade` подхватит его (заголовок `Authorization: Bearer …`, загрузка ассета через octet-stream).
-Без файла токена команда работает только если релизы публичные.
-> Альтернатива без токенов на роутерах: публиковать ipk в отдельный **публичный** repo и указать его в `release_url`.
+Поддержка `/opt/etc/kvas.github.token` в updater остаётся только для тех, кто использует
+свой приватный fork: fine-grained PAT должен иметь право **Contents: read**, а файл — права `600`.
 
 ## 4. Версионирование
 `build.sh` принимает только SemVer `MAJOR.MINOR.PATCH` из `VERSION` либо аргумента.

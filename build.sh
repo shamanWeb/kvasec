@@ -1,6 +1,6 @@
 #!/bin/sh
 # ---------------------------------------------------------------------------
-#  Локальная сборка ipk-пакета KVAS из текущего репозитория (Linux, без SDK).
+#  Локальная сборка ipk-пакета KVASEC из текущего репозитория (Linux, без SDK).
 #
 #  Формат ipk: gzip(tar( debian-binary + control.tar.gz + data.tar.gz )),
 #  идентичный отгружаемым релизам (проверено на v352).
@@ -85,7 +85,7 @@ Depends: libpcre, jq, curl, knot-dig, nano-full, cron, bind-dig, dnsmasq-full, i
 Source: https://github.com/shamanWeb/kvasec
 Maintainer: shamanWeb
 Architecture: all
-Description: VPN клиент для Keenetic (${PKG_VERSION})
+Description: KVASEC VPN client for Keenetic (${PKG_VERSION})
 Section: utils
 Priority: optional
 Installed-Size: ${INSTALLED_SIZE}
