@@ -65,6 +65,39 @@ clear_stale_bypass_check() {
 	return 0
 }
 
+block_watch_running() {
+	local pid
+	pid=$(cat "$BLOCK_WATCH_PID" 2>/dev/null)
+	case "$pid" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ -r "/proc/$pid/cmdline" ] && \
+		tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]lock_watch.sh' && \
+		kill -0 "$pid" 2>/dev/null
+}
+
+stop_block_watch() {
+	local pid
+	pid=$(cat "$BLOCK_WATCH_PID" 2>/dev/null)
+	case "$pid" in
+		''|*[!0-9]*) return 0 ;;
+	esac
+	if [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]lock_watch.sh'; then
+		kill "$pid" 2>/dev/null || true
+		for wait_pid in 1 2 3; do
+			kill -0 "$pid" 2>/dev/null || break
+			sleep 1
+		done
+	fi
+}
+
+clear_stale_block_watch() {
+	block_watch_running && return 1
+	rm -f "$BLOCK_WATCH_PID"
+	rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null || true
+	return 0
+}
+
 # Query values are URL-encoded by the WebUI.  Decode only after selecting a
 # field, so an encoded ampersand cannot change the query structure.
 url_decode() {
@@ -528,22 +561,25 @@ main() {
 		block_watch_start)
 			check_token "$token"
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
+			clear_stale_block_watch || json_error "watcher already running"
 			if ! mkdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; then json_error "watcher already running"; fi
 			if [ ! -x "$BLOCK_WATCH_BIN" ]; then rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; json_error "block watcher is not installed"; fi
-			( BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 ) &
+			BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 &
+			printf '%s\n' "$!" > "$BLOCK_WATCH_PID"
 			json_ok "block watcher started"
 			;;
 		block_watch_stop)
 			check_token "$token"
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
-			[ -f "$BLOCK_WATCH_PID" ] && kill "$(cat "$BLOCK_WATCH_PID" 2>/dev/null)" 2>/dev/null
+			stop_block_watch
+			clear_stale_block_watch
 			json_ok "block watcher stopped"
 			;;
 		block_watch_status)
 			check_token "$token"
 			watch_running=false
-			[ -f "$BLOCK_WATCH_PID" ] && kill -0 "$(cat "$BLOCK_WATCH_PID" 2>/dev/null)" 2>/dev/null && watch_running=true
-			[ "$watch_running" = false ] && [ -d "$BLOCK_WATCH_LOCK_DIR" ] && rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null
+			block_watch_running && watch_running=true
+			[ "$watch_running" = false ] && clear_stale_block_watch
 			printf '{"ok":true,"running":%s,"events":[' "$watch_running"
 			first=1
 			now=$(date +%s)
