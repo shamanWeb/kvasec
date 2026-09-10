@@ -70,24 +70,25 @@ watcher() {
         fi
       done
 
-      # 5) QUIC-блок (HTTP/3, UDP 443) для LAN — форсируем HTTP/2 поверх TCP.
-      #    QUIC (UDP) не защищён MSS-клампингом → крупные пакеты не влезают в тоннель
-      #    (mtu 1280) и молча дропаются; на прямом пути провайдер ломает/троттлит QUIC.
-      #    Симптом в Chrome: ERR_QUIC_PROTOCOL_ERROR / ERR_NETWORK_CHANGED. REJECT с
-      #    icmp-port-unreachable → браузер мгновенно откатывается на TCP (работает).
-      if ! iptables -C FORWARD -i br0 -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null; then
-        iptables -I FORWARD -i br0 -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null
-        echo "$(date) fix: QUIC-блок udp/443 добавлен в FORWARD" >>"$LOG"
-      fi
+      # 5) Do not interfere with QUIC globally.  A router-wide REJECT of UDP/443
+      #    looks like a changed network to Chromium on some clients and breaks
+      #    every HTTP/3 site, including traffic that never enters KVAS.  Remove
+      #    the legacy rule if an older package added it.  MTU must be solved at
+      #    the tunnel/routing level rather than by disabling a LAN protocol.
+      while iptables -C FORWARD -i br0 -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null; do
+        iptables -D FORWARD -i br0 -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null
+        echo "$(date) cleanup: legacy QUIC block udp/443 removed" >>"$LOG"
+      done
 
       # 6) Telegram DC подсети (официальные CIDR) в KVAS_LIST → идут через тоннель.
       #    Telegram коннектится по хардкод-IP DC, а не по DNS, поэтому dnsmasq их не
       #    добавит. Они есть в kvas.list, но main/ipset грузит их с `timeout 0`, что
       #    падает на сете без timeout-поддержки (см. текущий live-сет). Здесь добавляем
-      #    без timeout — работает при любом варианте сета. Сентинел-проверка по
-      #    последней подсети, чтобы не дёргать ipset каждый цикл.
+      #    без timeout — работает при любом варианте сета. Проверяем конкретный
+      #    IP внутри последней подсети: ipset test с CIDR не проверяет наличие
+      #    сети и из-за этого раньше выполнял add на каждом цикле watcher.
       if ipset list -n KVAS_LIST >/dev/null 2>&1 \
-         && ! ipset test KVAS_LIST 149.154.160.0/20 2>/dev/null | grep -qi "is in"; then
+         && ! ipset test KVAS_LIST 149.154.160.1 >/dev/null 2>&1; then
         for c in 91.105.192.0/23 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 \
                  91.108.16.0/22 91.108.56.0/22 95.161.64.0/20 149.154.160.0/20; do
           ipset -exist add KVAS_LIST "$c" 2>/dev/null

@@ -114,7 +114,7 @@ kvas adblock on|off|add|del    # блокировка рекламы
 - **v36** — прямая проверка AmneziaWG-туннеля в `kvas test`.
 - **v35** — блокировка DoH/DoT.
 - **v34** — фикс пути `100-vpn-mark` в watcher'е.
-- **v33** — watcher `S99kvas-awg-route` заведён в пакет (self-heal rule/KVAS_MARK).
+- **v33** — watcher `S99kvas-awg-route` заведён в пакет (self-heal rule/KVAS_MARK). Он не блокирует QUIC глобально: это может вызывать `ERR_NETWORK_CHANGED` в Chromium.
 - **v32** — postinst `kvas init` (маршрутизация без ручного update).
 - **v31** — postinst `port=9753`.
 - **v30** — postinst настройка dnsmasq.conf.
