@@ -873,18 +873,18 @@ cmd_adguardhome_on() {
 
 		echo -e "${GREEN}AdGuard Home${NOCL} будет установлен локально"
 		print_line
-		status=$(cmd_adguardhome_status)
-		if echo "${status}" | grep -q "НЕ УСТАНОВЛЕН" ; then
+		# DNS_DEFAULT may point to local dnscrypt (127.0.0.1:9153), which the
+		# old text status called "external". The executable is the reliable
+		# criterion for deciding whether a local installation is required.
+		if [ ! -x /opt/bin/AdGuardHome ]; then
 			error "Пакет AdGuard Home не установлен на роутере." no_newline
 			print_line
 			adguardhome_install_locally
-	#		fi
-		elif echo "${status}" | grep -q "НЕ НАСТРОЕН" ; then
-			adguardhome_check_config
-			adguardhome_setup
-		elif  echo "${status}" | grep -q "НУЖНО ПЕРЕУСТАНОВИТЬ" ; then
-			adguardhome_install_locally
 		else
+			status=$(cmd_adguardhome_status)
+			if echo "${status}" | grep -q "НЕ НАСТРОЕН\|НУЖНО ПЕРЕУСТАНОВИТЬ" ; then
+				adguardhome_check_config
+			fi
 			adguardhome_setup
 		fi
 	#	восстанавливаем /opt/etc/hosts
