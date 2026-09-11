@@ -5,7 +5,7 @@
 # Зачем: awg-manager создаёт opkgtunNN в обход NDM, поэтому NDM-события kvas
 # не приходят, и при переподключении туннеля / перезагрузке NDM-firewall
 # состояние маршрутизации kvas слетает, а восстановить его между запусками
-# kvas (init/update/add) некому. Демон каждые 5 сек держит:
+# kvas (init/update/add) некому. Демон каждые 10 сек держит:
 #   1) default в kvas VPN-redirect таблицах (1001; старая вестигиальная 4096)
 #      на opkgtunNN — иначе трафик из списка сваливается в WAN;
 #   2) ip rule fwmark 0xd1000 -> table 1001 (priority 99, выше system rule 104);
@@ -96,7 +96,7 @@ watcher() {
         echo "$(date) fix: Telegram DC подсети добавлены в KVAS_LIST" >>"$LOG"
       fi
     fi
-    sleep 5
+    sleep 10
   done
 }
 start() { if [ -f "$PIDF" ] && kill -0 "$(cat $PIDF 2>/dev/null)" 2>/dev/null; then exit 0; fi; watcher & echo $! > "$PIDF"; }

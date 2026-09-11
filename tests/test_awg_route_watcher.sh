@@ -15,6 +15,9 @@ grep -F 'iptables -D FORWARD -i br0 -p udp --dport 443 -j REJECT' "$WATCHER" >/d
 ! grep -F 'iptables -I FORWARD -i br0 -p udp --dport 443 -j REJECT' "$WATCHER" >/dev/null
 
 # `ipset test` receives one IP, not a CIDR.  CIDR input never confirmed the
-# set membership and caused needless writes on every five-second cycle.
+# set membership and caused needless writes on every watcher cycle.
 grep -F 'ipset test KVAS_LIST 149.154.160.1 >/dev/null 2>&1' "$WATCHER" >/dev/null
 ! grep -F 'ipset test KVAS_LIST 149.154.160.0/20' "$WATCHER" >/dev/null
+
+# Ten seconds keeps the recovery delay short while halving constant polling.
+grep -Fx '    sleep 10' "$WATCHER" >/dev/null

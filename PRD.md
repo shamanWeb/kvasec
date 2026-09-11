@@ -1,6 +1,6 @@
 # PRD: KVASEC — селективный VPN-роутинг для Keenetic (форк под AmneziaWG)
 
-**Версия:** 1.2.0+
+**Версия:** 1.3.0+
 **Репозиторий:** https://github.com/shamanWeb/kvasec (личный форк)
 **Основа:** https://github.com/qzeleza/kvas (Apache 2.0)
 **Железо:** Keenetic (aarch64), KeeneticOS 5.x + Entware
@@ -42,7 +42,7 @@ iptables метит трафик к этим IP, `ip rule` заворачива�
 
 **Не-NDM opkgtunNN:** NDM-события kvas не приходят → таблицу 1001, правило и `KVAS_MARK`
 надо восстанавливать самостоятельно. Это делает watcher-демон `S99kvas-awg-route`
-(в пакете, стартует из postinst) — держит их каждые 5с. Дополнительно `100-vpn-mark`
+(в пакете, стартует из postinst) — держит их каждые 10с. Дополнительно `100-vpn-mark`
 зарегистрирован в `/opt/etc/ndm/` для нативного пересоздания на сбросах NDM-firewall.
 
 ## 3. Сборка и установка (подробно — `BUILD.md`)

@@ -29,7 +29,7 @@ elif [ -f "${REPO_DIR}/VERSION" ]; then
 else
 	PKG_VERSION="$(grep -E '^PKG_VERSION' "${REPO_DIR}/Makefile" 2>/dev/null | sed 's/.*:= *//' | tr -d '[:space:]')"
 fi
-[ -n "${PKG_VERSION:-}" ] || PKG_VERSION=1.2.0
+[ -n "${PKG_VERSION:-}" ] || PKG_VERSION=1.3.0
 echo "${PKG_VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
 	echo "ERROR: version must use MAJOR.MINOR.PATCH, got: ${PKG_VERSION}" >&2
 	exit 2
