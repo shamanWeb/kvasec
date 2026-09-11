@@ -12,6 +12,8 @@ INTERVAL=${BLOCK_WATCH_INTERVAL:-5}
 WINDOW=60
 MAP_WINDOW=600
 ROUTER_IP=${BLOCK_WATCH_ROUTER_IP:-$(ip -4 addr show br0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -1)}
+# shellcheck source=adguard_querylog.sh
+. "$(dirname "$0")/adguard_querylog.sh"
 umask 077
 if [ ! -d "$LOCK_DIR" ] && ! mkdir "$LOCK_DIR" 2>/dev/null; then
     exit 1
@@ -26,6 +28,9 @@ reload_dnsmasq() {
 # DNS history is opt-in and exists only while this watcher is active.  Keeping
 # it in a separate drop-in avoids changing the user's dnsmasq.conf.
 enable_dns_capture() {
+    # AdGuard owns DNS and already keeps a bounded query log.  Restarting a
+    # stopped dnsmasq here would conflict with port 53 and break resolution.
+    adguard_querylog_active && return 0
     mkdir -p "$(dirname "$DNS_CONF")" || return 1
     : > "$DNS_LOG" || return 1
     chown nobody:nobody "$DNS_LOG" 2>/dev/null || true
@@ -37,6 +42,7 @@ enable_dns_capture() {
 }
 
 disable_dns_capture() {
+    adguard_querylog_active && { rm -f "$DNS_LOG"; return 0; }
     rm -f "$DNS_CONF"
     reload_dnsmasq || true
     rm -f "$DNS_LOG"
@@ -82,6 +88,13 @@ while :; do
     while IFS='|' read -r ip domain; do
         [ -n "$ip" ] && [ -n "$domain" ] && append_once map "$ip" "$domain"
     done
+    # With AdGuard enabled dnsmasq has no reply log.  Decode A records from
+    # AdGuard's query log to retain domain labels in the TCP failure view.
+    if adguard_querylog_active; then
+        adguard_query_mappings | while IFS='|' read -r ip domain; do
+            [ -n "$ip" ] && [ -n "$domain" ] && append_once map "$ip" "$domain"
+        done
+    fi
     if command -v conntrack >/dev/null 2>&1; then
         ct=$(conntrack -L 2>/dev/null)
     else
