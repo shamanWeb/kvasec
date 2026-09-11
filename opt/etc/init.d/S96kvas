@@ -20,13 +20,6 @@ case ${1} in
 	start|restart)
 		. /opt/apps/kvas/bin/libs/vpn
 		cmd_kvas_init no
-		if has_ssr_enable; then
-			while /opt/etc/init.d/S22shadowsocks status | grep -q dead
-			do
-				/opt/etc/init.d/S22shadowsocks restart
-				sleep 2
-			done
-		fi
 		# Автозапуск Web UI после ребута, если был включён (флаг в /opt/etc — persistent)
 		[ -f /opt/etc/kvas-monitor-web-enabled ] && \
 			/opt/apps/kvas/bin/kvas monitor web >/dev/null 2>&1 &

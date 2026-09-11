@@ -138,10 +138,8 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <h3>Состояние системы</h3>
     <div class="card-row"><label>Пакет:</label><span class="value" id="sysPkg">-</span></div>
     <div class="card-row"><label>Версия:</label><span class="value" id="sysVer">-</span></div>
-    <div class="card-row"><label>Резерв VPN:</label><span class="value" id="sysMode">-</span></div>
+    <div class="card-row"><label>Туннель:</label><span class="value" id="sysMode">AmneziaWG</span></div>
     <div class="card-row"><label>Хостов:</label><span class="value" id="sysHosts">-</span></div>
-    <div class="card-row"><label>Служба Xray:</label><span class="value" id="sysXrayService">-</span></div>
-    <div class="card-row"><label>VLESS туннель:</label><span class="value" id="sysVless">-</span></div>
     <div class="card-row"><label>Обновления:</label><span class="value" id="sysUpdate">-</span>
       <button class="btn btn-sm" onclick="doCheckUpdate(this)" style="margin-left:8px;">Проверить</button>
     </div>
@@ -169,17 +167,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
       <div class="progress-bar"><div class="progress-fill" id="hostProgressFill"></div></div>
       <div class="progress-text" id="hostProgressText"></div>
     </div>
-  </div>
-
-
-  <!-- VPN -->
-
-  <div class="card">
-    <h3>VPN туннель</h3>
-    <div class="card-row">
-      <button class="btn btn-sm" onclick="vpnSet('vless',this)">VLESS</button>
-    </div>
-    <div id="vpnMsg" class="msg" style="white-space:pre-wrap;font-size:11px;max-height:200px;overflow-y:auto;"></div>
   </div>
 
   <!-- System Actions -->
@@ -767,18 +754,8 @@ function loadSystemStatus() {
     if (d.ok) {
       document.getElementById('sysPkg').textContent = d.pkg || '-';
       document.getElementById('sysVer').textContent = d.ver || '-';
-      document.getElementById('sysMode').textContent = d.mode || '-';
+      document.getElementById('sysMode').textContent = d.mode === 'amneziawg' ? 'AmneziaWG' : '-';
       document.getElementById('sysHosts').textContent = d.hosts || '-';
-      var xraySvc = d.xray_service || '-';
-      document.getElementById('sysXrayService').textContent = xraySvc === 'running' ? 'работает' : (xraySvc === 'stopped' ? 'остановлена' : (xraySvc === 'not_installed' ? 'не установлена' : xraySvc));
-      document.getElementById('sysVless').innerHTML = '<span style="color:#8b949e;">проверка...</span>';
-      api('/cgi-bin/manage.sh?action=tunnel_check', function(t) {
-        if (t.ok) {
-          var ok = '<span style="color:#3fb950;">\u2713</span> ';
-          var fail = '<span style="color:#f85149;">\u2717</span> ';
-          document.getElementById('sysVless').innerHTML = t.vless ? ok + 'работает' : fail + 'не работает';
-        }
-      });
     }
   });
 }

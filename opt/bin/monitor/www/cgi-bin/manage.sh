@@ -197,39 +197,6 @@ mk_token() {
 	printf '%s' "$t"
 }
 
-# Detect active VPN — checks which is configured and running
-detect_vpn_mode() {
-	# Check which interface is configured as active VPN
-	local inface_ent=$(grep "^INFACE_ENT=" /opt/etc/kvas.conf 2>/dev/null | cut -d= -f2)
-	if [ -n "$inface_ent" ]; then
-		# Check if it's a vless proxy interface
-		case "$inface_ent" in
-			*Proxy21*|*vless*) echo "vless"; return ;;
-		esac
-	fi
-	# Fallback: check which process is running
-	if [ -f /var/run/xray.pid ] && kill -0 $(cat /var/run/xray.pid) 2>/dev/null; then
-		echo "vless"
-		return
-	fi
-	echo "none"
-}
-
-# Check if specific VPN process is running — use pidof/pgrep for reliability
-check_vpn_running() {
-	case "$1" in
-		vless)
-			if pidof xray >/dev/null 2>&1; then
-				echo "true"
-			elif [ -f /var/run/xray.pid ] && kill -0 $(cat /var/run/xray.pid) 2>/dev/null; then
-				echo "true"
-			else
-				echo "false"
-			fi
-			;;
-	esac
-}
-
 # --- Main ---
 
 
@@ -270,7 +237,7 @@ get_tag_domain_list_from_file() {
 
 main() {
 	local action token pass hash stored kvaspkg kvaspkg_name kvaspkg_ver
-	local vpn_mode vless_running host_count first
+	local host_count first
 	local domain out rc mode enabled primary interval threshold cmd path
 
 	action=$(query_param action)
@@ -324,22 +291,9 @@ main() {
 			kvaspkg=$(opkg list-installed 2>/dev/null | grep kvas | head -1)
 			kvaspkg_name=$(echo "$kvaspkg" | awk '{print $1}')
 			kvaspkg_ver=$(echo "$kvaspkg" | awk '{print $3}')
-			vpn_mode=$(detect_vpn_mode)
-			vless_running=$(check_vpn_running "vless")
 			host_count=$(wc -l < "$KVAS_LIST" 2>/dev/null || echo 0)
-			# Service status — check init.d script existence + process running
-			xray_svc="not_installed"
-			# Xray: init.d at /opt/apps/kvas/etc/init.d/S97xray
-			if [ -f "/opt/apps/kvas/etc/init.d/S97xray" ]; then
-				if pidof xray >/dev/null 2>&1; then
-					xray_svc="running"
-				else
-					xray_svc="stopped"
-				fi
-			fi
-			printf '{"ok":true,"pkg":%s,"ver":%s,"mode":%s,"vless":%s,"hosts":%s,"xray_service":%s}\n' \
-				"$(json_str "$kvaspkg_name")" "$(json_str "$kvaspkg_ver")" "$(json_str "$vpn_mode")" \
-				"$vless_running" "$host_count" "$(json_str "$xray_svc")"
+			printf '{"ok":true,"pkg":%s,"ver":%s,"mode":"amneziawg","hosts":%s}\n' \
+				"$(json_str "$kvaspkg_name")" "$(json_str "$kvaspkg_ver")" "$host_count"
 			;;
 		hosts)
 			check_token "$token"
@@ -433,35 +387,6 @@ main() {
 			: > "$KVAS_LIST"
 			out=$($KVAS_BIN init 2>&1)
 			json_ok "list cleared"
-			;;
-		vpn_status)
-			check_token "$token"
-			vpn_mode=$(detect_vpn_mode)
-			vless_running=$(check_vpn_running "vless")
-			printf '{"ok":true,"mode":%s,"vless":%s}\n' \
-				"$(json_str "$vpn_mode")" "$vless_running"
-			;;
-		tunnel_check)
-			check_token "$token"
-			vless_ok="false"
-			command -v ss >/dev/null 2>&1 && {
-				ss -tlnp 2>/dev/null | grep -q ":1097 " && vless_ok="true"
-			}
-			[ "$vless_ok" = "false" ] && command -v netstat >/dev/null 2>&1 && netstat -tlnp 2>/dev/null | grep -q ":1097 " && vless_ok="true"
-			printf '{"ok":true,"vless":%s}\n' "$vless_ok"
-			;;
-		vpn_set)
-			check_token "$token"
-			proto=$(echo "$QUERY_STRING" | sed 's/.*proto=//; s/&.*//' 2>/dev/null)
-			[ "$proto" = "$QUERY_STRING" ] && proto=""
-			case "$proto" in
-				vless) ;;
-				*) json_error "proto must be vless" ;;
-			esac
-			out=$($KVAS_BIN vpn set "$proto" 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "switch failed: $out"
-			json_ok "switched to $proto"
 			;;
 		kvas_list)
 			check_token "$token"

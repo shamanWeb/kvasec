@@ -31,6 +31,14 @@ tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/kvas' >/dev/nul
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/monitor/bypass_check.sh' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/monitor/block_watch.sh' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/etc/ndm/netfilter.d/100-vpn-mark' >/dev/null
+! tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/libs/vless$'
+! tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/S97xray$'
+! tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/kvas.vless$'
+! tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/shadowsocks.json$'
+! tar -xOzf "$UNPACKED/control.tar.gz" ./control | grep -qi 'xray'
+! tar -xOzf "$UNPACKED/control.tar.gz" ./control | grep -qi 'shadowsocks'
+tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'opkgtun[0-9]*)' >/dev/null
+! tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'rm -rf /opt/etc/xray' >/dev/null
 
 if ./build.sh 1.2 >/dev/null 2>&1; then
     echo 'build.sh accepted an invalid SemVer version' >&2

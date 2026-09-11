@@ -81,7 +81,7 @@ INSTALLED_SIZE="$(du -sb "${DATA}" | cut -f1)"
 cat > "${CTRL}/control" <<EOF
 Package: ${PKG_NAME}
 Version: ${PKG_VERSION}
-Depends: libpcre, jq, curl, knot-dig, nano-full, cron, bind-dig, dnsmasq-full, ipset, dnscrypt-proxy2, iptables, shadowsocks-libev-ss-redir, shadowsocks-libev-config, libmbedtls
+Depends: libpcre, jq, curl, knot-dig, nano-full, cron, bind-dig, dnsmasq-full, ipset, dnscrypt-proxy2, iptables
 Source: https://github.com/shamanWeb/kvasec
 Maintainer: shamanWeb
 Architecture: all
@@ -97,7 +97,7 @@ EOF
 cat > "${CTRL}/postinst" <<POSTINST
 #!/bin/sh
 if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
-    mkdir -p /opt/etc/ndm/watch.d /opt/etc/dnsmasq.d /opt/etc/adblock /opt/etc/xray /opt/var/log
+    mkdir -p /opt/etc/ndm/watch.d /opt/etc/dnsmasq.d /opt/etc/adblock /opt/var/log
     chown root:root /opt/etc/ndm/watch.d 2>/dev/null
 
     # A shell script that is running during opkg upgrade keeps executing its
@@ -153,6 +153,23 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     fi
 
     ln -sf /opt/apps/kvas/bin/kvas /opt/bin/kvas
+
+    # Migration from releases with VLESS/Xray.  These files and the init link
+    # belonged to KVASEC; stop only this managed service and leave a separately
+    # installed user Xray package untouched.
+    [ -x /opt/etc/init.d/S97xray ] && /opt/etc/init.d/S97xray stop >/dev/null 2>&1 || true
+    rm -f /opt/etc/init.d/S97xray /var/run/xray.pid /opt/etc/kvas.vless /opt/etc/xray/kvas.json
+    rmdir /opt/etc/xray 2>/dev/null || true
+    rm -f /opt/etc/cron.5mins/check_vpn
+
+    # Старый выбранный клиент нельзя оставлять рабочей конфигурацией: в новой
+    # версии поддерживается только AmneziaWG (opkgtunNN). Список доменов и DNS
+    # настройки сохраняем, а выбор туннеля попросит повторить «kvas vpn set».
+    legacy_inface=\$(sed -n 's/^INFACE_ENT=//p' /opt/etc/kvas.conf 2>/dev/null | head -n 1)
+    case "\${legacy_inface}" in
+        ''|opkgtun[0-9]*) ;;
+        *) sed -i 's/^INFACE_ENT=.*/INFACE_ENT=/; s/^INFACE_CLI=.*/INFACE_CLI=/' /opt/etc/kvas.conf ;;
+    esac
 
     # bin/libs/ndm генерируется из etc/ndm/ndm — так фикс RULE_PRIORITY попадает в рантайм-хук
     cp -f /opt/apps/kvas/etc/ndm/ndm /opt/apps/kvas/bin/libs/ndm
@@ -223,7 +240,7 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1 &
 
     # Web UI: если был включён, обязательно останавливаем старый socat/handler
-    # перед стартом. Иначе `kvas monitor web` видит занятый порт и после upgrade
+    # перед стартом. Иначе «kvas monitor web» видит занятый порт и после upgrade
     # продолжает обслуживать старый handler из /tmp.
     if [ -f /opt/etc/kvas-monitor-web-enabled ]; then
         /opt/apps/kvas/bin/monitor/launcher.sh stop >/dev/null 2>&1

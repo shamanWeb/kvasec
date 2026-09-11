@@ -39,7 +39,6 @@ KVAS_LIST_FILE=/opt/etc/kvas.list
 TAGS_LIST_FILE=/opt/etc/tags.list
 ADGUARDHOME_CONFIG=/opt/etc/AdGuardHome/AdGuardHome.yaml
 ADGUARD_IPSET_FILE=/opt/etc/AdGuardHome/kvas.ipset
-SHADOWSOCKS_CONF=/opt/etc/shadowsocks.json
 DNSMASQ_IPSET_HOSTS=/opt/etc/dnsmasq.d/kvas.dnsmasq
 DNSMASQ_CONFIG=/opt/etc/dnsmasq.conf
 DNSCRYPT_CONFIG=/opt/etc/dnscrypt-proxy.toml
@@ -54,7 +53,6 @@ TAGS_LIST_FILE=/opt/etc/tags.list
 TAGS_LIST_BACKUP=${KVAS_BACKUP_PATH}/tags.list
 ADGUARDHOME_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/AdGuardHome.yaml
 ADGUARD_IPSET_FILE_BACKUP=${KVAS_BACKUP_PATH}/kvas.ipset
-SHADOWSOCKS_CONF_BACKUP=${KVAS_BACKUP_PATH}/shadowsocks.json
 DNSMASQ_IPSET_HOSTS_BACKUP=${KVAS_BACKUP_PATH}/kvas.dnsmasq
 DNSMASQ_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/dnsmasq.conf
 DNSCRYPT_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/dnscrypt-proxy.toml
@@ -80,13 +78,8 @@ INSTALL_LOG=/opt/tmp/kvas.install.log
 CRONTAB_FILE=/opt/etc/crontab
 UPDATE_BIN_FILE=/opt/apps/kvas/bin/main/update
 DNS_LOCAL_DEMON_FILE=/opt/etc/ndm/netfilter.d/100-dns-local
-IPSET_REDIRECT_DEMON_FILE=/opt/etc/ndm/netfilter.d/100-proxy-redirect
 INFACE_NAMES_FILE=/opt/etc/inface_equals
 KVAS_START_FILE=/opt/etc/init.d/S96kvas
-
-# VLESS over Proxy
-PROXY_INFACE_NUMEBER=21
-PROXY_VLESS_NAME=Proxy${PROXY_INFACE_NUMEBER}
 
 # Файл с сетями, запросы к которым не должны попадать в тоннель
 # Данный файл постоянен, не доступен пользователям на редактирование
@@ -648,29 +641,10 @@ nets__get() {
 	echo "${find_interface}" | sed -n "s/${param_field}|${param_field}|${param_field}|${param_field}/${param_replace}/p"
 }
 
-#ToDo: перейти везде на новые обёртки
-has_ssr_enable() {
-	is_shadowsocks_enabled
-}
-
-is_shadowsocks_enabled() {
-	local tunnel_keenetic_name
-	tunnel_keenetic_name=$(get_config_value 'INFACE_CLI')
-	[ "${tunnel_keenetic_name}" = 'shadowsocks' ]
-}
-
-is_vless_over_proxy_enabled() {
-	local tunnel_keenetic_name
-	tunnel_keenetic_name=$(get_config_value 'INFACE_CLI')
-	if [ -z "${tunnel_keenetic_name}" ] ; then
-		error "[func] В конфигурации KVASEC не найдена информация о тоннеле"
-		false
-		return
-	fi
-
-	[ "${tunnel_keenetic_name}" = "${PROXY_VLESS_NAME}" ]
-}
-
+## Compatibility guards for obsolete branches that remain in shared routing
+## helpers. KVASEC no longer permits or starts these clients.
+has_ssr_enable() { return 1; }
+is_shadowsocks_enabled() { return 1; }
 
 has_adguard_enable() {
 	if [ -f "${ADGUARDHOME_DEMON}" ]; then  
@@ -931,15 +905,7 @@ vpn__get_tunnel_addresses() {
 	echo ''
 }
 
-get_tunnel_addresses() {
-	if is_shadowsocks_enabled ; then
-		echo $(get_from_json "${SHADOWSOCKS_CONF}" 'server')
-	elif is_vless_over_proxy_enabled ; then
-		echo $(get_from_json "${VLESS_CONFIG_FILE}" 'address' 'outbounds')
-	else
-		echo $(vpn__get_tunnel_addresses "$(get_config_value INFACE_CLI)")
-	fi
-}
+get_tunnel_addresses() { echo "$(vpn__get_tunnel_addresses "$(get_config_value INFACE_CLI)")"; }
 
 get_tunnel_ip() {
 	local ips

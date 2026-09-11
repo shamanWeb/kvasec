@@ -3,7 +3,7 @@
 -------------------------------------------------------------------
 Пакет представляет собой обвязку или интерфейс командной строки
 для защиты Вашего соединения при обращении к определенным доменам.
-Поддержка: VLESS, Shadowsocks, OpenVPN, Wireguard, IKE
+Поддержка: только AmneziaWG-интерфейсы (opkgtun)
 
 == ОСНОВНЫЕ ==
 
@@ -40,21 +40,13 @@ kvas tags update [force]     - обновить список заквасок с
 == VPN ПОДКЛЮЧЕНИЯ ==
 
 kvas vpn                     - текущий VPN интерфейс и состояние
-kvas vpn set                 - выбрать VPN из списка
-kvas vpn set vless           - переключение на VLESS
+kvas vpn set                 - выбрать AmneziaWG-интерфейс из списка
 kvas vpn reset               - обновить iptables для VPN
 kvas vpn rescan|scan         - сканирование интерфейсов роутера
 kvas vpn net|guest           - правила для гостевой/VPN сети
 kvas vpn net|guest add       - подключить гостевую сеть к VPN
 kvas vpn net|guest del       - отключить гостевую сеть от VPN
 kvas vpn gateway <IP>        - VPN через устройство в локальной сети
-
-== VLESS ==
-
-kvas vless new               - настройка VLESS (запрос ссылки vless://)
-
-
-
 
 
 == DNS ==
@@ -143,7 +135,7 @@ opkg install <файл>.ipk --force-reinstall
 
 kvas add ya.ru test.ru       - добавить несколько доменов
 kvas add ya.ru              - добавить ya.ru в список
-kvas vpn set vless          - переключиться на VLESS
+kvas vpn set                - выбрать AmneziaWG-интерфейс
 kvas route add full 1.2.3.4 - всё от 1.2.3.4 в тоннель
 kvas route exclude 5.6.7.8  - исключить 5.6.7.8
 kvas route refresh          - применить маршруты

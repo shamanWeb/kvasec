@@ -25,7 +25,7 @@ iptables метит трафик к этим IP, `ip rule` заворачива�
 - адаптирован под **AmneziaWG-туннель** (`opkgtunNN`), который создаётся awg-manager'ом
   **в обход NDM** — из-за чего штатные механизмы kvas требуют доработок (см. §2, §6);
 - собирается и ставится **напрямую из репозитория** (`build.sh`), без Windows/molot-SDK;
-- **Hysteria 2 и Failover удалены** — не поддерживаются. Остаётся ядро + VLESS + adblock.
+- **Поддерживается только AmneziaWG** — другие VPN-клиенты не используются KVASEC.
 
 ## 2. Как работает маршрутизация (кратко)
 
@@ -65,12 +65,12 @@ postinst настраивает `/opt/etc/dnsmasq.conf` идемпотентно
 opt/
 ├── bin/
 │   ├── kvas                      # точка входа CLI
-│   ├── libs/{main,vpn,vless,check,debug,route,tags,adblock,hosts,update,ndm_d,monitor,keen_api}
+│   ├── libs/{main,vpn,check,debug,route,tags,adblock,hosts,update,ndm_d,monitor,keen_api}
 │   ├── main/{setup,upgrade,update,adblock,dnsmasq,ipset,ipset_domain,check_vpn,adguard}
 │   └── monitor/                  # Web UI (socat httpd + cgi-bin/manage.sh + www/index.html)
 ├── etc/
 │   ├── conf/{kvas.conf,kvas.list,dnsmasq.conf,kvas-doh-block.dnsmasq,adblock.sources,...}
-│   ├── init.d/{S96kvas, S99kvas-awg-route(watcher), S97xray, S99adguard}
+│   ├── init.d/{S96kvas, S99kvas-awg-route(watcher), S99adguard}
 │   └── ndm/                      # хуки NDM (netfilter.d/100-vpn-mark и 100-dns-local → /opt/etc/ndm)
 ```
 `bin/libs/ndm` генерируется postinst'ом из `etc/ndm/ndm` (несёт `RULE_PRIORITY`).
@@ -87,7 +87,7 @@ kvas test                      # диагностика (для opkgtun* — п�
 kvas update                    # обновить ipset/маршруты
 kvas upgrade                   # обновить пакет из GitHub-релиза форка
 kvas monitor web [stop]        # Web UI на :8085 (управление списком, автозапуск после ребута)
-kvas vpn set vless             # переключение на VLESS
+kvas vpn set                   # выбор AmneziaWG-интерфейса
 kvas route add|del full|list|exclude <IP>   # роутинг по IP/устройствам
 kvas adblock on|off|add|del    # блокировка рекламы
 ```
