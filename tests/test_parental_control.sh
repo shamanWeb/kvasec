@@ -35,3 +35,4 @@ grep -F 'adguard_active && json_error "AdGuard Home всё ещё запущен
 grep -F 'adguard_web_backup || json_error' "$CGI" >/dev/null
 grep -F 'adguard_web_restore > "$ADGUARD_WEB_LOG"' "$CGI" >/dev/null
 grep -F 'web|local) _answer=n' "$ROOT/opt/bin/libs/vpn" >/dev/null
+grep -F 'if [ ! -x /opt/bin/AdGuardHome ]; then' "$ROOT/opt/bin/libs/vpn" >/dev/null
