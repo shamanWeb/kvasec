@@ -4,7 +4,6 @@
 . /opt/apps/kvas/bin/libs/ndm
 . /opt/apps/kvas/bin/libs/adblock
 . /opt/apps/kvas/bin/libs/tags
-. /opt/apps/kvas/bin/libs/vless
 
 MINUS=10
 
@@ -109,27 +108,13 @@ current_cli_vpn_interface() {
 reset_all_connection(){
 	ready "${prefix}Перезапускаем VPN и ISP соединения..."
 	{
-		if is_shadowsocks_enabled ; then
-			log_warning 'Перезапуск клиента ShadowSocks (рестарт тоннеля)'
+		inface=$(current_cli_vpn_interface)
+		log_warning "Перезапуск сетевого интерфейса ${inface}"
 
-			/opt/etc/init.d/S22shadowsocks stop &>/dev/null
-			# reset_ISP_connection
-			/opt/etc/init.d/S22shadowsocks start &>/dev/null
-		else
-			inface=$(current_cli_vpn_interface)
-			log_warning "Перезапуск сетевого интерфейса ${inface}"
-
-			if is_vless_over_proxy_enabled ; then
-				log_warning 'Перезапуск клиента VLESS (рестарт тоннеля)'
-
-				${XRAY_INIT} restart
-			fi
-
-			cli_request="localhost:79/rci/interface/${inface}"
+		cli_request="localhost:79/rci/interface/${inface}"
 #			curl -s -d '{"down":"true"}' "${cli_request}"  &>/dev/null
 #			reset_ISP_connection
-			curl -s -d '{"up":"true"}' "${cli_request}"  &>/dev/null
-		fi
+		curl -s -d '{"up":"true"}' "${cli_request}"  &>/dev/null
 	} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
 
 }
@@ -150,13 +135,12 @@ cmd_kvas_init(){
 	warning "${mess}"
 	print_line
 
-#	Производим перезапуск подключения к интернету,
-#	если НЕ режим update и если текущее подключение не ssr.
-#	В режиме update тоннель уже поднят — лишний бунс интерфейса/xray
+	#	Производим перезапуск подключения к интернету, кроме update.
+	#	В режиме update тоннель уже поднят — лишний bounce интерфейса
 #	только рвёт связь и провоцирует флаш таблицы маршрутизации.
 #	Правила/таблица 1001 при update и так пересоздаются через update_iptables
 #	(ip4__mark__create_chain → ip4__route__add_table + ip4__rule__add_mark_to_table).
-	if [ "${stage}" != update ] && { [ "${stage}" = refresh ] || ! has_ssr_enable ; } ; then
+	if [ "${stage}" != update ]; then
 			reset_all_connection
 	fi
 
@@ -203,15 +187,6 @@ all_services_restart() {
 		service_restart 'DNS сервер DNSCrypt' 'S09dnscrypt-proxy2'
 	fi
 
-	if is_shadowsocks_enabled ; then
-		log_warning 'Перезапуск клиента ShadowSocks (рестарт всех служб)'
-
-		service_restart 'клиент ShadowSocks' 'S22shadowsocks'
-	elif is_vless_over_proxy_enabled ; then
-		log_warning 'Перезапуск клиента VLESS'
-
-		service_restart 'клиент VLESS' 'S24xray'
-	fi
 }
 
 
@@ -2095,10 +2070,6 @@ EOF
 			# получаем описание интерфейса
 			description=$(get_value_interface_field "${inface_cli}" description | sed 's|\/|\\/|g')
 
-			# Ищем интерфейс PROXY_VLESS_NAME в списке и обновляем его описание 
-			# данное имя (PROXY_VLESS_NAME) дается интерфейсу при его создании и оно уникально, чтобы не спутать его с другими Proxy
-			[[ "${inface_cli}" == "${PROXY_VLESS_NAME}" ]] && description="${description} [vless]"
-
 			# вставляем описание в файл /opt/etc/inface_equals
 			[ -n "${description}" ] && \
 				sed -i 's/\('"${inface_cli}"'.*\)/\1|'"${description}"'/' "${INFACE_NAMES_FILE}"
@@ -2299,64 +2270,15 @@ cmd_interface_change() {
 	is_install_stage="${2:-no}"
     
 		show_interface_name_list_process "${answer}"
+	# KVASEC routes only through an AmneziaWG interface created by awg-manager.
+	awk -F'|' '$2 ~ /^opkgtun[0-9]+$/ { print }' "${INFACE_NAMES_FILE}" > "${INFACE_NAMES_FILE}.awg" && \
+		[ -s "${INFACE_NAMES_FILE}.awg" ] && mv -f "${INFACE_NAMES_FILE}.awg" "${INFACE_NAMES_FILE}"
+	rm -f "${INFACE_NAMES_FILE}.awg"
         #	Отображаем список текущих интерфейсов с номерами по порядку и данными об их доступности
 		select_vpn_interface "${is_install_stage}"
 	
 }
 
-
-create_vless_config(){
-	local vless_link=''
-	while true; do
-		vless_link=''
-		read_value "Ведите ссылку в формате 'vless://[данные]' (q-пропустить, r-повторить):" vless_link
-		if [ "${vless_link}" = "q" ] || [ -z "${vless_link}" ]; then
-			echo "Настройка VLESS пропущена."
-			echo "Для настройки позже используйте: kvas vless new"
-			print_line
-			return 0
-		fi
-		[ -f "${VLESS_CONFIG_FILE}" ] || cp "${VLESS_CONFIG_ORIGINAL_FILE}" "${VLESS_CONFIG_FILE}"
-		vless_link_parse "${vless_link}" "${VLESS_CONFIG_FILE}"
-		if [ $? -eq 0 ]; then
-			break
-		fi
-		echo -e "${RED}Ошибка в ссылке. Попробуйте снова (r-повторить, q-пропустить)${NOCL}"
-	done
-	print_line
-}
-
-start_vless(){
-	local _inface_entware=${1}
-	# Если нет файла конфигурации proxy vless
-	# то запросим ссылку и создаем его
-	[ -f ${VLESS_CONFIG_FILE} ] || create_vless_config
-	# Если ссылка была пропущена — конфига нет, выходим без ошибки
-	[ -f ${VLESS_CONFIG_FILE} ] || { echo "VLESS не настроен. Выполните: kvas vless new"; return 0; }
-	grep -q @ ${VLESS_CONFIG_FILE} && create_vless_config
-	# Если после повторного запроса конфига всё нет — пропускаем
-	[ -f ${VLESS_CONFIG_FILE} ] || { echo "VLESS не настроен. Выполните: kvas vless new"; return 0; }
-	
-	# Проверка конфигурации xray
-	check_xray_config=$(${XRAY} run -test -c ${VLESS_CONFIG_FILE})
-
-	if echo "${check_xray_config}" | grep -q "Configuration OK" ; then
-
-		# Запуск xray в случае, если конфигурация xray не содержит ошибок
-		ready "Запускаем xray сервис..."
-		service_action S97xray start && when_ok "УСПЕШНО" 
-		vpn_on "${_inface_entware}" &> /dev/null
-		# Проверяем работу (без вывода)
-		test_vless_proxy "${_inface_entware}" >/dev/null 2>&1
-		
-	else
-		# В случае, если есть ошибки в файле конфигурации, выводим их в консоль
-		echo -e "${BLUE}В файле ${VLESS_CONFIG_FILE} обнаружены следующие ошибки:${NOCL}"
-		print_line
-		echo -e "${RED}${check_xray_config}${NOCL}"
-		exit 1
-	fi
-}
 
 switch_vpn_on(){
 #	entware интерфейс
@@ -2365,25 +2287,10 @@ switch_vpn_on(){
 #	Меняем интерфейс в файле ndm
 	ndm_interface_change "${inface_entware}" "${cli_inface}"
 	
-	# Останавливаем xray, если запушен	
-	${XRAY_INIT} stop &> /dev/null
-
-	if [[ "${inface_entware}" =~ ${SSR_ENTWARE_TEMPL} ]]; then
-		vpn_off &> /dev/null
-		shadowsocks_backup
-		shadowsocks_on
-
-	else
-		shadowsocks_off &> /dev/null
-		
-		# Если выбран proxy vless kvas интерфейс
-		if [ "${cli_inface}" = "${PROXY_VLESS_NAME}" ] ; then
-			start_vless "${inface_entware}"
-		else
-			# Если выбран другой VPN интерфейс 
-			vpn_on "${inface_entware}"
-		fi
-	fi
+	case "${inface_entware}" in
+		opkgtun*) vpn_on "${inface_entware}" ;;
+		*) error "Поддерживается только туннель AmneziaWG (opkgtun)."; return 1 ;;
+	esac
 	[ "${is_install_stage}" = no ] && cmd_kvas_init "no" &> /dev/null
 
 	#------------------------------------------------------
@@ -2398,12 +2305,6 @@ switch_vpn_on(){
 			bridge_vpn_access_add "${iface}" #&>/dev/null && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
 		done
 	}
-
-	[ -f /opt/etc/cron.5mins/check_vpn ] || {
-		ready "Устанавливаем проверку зависания VPN соединения в cron."
-		ln -s /opt/apps/kvas/bin/main/check_vpn /opt/etc/cron.5mins/check_vpn && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
-	}
-
 
 }
 
@@ -2452,7 +2353,7 @@ select_vpn_interface() {
 			continue
 		elif [[ "$num_vpn_inface" =~ ^[Ss]$ ]]; then
 			print_line
-			echo -e "${YELLOW}Выбор интерфейса пропущен. Настройка позже: kvas vless new${NOCL}"
+			echo -e "${YELLOW}Выбор интерфейса пропущен. Настройте AmneziaWG и повторите kvas setup.${NOCL}"
 			print_line
 			break
 		elif [[ "$num_vpn_inface" =~ ^[Qq]$ ]]; then

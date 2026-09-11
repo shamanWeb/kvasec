@@ -32,8 +32,15 @@ require_token() {
 
 DNS_LOG=/tmp/kvas-dns.log
 
+# The DNS cache belongs to one CGI request.  A shared file used to be truncated
+# by concurrent polls, producing random empty/wrong domain labels.
+IP_CACHE=/tmp/kvas-ip-cache.$$
+PTR_CACHE=/tmp/kvas-ptr-cache.txt
+PTR_PENDING_DIR=/tmp/kvas-ptr-pending
+PTR_TTL=86400
+trap 'rm -f "$IP_CACHE" "${IP_CACHE}.tmp"' EXIT HUP INT TERM
+
 # Build IP→domain cache from DNS log (one pass, fast)
-IP_CACHE=/tmp/kvas-ip-cache.txt
 build_ip_cache() {
 	[ ! -f "$DNS_LOG" ] || [ ! -s "$DNS_LOG" ] && return
 	: > "$IP_CACHE"
@@ -46,14 +53,36 @@ build_ip_cache() {
 	# "query[A] <domain> from <IP>" — map client IP → last queried domain
 	grep 'query\[A\]' "$DNS_LOG" 2>/dev/null | \
 		sed -n 's/.*query\[A\] \([^ ]*\) from \([0-9][0-9.]*\).*/\2=\1/p' >> "$IP_CACHE"
-	# Deduplicate — keep last (most recent)
+	# Deduplicate — keep last (most recent).  The previous awk expression kept
+	# the first occurrence despite the comment, so CDN addresses got stale names.
 	if [ -s "$IP_CACHE" ]; then
-		awk -F= '!seen[$1]++' "$IP_CACHE" > "${IP_CACHE}.tmp"
+		awk -F= '{ last[$1]=$0 } END { for (ip in last) print last[ip] }' "$IP_CACHE" > "${IP_CACHE}.tmp"
 		mv "${IP_CACHE}.tmp" "$IP_CACHE"
 	fi
 }
 
-# Resolve IP using cache then reverse DNS
+# Schedule a bounded background PTR request.  The CGI response never waits for
+# external DNS; a later poll will use the cached result.  A negative result is
+# cached too, preventing repeated lookups for CDN addresses without a PTR.
+schedule_ptr_lookup() {
+	local ip="$1"
+	printf '%s\n' "$ip" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || return
+	mkdir -p "$PTR_PENDING_DIR" 2>/dev/null || return
+	if mkdir "$PTR_PENDING_DIR/$ip" 2>/dev/null; then
+		(
+			name=""
+			if command -v dig >/dev/null 2>&1; then
+				name=$(dig +time=1 +tries=1 +short -x "$ip" 2>/dev/null | head -1 | sed 's/\.$//')
+			fi
+			now=$(date +%s 2>/dev/null || echo 0)
+			printf '%s|%s|%s\n' "$ip" "$now" "$name" >> "$PTR_CACHE" 2>/dev/null
+			rmdir "$PTR_PENDING_DIR/$ip" 2>/dev/null
+		) >/dev/null 2>&1 &
+	fi
+}
+
+# Resolve IP using the current DNS cache, then a persistent asynchronous PTR
+# cache.  Unknown addresses are returned as IPs immediately.
 cached_resolve() {
 	local ip="$1"
 	[ -z "$ip" ] && return
@@ -62,17 +91,18 @@ cached_resolve() {
 		cached=$(grep "^${ip}=" "$IP_CACHE" 2>/dev/null | tail -1 | cut -d= -f2)
 		[ -n "$cached" ] && [ "$cached" != "$ip" ] && echo "$cached" && return
 	}
-	local name=""
-	if command -v dig >/dev/null 2>&1; then
-		name=$(dig +short -x "$ip" 2>/dev/null | sed 's/\.$//')
+	local ptr now
+	now=$(date +%s 2>/dev/null || echo 0)
+	ptr=$(awk -F'|' -v ip="$ip" -v now="$now" -v ttl="$PTR_TTL" '
+		$1 == ip && now - $2 <= ttl { found=1; value=$3 }
+		END { if (found) print value == "" ? "__NO_PTR__" : value }
+	' "$PTR_CACHE" 2>/dev/null)
+	if [ -n "$ptr" ]; then
+		[ "$ptr" = "__NO_PTR__" ] && echo "$ip" || echo "$ptr"
+		return
 	fi
-	if [ -z "$name" ] && command -v nslookup >/dev/null 2>&1; then
-		name=$(nslookup "$ip" 2>/dev/null | awk '/^Name:/ {a=1; next} a && /^Address/ {print $NF; exit}')
-		[ -z "$name" ] && name=$(nslookup "$ip" 2>/dev/null | grep 'name = ' | sed "s/.*name = //; s/\.$//")
-	fi
-	[ -z "$name" ] && name="$ip"
-	echo "${ip}=${name}" >> "$IP_CACHE" 2>/dev/null
-	echo "$name"
+	schedule_ptr_lookup "$ip"
+	echo "$ip"
 }
 
 # Find last DNS query from a client IP (for port 53 connections)

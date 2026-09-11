@@ -1,7 +1,6 @@
 #!/bin/sh
 . /opt/apps/kvas/bin/libs/main
 . /opt/apps/kvas/bin/libs/vpn
-. /opt/apps/kvas/bin/libs/vless
 
 # В случае проблем с инсталляцией пакета ставим в значение true
 ANSWER_AGH=n
@@ -46,7 +45,7 @@ setup_print_welcome(){
 	print_line
 	echo -e "  Пакет представляет собой обвязку или интерфейс командной строки"
 	echo -e "  для защиты Вашего соединения при обращении к определенным доменам."
-	echo -e "  Поддержка: ${GREEN}VLESS${NOCL}, ${GREEN}Shadowsocks${NOCL}, OpenVPN, Wireguard, IKE"
+	echo -e "  Поддержка: ${GREEN}AmneziaWG${NOCL}"
 	print_line
 	echo -e "  Версия: ${GREEN}${full_version}${NOCL}"
 	print_line
@@ -168,19 +167,10 @@ restart_all_services(){
 
 	if cmd_adguardhome_status | grep -qE "(ВКЛЮЧЕН|ОТКЛЮЧЕН)" ; then
 		service_action dnsmasq stop
-		service_action shadowsocks stop 
 		service_action adguardhome restart 
 	else
-		if has_ssr_enable ; then
-			service_action xray stop
-			service_action shadowsocks restart 
-		else
-			service_action xray restart 
-			service_action dnsmasq restart 
-			get_dns_crypt_status | grep -q "on" && {
-				service_action dnscrypt-proxy2 restart  
-			}
-		fi
+		service_action dnsmasq restart
+		get_dns_crypt_status | grep -q "on" && service_action dnscrypt-proxy2 restart
 
 	fi
 
@@ -284,12 +274,8 @@ restore_backups(){
 	restore_backup "${ADGUARDHOME_CONFIG_BACKUP}" "${ADGUARDHOME_CONFIG}" "конфигурации AdGuardHome"
 	restore_backup "${ADGUARD_IPSET_FILE_BACKUP}" "${ADGUARD_IPSET_FILE}" "списка ipset для AdGuardHome"
 
-	restore_backup "${SHADOWSOCKS_CONF_BACKUP}" "${SHADOWSOCKS_CONF}" "конфигурации Shadowsocks"
-
 	restore_backup "${DNSMASQ_CONFIG_BACKUP}" "${DNSMASQ_CONFIG}" "конфигурации dnsmasq"
 	restore_backup "${DNSMASQ_IPSET_HOSTS_BACKUP}" "${DNSMASQ_IPSET_HOSTS}" "списка ipset для dnsmasq"
-
-	restore_backup "${VLESS_CONFIG_FILE_BACKUP}" "${VLESS_CONFIG_FILE}" "конфигурации xray vless"
 
 	restore_backup "${DNSCRYPT_CONFIG_BACKUP}" "${DNSCRYPT_CONFIG}" "конфигурации dnscrypt_proxy2"
 	restore_backup "${ADBLOCK_LIST_EXCEPTION_BACKUP}" "${ADBLOCK_LIST_EXCEPTION}" "списка хостов-исключений для блокировки рекламы"
@@ -315,8 +301,6 @@ save_backups(){
 	# Бэкап остальных конфигов
 	backup_copy "${ADGUARDHOME_CONFIG}" "${ADGUARDHOME_CONFIG_BACKUP}"
 	backup_copy "${ADGUARD_IPSET_FILE}" "${ADGUARD_IPSET_FILE_BACKUP}"
-
-	backup_copy "${SHADOWSOCKS_CONF}" "${SHADOWSOCKS_CONF_BACKUP}"
 
 	backup_copy "${DNSMASQ_CONFIG}" "${DNSMASQ_CONFIG_BACKUP}"
 	backup_copy "${DNSMASQ_IPSET_HOSTS}" "${DNSMASQ_IPSET_HOSTS_BACKUP}"
@@ -405,9 +389,7 @@ rm_package_files() {
 		rm_file /opt/etc/dnsmasq.d/kvas.dnsmasq
 		rm_dir /opt/etc/adblock
 		rm_dir /opt/tmp/adblock
-		rm_file /opt/etc/init.d/S97xray
 		rm_file /opt/bin/kvas
-		rm_dir /opt/etc/xray
 		rm_file /tmp/kvas-vpn-set.log
 	} && when_ok || when_bad
 }
@@ -549,9 +531,6 @@ cmd_install(){
 		opkg install iptables nano-full >/dev/null 2>&1
 	} && when_ok 'ГОТОВО' || when_bad 'ОШИБКА'
 
-	# Устанавливаем прокси пакет
-	cmd_install_proxy_package || return 1
-
 	mkdir -p "${KVAS_BACKUP_PATH}"
 	cat /dev/null > "${INSTALL_LOG}"
 
@@ -563,15 +542,8 @@ cmd_install(){
 	ln -sf "${home_dir}/etc/ndm/ifdestroyed.d/kvas-iface-del" "/opt/etc/ndm/ifdestroyed.d/kvas-iface-del"
 	ln -sf "${home_dir}/etc/ndm/netfilter.d/100-vpn-mark" "/opt/etc/ndm/netfilter.d/100-vpn-mark"
 
-	check_crypto_ssr_libs
-
 	[ -f "${KVAS_START_FILE}" ] || cp -f /opt/apps/kvas/etc/init.d/S96kvas "${KVAS_START_FILE}"
 	chmod +x "${KVAS_START_FILE}"
-
-	# Если не установлен xray - устанавливаем его
-	has_xray_installed || opkg install xray >/dev/null 2>&1
-	# Создаем ссылку на наш скрипт для запуска xray в /opt/etc/init.d 
-	[ -f "${XRAY_INIT}" ] || ln -s /opt/apps/kvas/etc/init.d/S97xray ${XRAY_INIT}
 
 	# Код отключения IPv6 не помогает
 	#if [ "$(ipv6_status)" = 0 ]; then
@@ -626,14 +598,8 @@ cmd_install(){
 			#	производим сканирование интерфейсов
 			cmd_interface_change no install
 		else
-#			Если изменений не было, то восстанавливаем соединение
-#			Не даём switch_vpn_on остановить/перезапускать xray
-			_XRAY_INIT_SAVE="$XRAY_INIT"
-			XRAY_INIT="/bin/true"
+			# Если изменений не было, то восстанавливаем AmneziaWG-маршрутизацию.
 			switch_vpn_on "${inface_entware}" "${cli_inface}"
-			XRAY_INIT="$_XRAY_INIT_SAVE"
-#			Убеждаемся что xray запущен (service_action игнорирует XRAY_INIT)
-			service_action S97xray start > /dev/null 2>&1
 		fi
 
 	else
@@ -875,9 +841,7 @@ cmd_uninstall() {
 		# 1. Останавливаем все сервисы
 		ready 'Останавливаем все сервисы'
 		{
-			[ -f /opt/etc/init.d/S97xray ] && /opt/etc/init.d/S97xray stop 2>/dev/null
 			[ -f /opt/etc/init.d/S99adguardhome ] && /opt/etc/init.d/S99adguardhome stop 2>/dev/null
-			[ -f /opt/etc/init.d/S22shadowsocks ] && /opt/etc/init.d/S22shadowsocks stop 2>/dev/null
 		} 2>/dev/null
 		when_ok 'УСПЕШНО' || when_bad 'ОШИБКА'
 
@@ -902,7 +866,6 @@ cmd_uninstall() {
 		ready 'Восстанавливаем DNS'
 		{
 			config__restore_from_opkg "${DNSMASQ_CONFIG}" 2>/dev/null
-			config__restore_from_opkg "${SHADOWSOCKS_CONF}" 2>/dev/null
 			[ -f /opt/etc/init.d/S56dnsmasq ] && [ -f /opt/etc/dnsmasq.conf ] && /opt/etc/init.d/S56dnsmasq restart >/dev/null 2>&1
 		} 2>/dev/null
 		when_ok 'УСПЕШНО' || when_bad 'ОШИБКА'
@@ -923,14 +886,10 @@ cmd_uninstall() {
 		# 8. При полном удалении — удаляем пакеты
 		if [ "${rm_type}" = full ]; then
 			ready 'Удаляем остаточные conffiles зависимых пакетов'
-			rm -f /opt/etc/shadowsocks.json /opt/etc/shadowsocks.json-opkg \
-			      /opt/etc/dnscrypt-proxy.toml /opt/etc/dnscrypt-proxy.toml-opkg 2>/dev/null
+			rm -f /opt/etc/dnscrypt-proxy.toml /opt/etc/dnscrypt-proxy.toml-opkg 2>/dev/null
 			when_ok 'ГОТОВО'
 			ready 'Удаляем пакеты, установленные KVAS...'
 			{
-				opkg --force-remove --force-depends remove xray >/dev/null 2>&1
-				opkg --force-remove --force-depends remove shadowsocks-libev-ss-redir >/dev/null 2>&1
-				opkg --force-remove --force-depends remove shadowsocks-libev-config >/dev/null 2>&1
 				opkg --force-remove --force-depends remove dnscrypt-proxy2 >/dev/null 2>&1
 				opkg --force-remove --force-depends remove nano-full >/dev/null 2>&1
 				opkg --force-remove --force-depends remove socat >/dev/null 2>&1

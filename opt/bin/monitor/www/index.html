@@ -138,10 +138,8 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <h3>Состояние системы</h3>
     <div class="card-row"><label>Пакет:</label><span class="value" id="sysPkg">-</span></div>
     <div class="card-row"><label>Версия:</label><span class="value" id="sysVer">-</span></div>
-    <div class="card-row"><label>Резерв VPN:</label><span class="value" id="sysMode">-</span></div>
+    <div class="card-row"><label>Туннель:</label><span class="value" id="sysMode">AmneziaWG</span></div>
     <div class="card-row"><label>Хостов:</label><span class="value" id="sysHosts">-</span></div>
-    <div class="card-row"><label>Служба Xray:</label><span class="value" id="sysXrayService">-</span></div>
-    <div class="card-row"><label>VLESS туннель:</label><span class="value" id="sysVless">-</span></div>
     <div class="card-row"><label>Обновления:</label><span class="value" id="sysUpdate">-</span>
       <button class="btn btn-sm" onclick="doCheckUpdate(this)" style="margin-left:8px;">Проверить</button>
     </div>
@@ -169,17 +167,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
       <div class="progress-bar"><div class="progress-fill" id="hostProgressFill"></div></div>
       <div class="progress-text" id="hostProgressText"></div>
     </div>
-  </div>
-
-
-  <!-- VPN -->
-
-  <div class="card">
-    <h3>VPN туннель</h3>
-    <div class="card-row">
-      <button class="btn btn-sm" onclick="vpnSet('vless',this)">VLESS</button>
-    </div>
-    <div id="vpnMsg" class="msg" style="white-space:pre-wrap;font-size:11px;max-height:200px;overflow-y:auto;"></div>
   </div>
 
   <!-- System Actions -->
@@ -395,6 +382,9 @@ var pollTimer = null;
 var selectedIps = new Set();
 var pollErrors = 0;
 var MAX_POLL_ERRORS = 5;
+var pollInFlight = false;
+var seenConnectionAt = new Map();
+var seenDnsAt = new Map();
 var deviceList = [];
 var currentAuthAction = doAuth;
 
@@ -764,18 +754,8 @@ function loadSystemStatus() {
     if (d.ok) {
       document.getElementById('sysPkg').textContent = d.pkg || '-';
       document.getElementById('sysVer').textContent = d.ver || '-';
-      document.getElementById('sysMode').textContent = d.mode || '-';
+      document.getElementById('sysMode').textContent = d.mode === 'amneziawg' ? 'AmneziaWG' : '-';
       document.getElementById('sysHosts').textContent = d.hosts || '-';
-      var xraySvc = d.xray_service || '-';
-      document.getElementById('sysXrayService').textContent = xraySvc === 'running' ? 'работает' : (xraySvc === 'stopped' ? 'остановлена' : (xraySvc === 'not_installed' ? 'не установлена' : xraySvc));
-      document.getElementById('sysVless').innerHTML = '<span style="color:#8b949e;">проверка...</span>';
-      api('/cgi-bin/manage.sh?action=tunnel_check', function(t) {
-        if (t.ok) {
-          var ok = '<span style="color:#3fb950;">\u2713</span> ';
-          var fail = '<span style="color:#f85149;">\u2717</span> ';
-          document.getElementById('sysVless').innerHTML = t.vless ? ok + 'работает' : fail + 'не работает';
-        }
-      });
     }
   });
 }
@@ -1309,7 +1289,7 @@ function toggleMonitor() {
   if (monitoring) startPolling(); else stopPolling();
 }
 
-function startPolling() { pollErrors = 0; poll(); pollTimer = setInterval(poll, 2000); setStatus('Мониторинг запущен', 'status-ok'); }
+function startPolling() { pollErrors = 0; pollInFlight = false; seenConnectionAt.clear(); seenDnsAt.clear(); poll(); pollTimer = setInterval(poll, 2000); setStatus('Мониторинг запущен', 'status-ok'); }
 
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -1332,6 +1312,7 @@ function getFilterParams() {
 function getDeviceFilter() { return document.getElementById('filterDevice').value; }
 
 function poll() {
+  if (pollInFlight) return;
   if (selectedIps.size === 0) {
     stopPolling(); monitoring = false;
     document.getElementById('btnStart').textContent = 'Запустить мониторинг';
@@ -1341,18 +1322,30 @@ function poll() {
   }
   var ips = [...selectedIps].join(',');
   var url = '/cgi-bin/data.sh?action=data&ips=' + encodeURIComponent(ips) + getFilterParams();
+  pollInFlight = true;
   fetch(url, {headers:{'X-KVAS-Token':AUTH_TOKEN}}).then(function(r){return r.json()}).then(function(data){
     pollErrors = 0;
     if (data.error) { logMsg('log-error', '<span class="log-err">' + data.error + '</span>'); return; }
     var count = 0;
     if (data.connections) data.connections.forEach(function(c){
+      var key = [c.proto, c.src, c.sport, c.dst, c.dport].join('|');
+      var now = Date.now(); var firstSeen = !seenConnectionAt.has(key);
+      seenConnectionAt.set(key, now);
+      if (!firstSeen) return;
       count++;
       var cls = c.proto === 'tcp' ? 'log-tcp' : 'log-udp';
       var dstDisplay = c.dst + ':' + c.dport;
       if (c.dname && c.dname !== c.dst) dstDisplay = c.dname + ' (' + c.dst + ':' + c.dport + ')';
       logMsg(cls, '<span class="log-ip">' + c.src + '</span> <span class="' + cls + '">' + c.proto.toUpperCase() + '</span> ' + c.src + ':' + c.sport + ' → ' + dstDisplay);
     });
-    if (data.dns) data.dns.forEach(function(d){ count++; logMsg('log-dns', '<span class="log-ip">DNS</span> ' + d.domain); });
+    if (data.dns) data.dns.forEach(function(d){
+      var dnsKey = d.raw || d.domain; var dnsNow = Date.now(); var firstDns = !seenDnsAt.has(dnsKey);
+      seenDnsAt.set(dnsKey, dnsNow);
+      if (firstDns) { count++; logMsg('log-dns', '<span class="log-ip">DNS</span> ' + d.domain); }
+    });
+    var expireBefore = Date.now() - 30000;
+    seenConnectionAt.forEach(function(value, key){ if (value < expireBefore) seenConnectionAt.delete(key); });
+    seenDnsAt.forEach(function(value, key){ if (value < expireBefore) seenDnsAt.delete(key); });
     if (count === 0 && pollErrors === 0) { logMsg('log-warn', '<span style="color:#d29922;">Нет данных. Проверьте: 1) Включён Conntrack 2) DNS-лог не пуст (kvas monitor + l) 3) Устройства активны</span>'); }
     if (count > 0) document.getElementById('pollCount').textContent = '+' + count + ' events';
   }).catch(function(err){
@@ -1365,7 +1358,7 @@ function poll() {
       logMsg('log-error', '<span class="log-err">Мониторинг остановлен</span>');
       setStatus('Ошибка: web-сервер не отвечает', 'status-err');
     }
-  });
+  }).then(function(){ pollInFlight = false; }, function(){ pollInFlight = false; });
 }
 
 function applyLogFilter() {

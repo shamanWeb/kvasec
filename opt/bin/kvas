@@ -5,7 +5,6 @@
 . /opt/apps/kvas/bin/libs/route
 . /opt/apps/kvas/bin/libs/tags
 . /opt/apps/kvas/bin/libs/update
-. /opt/apps/kvas/bin/libs/vless
 . /opt/apps/kvas/bin/libs/vpn
 . /opt/apps/kvas/bin/libs/monitor
 . /opt/apps/kvas/bin/main/setup
@@ -156,13 +155,11 @@ case "${1}" in
 		mkdir -p "$BKPDIR"
 		cp -f "$KVAS_LIST_FILE" "$BKPDIR/" 2>/dev/null
 		cp -f "$KVAS_CONF_FILE" "$BKPDIR/" 2>/dev/null
-		cp -f "$SHADOWSOCKS_CONF" "$BKPDIR/" 2>/dev/null
 		cp -f "$DNSMASQ_CONFIG" "$BKPDIR/" 2>/dev/null
 		cp -f "$DNSMASQ_IPSET_HOSTS" "$BKPDIR/" 2>/dev/null
 		cp -f "$DNSCRYPT_CONFIG" "$BKPDIR/" 2>/dev/null
 		cp -f "$ADGUARDHOME_CONFIG" "$BKPDIR/" 2>/dev/null
 		cp -f "$ADGUARD_IPSET_FILE" "$BKPDIR/" 2>/dev/null
-		cp -f "$VLESS_CONFIG_FILE" "$BKPDIR/" 2>/dev/null
 		[ -f "$KVAS_WEB_PASS" ] && cp -f "$KVAS_WEB_PASS" "$BKPDIR/" 2>/dev/null
 		echo "Резервная копия сохранена: $BKPDIR"
 		;;
@@ -173,7 +170,7 @@ case "${1}" in
 			BKP=$(ls -dt /opt/kvas_backup_* 2>/dev/null | head -1)
 			[ -z "$BKP" ] && echo "Нет резервных копий" && exit 1
 		fi
-		for _f in "$KVAS_LIST_FILE" "$KVAS_CONF_FILE" "$SHADOWSOCKS_CONF" "$DNSMASQ_CONFIG" "$DNSMASQ_IPSET_HOSTS" "$DNSCRYPT_CONFIG" "$ADGUARDHOME_CONFIG" "$ADGUARD_IPSET_FILE" "$VLESS_CONFIG_FILE"; do
+		for _f in "$KVAS_LIST_FILE" "$KVAS_CONF_FILE" "$DNSMASQ_CONFIG" "$DNSMASQ_IPSET_HOSTS" "$DNSCRYPT_CONFIG" "$ADGUARDHOME_CONFIG" "$ADGUARD_IPSET_FILE"; do
 			_b="${BKP}/$(basename $_f)"
 			[ -f "$_b" ] && cp -f "$_b" "$_f" 2>/dev/null && echo "Восстановлен: $(basename $_f)"
 		done
@@ -193,25 +190,6 @@ case "${1}" in
 	# Расширенные настройки
 
 	# Тоннели
-
-	vless)
-		case "${2}" in
-			new) 	rm -f "${VLESS_CONFIG_FILE}" 
-					start_vless "$(cat ${INFACE_NAMES_FILE} | grep vless | cut -d'|' -f2)"
-				;;
-			*) 		cmd_install_proxy_package 
-				;;
-		esac	
-			;;
-
-	ssr)
-		case "${2}" in
-			new)			cmd_shadowsocks_read_new_data ;;
-			port) 			cmd_shadowsocks_local_port_change "${3}" ;;
-			reset) 			cmd_shadowsocks_iptable_reset && all_services_restart;;
-			status | *) 	cmd_vpn_status ;;
-		esac
-		;;
 
 	vpn)
 		case "${2}" in
