@@ -18,6 +18,9 @@ BYPASS_DOMAIN=${BYPASS_DOMAIN:-}
 KVAS_CONF=${KVAS_CONF:-/opt/etc/kvas.conf}
 TMP_FILE="${RESULT_FILE}.$$"
 
+# shellcheck source=adguard_querylog.sh
+. "$(dirname "$0")/adguard_querylog.sh"
+
 umask 077
 trap 'rm -f "$TMP_FILE" "$LOCK_FILE" "$PID_FILE" "${TMP_FILE}.domains" "${TMP_FILE}.vpn" "${TMP_FILE}.dns"; rmdir "$LOCK_DIR" 2>/dev/null' EXIT HUP INT TERM
 printf '%s\n' "$$" > "$LOCK_FILE"
@@ -135,15 +138,25 @@ domain_filter() {
     '
 }
 
+observed_dns_domains() {
+    if adguard_querylog_active; then
+        # AdGuard owns DNS: its log is authoritative and a leftover dnsmasq
+        # file must not add obsolete domains to the check.
+        adguard_query_domains
+    else
+        {
+        [ -s "$DNS_LOG" ] && tail -2000 "$DNS_LOG" 2>/dev/null | sed -n 's/.*query\[[^]]*\] \([^ ]*\) from.*/\1/p'
+        command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\[' | sed -n 's/.*query\[[^]]*\] \([^ ]*\) from.*/\1/p'
+        } | domain_filter
+    fi
+}
+
 case "$MODE" in
     all)
         [ -f "$KVAS_LIST" ] && sed 's/^[*][.]\?//' "$KVAS_LIST" | domain_filter > "${TMP_FILE}.domains" || :
         ;;
     dns)
-        {
-            [ -s "$DNS_LOG" ] && tail -2000 "$DNS_LOG" 2>/dev/null
-            command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\['
-        } | sed -n 's/.*query\[[^]]*\] \([^ ]*\) from.*/\1/p' | domain_filter | tail -n 100 > "${TMP_FILE}.domains"
+        observed_dns_domains | tail -n 100 > "${TMP_FILE}.domains"
         ;;
     domain)
         valid_domain "$BYPASS_DOMAIN" || exit 1
@@ -153,10 +166,7 @@ case "$MODE" in
         VPN_LIMIT=$(( (MAX_DOMAINS + 1) / 2 ))
         DNS_LIMIT=$(( MAX_DOMAINS - VPN_LIMIT ))
         [ -f "$KVAS_LIST" ] && sed 's/^[*][.]\?//' "$KVAS_LIST" | domain_filter | head -n "$VPN_LIMIT" > "${TMP_FILE}.vpn" || :
-        {
-            [ -s "$DNS_LOG" ] && tail -1000 "$DNS_LOG" 2>/dev/null
-            command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\['
-        } | sed -n 's/.*query\[[^]]*\] \([^ ]*\) from.*/\1/p' | domain_filter | head -n "$DNS_LIMIT" > "${TMP_FILE}.dns"
+        observed_dns_domains | tail -n "$DNS_LIMIT" > "${TMP_FILE}.dns"
         cat "${TMP_FILE}.vpn" "${TMP_FILE}.dns" 2>/dev/null | awk '!seen[$0]++' | head -n "$MAX_DOMAINS" > "${TMP_FILE}.domains"
         ;;
 esac

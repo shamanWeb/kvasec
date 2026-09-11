@@ -15,6 +15,7 @@ grep -F 'log-facility=%s' "$WATCH" >/dev/null
 grep -F 'disable_dns_capture' "$WATCH" >/dev/null
 grep -F 'rm -f "$DNS_LOG"' "$WATCH" >/dev/null
 grep -F 'tail -300 "$DNS_LOG"' "$WATCH" >/dev/null
+grep -F 'adguard_query_mappings' "$WATCH" >/dev/null
 grep -F 'BLOCK_WATCH_LOCK_DIR' "$MANAGE" >/dev/null
 grep -F 'block_watch_start)' "$MANAGE" >/dev/null
 grep -F 'block_watch_stop)' "$MANAGE" >/dev/null
@@ -52,3 +53,19 @@ wait "$watch_pid" 2>/dev/null || true
 test ! -e "$WORK/pid"
 test ! -e "$WORK/lock"
 test ! -e "$WORK/dns.dnsmasq"
+
+# AdGuard's response is binary base64 in querylog.json.  It must still provide
+# a destination-IP → requested-domain mapping for the watcher.
+printf '%s\n' '{"QH":"adguard.example","Answer":"AAGBgAABAAEAAAAAB2FkZ3VhcmQHZXhhbXBsZQAAAQABwAwAAQABAAAAAAAEywBxCQ=="}' > "$WORK/adguard-querylog.json"
+printf '%s\n' '#!/bin/sh' 'printf "tcp 6 120 SYN_SENT src=192.168.1.55 dst=203.0.113.9 sport=50002 dport=443 [UNREPLIED]\\n"' > "$WORK/bin/conntrack"
+chmod +x "$WORK/bin/conntrack"
+PATH="$WORK/bin:$PATH" KVAS_ADGUARD_QUERYLOG_ACTIVE=1 ADGUARD_QUERY_LOG="$WORK/adguard-querylog.json" BLOCK_WATCH_EVENTS="$WORK/adguard-events" BLOCK_WATCH_PID="$WORK/adguard-pid" BLOCK_WATCH_LOCK_DIR="$WORK/adguard-lock" BLOCK_WATCH_DNS_CONF="$WORK/adguard.dnsmasq" BLOCK_WATCH_DNS_LOG="$WORK/adguard-dns.log" BLOCK_WATCH_DNS_RESTART_BIN=/bin/true BLOCK_WATCH_INTERVAL=1 sh "$WATCH" >/dev/null 2>&1 &
+watch_pid=$!
+for wait_event in 1 2 3 4; do
+  grep -F '|map|203.0.113.9|adguard.example' "$WORK/adguard-events" >/dev/null 2>&1 && break
+  sleep 1
+done
+grep -F '|map|203.0.113.9|adguard.example' "$WORK/adguard-events" >/dev/null
+kill "$watch_pid" 2>/dev/null || true
+wait "$watch_pid" 2>/dev/null || true
+test ! -e "$WORK/adguard.dnsmasq"
