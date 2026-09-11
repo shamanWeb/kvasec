@@ -30,6 +30,7 @@ tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F '[b]ypass_check.sh' >/
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/kvas' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/monitor/bypass_check.sh' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/monitor/block_watch.sh' >/dev/null
+tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/main/parental_dns' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/etc/ndm/netfilter.d/100-vpn-mark' >/dev/null
 ! tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/libs/vless$'
 ! tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/S97xray$'

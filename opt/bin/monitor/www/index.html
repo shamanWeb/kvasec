@@ -271,7 +271,14 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 
   <div class="card">
     <h3>Родительский контроль</h3>
-    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Заблокированные сайты добавляются в список блокировки рекламы (kvas adblock). Домены резолвятся в 0.0.0.0 и не открываются.</p>
+    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Заблокированные сайты добавляются в список блокировки рекламы. Домен и все его поддомены резолвятся в 0.0.0.0 и не открываются.</p>
+    <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <label>AdGuard Home:</label>
+      <span class="value" id="adguardStatus" style="color:#8b949e;">-</span>
+      <button class="btn btn-sm success" onclick="adguardOn(this)">Включить</button>
+      <button class="btn btn-sm danger" onclick="adguardOff(this)">Вернуть dnsmasq</button>
+    </div>
+    <p style="font-size:11px;color:#8b949e;margin:-6px 0 12px;">При первой установке откроется мастер AdGuard Home на порту 3000. Пока AdGuard включён, родительский контроль через dnsmasq недоступен.</p>
     <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
       <label>Блокировка рекламы (adblock):</label>
       <span class="value" id="adblockStatus" style="color:#8b949e;">-</span>
@@ -495,6 +502,7 @@ function showMain() {
   loadHosts();
   loadRouteLists();
   loadParentalList();
+  loadAdguardStatus();
   loadAdblockStatus();
   loadTags();
   fetchDevices();
@@ -1408,10 +1416,47 @@ function consoleClear() {
 }
 
 /* ========== PARENTAL CONTROL ========== */
+function loadAdguardStatus() {
+  api('/cgi-bin/manage.sh?action=adguard_status', function(d){
+    var el = document.getElementById('adguardStatus');
+    if (!el) return;
+    var state = d.adguard || 'unknown';
+    var labels = {on:'включен', off:'выключен', setup:'настраивается', not_installed:'не установлен'};
+    el.textContent = labels[state] || 'ошибка';
+    el.style.color = state === 'on' ? '#3fb950' : (state === 'setup' ? '#d29922' : '#8b949e');
+    if (state === 'setup') setTimeout(loadAdguardStatus, 3000);
+  });
+}
+
+function adguardOn(btn) {
+  if (!confirm('KVASEC сохранит текущие DNS-настройки перед включением локального AdGuard Home. Во время переключения DNS может быть кратко недоступен. Продолжить?')) return;
+  apiBtn('/cgi-bin/manage.sh?action=adguard_on', btn, function(d){
+    var el = document.getElementById('parentalMsg');
+    if (el) { el.className = d.ok ? 'msg ok' : 'msg err'; el.textContent = d.ok ? (d.msg || 'Настройка запущена') : (d.error || 'Ошибка'); }
+    loadAdguardStatus();
+    loadAdblockStatus();
+  });
+}
+
+function adguardOff(btn) {
+  if (!confirm('Остановить AdGuard Home и восстановить сохранённые dnsmasq, dnscrypt и маршрутизацию KVASEC?')) return;
+  apiBtn('/cgi-bin/manage.sh?action=adguard_off', btn, function(d){
+    var el = document.getElementById('parentalMsg');
+    if (el) { el.className = d.ok ? 'msg ok' : 'msg err'; el.textContent = d.ok ? (d.msg || 'dnsmasq восстановлен') : (d.error || 'Ошибка'); }
+    loadAdguardStatus();
+    loadAdblockStatus();
+  });
+}
+
 function loadAdblockStatus() {
   api('/cgi-bin/manage.sh?action=adblock_status', function(d){
     var el = document.getElementById('adblockStatus');
     if (!el) return;
+    if (d.adblock === 'unavailable') {
+      el.textContent = 'недоступен: активен AdGuard Home';
+      el.style.color = '#f85149';
+      return;
+    }
     var on = d.adblock === 'on';
     el.textContent = on ? 'включен' : 'выключен';
     el.style.color = on ? '#3fb950' : '#ff6b6b';
@@ -1420,6 +1465,10 @@ function loadAdblockStatus() {
 
 function adblockOn(btn) {
   apiBtn('/cgi-bin/manage.sh?action=adblock_on', btn, function(d){
+    if (!d.ok) {
+      var el = document.getElementById('parentalMsg');
+      if (el) { el.className = 'msg err'; el.textContent = d.error || 'Ошибка'; }
+    }
     loadAdblockStatus();
     loadParentalList();
   });
@@ -1427,6 +1476,10 @@ function adblockOn(btn) {
 
 function adblockOff(btn) {
   apiBtn('/cgi-bin/manage.sh?action=adblock_off', btn, function(d){
+    if (!d.ok) {
+      var el = document.getElementById('parentalMsg');
+      if (el) { el.className = 'msg err'; el.textContent = d.error || 'Ошибка'; }
+    }
     loadAdblockStatus();
     loadParentalList();
   });
@@ -1444,7 +1497,16 @@ function loadParentalList() {
     d.sites.forEach(function(s){
       var item = document.createElement('div');
       item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:4px 8px;border-bottom:1px solid #30363d;';
-      item.innerHTML = '<span style="color:#ff6b6b;">' + s + '</span><button class="btn btn-sm danger" style="padding:2px 8px;font-size:11px;" onclick="parentalDel(\'' + s + '\')">Удалить</button>';
+      var name = document.createElement('span');
+      name.style.color = '#ff6b6b';
+      name.textContent = s;
+      var remove = document.createElement('button');
+      remove.className = 'btn btn-sm danger';
+      remove.style.cssText = 'padding:2px 8px;font-size:11px;';
+      remove.textContent = 'Удалить';
+      remove.onclick = function(){ parentalDel(s); };
+      item.appendChild(name);
+      item.appendChild(remove);
       el.appendChild(item);
     });
   });

@@ -22,10 +22,105 @@ TAGS_FILE=/opt/etc/tags.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
 PARENTAL_LIST=/opt/etc/adblock/block.list
 PARENTAL_PAGE=/opt/apps/kvas/bin/monitor/www/blocked.html
+ADGUARD_WEB_PID=/tmp/kvas-adguard-web.pid
+ADGUARD_WEB_LOG=/tmp/kvas-adguard-web.log
+ADGUARD_WEB_BACKUP=/opt/kvas_backup/web-adguard-dns
 
 json_str() { printf '%s' "$1" | jq -Rs '.' 2>/dev/null || printf '"%s"' "$1" | sed 's/"/\\"/g'; }
 json_error() { printf '{"error":%s}\n' "$(json_str "$1")"; exit 0; }
 json_ok()    { printf '{"ok":true,"msg":%s}\n' "$(json_str "$1")"; exit 0; }
+
+adguard_active() {
+	[ -x /opt/etc/init.d/S99adguardhome ] && /opt/etc/init.d/S99adguardhome status 2>/dev/null | grep -q alive
+}
+
+adguard_setup_running() {
+	local pid
+	pid=$(cat "$ADGUARD_WEB_PID" 2>/dev/null)
+	case "$pid" in *[!0-9]*|'') return 1 ;; esac
+	[ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[k]vas adguard on web'
+}
+
+adguard_status_json() {
+	if adguard_active; then
+		echo '{"ok":true,"adguard":"on"}'
+	elif adguard_setup_running; then
+		echo '{"ok":true,"adguard":"setup"}'
+	elif [ -x /opt/bin/AdGuardHome ]; then
+		echo '{"ok":true,"adguard":"off"}'
+	else
+		echo '{"ok":true,"adguard":"not_installed"}'
+	fi
+}
+
+adguard_backup_file() {
+	local source="$1" name="$2"
+	if [ -e "$source" ]; then
+		cp -pf "$source" "$ADGUARD_WEB_BACKUP/$name"
+		rm -f "$ADGUARD_WEB_BACKUP/$name.absent"
+	else
+		rm -f "$ADGUARD_WEB_BACKUP/$name"
+		: > "$ADGUARD_WEB_BACKUP/$name.absent"
+	fi
+}
+
+adguard_web_backup() {
+	mkdir -p "$ADGUARD_WEB_BACKUP" || return 1
+	adguard_backup_file /opt/etc/kvas.conf kvas.conf || return 1
+	adguard_backup_file /opt/etc/dnsmasq.conf dnsmasq.conf || return 1
+	adguard_backup_file /opt/etc/init.d/S56dnsmasq S56dnsmasq || return 1
+	adguard_backup_file /opt/etc/init.d/S09dnscrypt-proxy2 S09dnscrypt-proxy2 || return 1
+	adguard_backup_file /opt/etc/init.d/S96kvas S96kvas || return 1
+	adguard_backup_file /opt/etc/init.d/S99adguardhome S99adguardhome || return 1
+}
+
+adguard_restore_file() {
+	local target="$1" name="$2"
+	if [ -f "$ADGUARD_WEB_BACKUP/$name.absent" ]; then
+		rm -f "$target"
+	elif [ -f "$ADGUARD_WEB_BACKUP/$name" ]; then
+		cp -pf "$ADGUARD_WEB_BACKUP/$name" "$target"
+	else
+		return 1
+	fi
+}
+
+# Restore the exact DNS/init state captured immediately before the Web UI
+# switch. It deliberately does not call the legacy `kvas adguard off`, which
+# regenerates dnsmasq.conf and can discard a user's DNS configuration.
+adguard_web_restore() {
+	local pid
+	if adguard_setup_running; then
+		pid=$(cat "$ADGUARD_WEB_PID")
+		kill "$pid" 2>/dev/null || true
+	fi
+	[ -x /opt/etc/init.d/S99adguardhome ] && /opt/etc/init.d/S99adguardhome stop >/dev/null 2>&1 || true
+	pidof AdGuardHome >/dev/null 2>&1 && killall AdGuardHome >/dev/null 2>&1 || true
+	[ -d "$ADGUARD_WEB_BACKUP" ] || return 1
+	adguard_restore_file /opt/etc/kvas.conf kvas.conf || return 1
+	adguard_restore_file /opt/etc/dnsmasq.conf dnsmasq.conf || return 1
+	adguard_restore_file /opt/etc/init.d/S56dnsmasq S56dnsmasq || return 1
+	adguard_restore_file /opt/etc/init.d/S09dnscrypt-proxy2 S09dnscrypt-proxy2 || return 1
+	adguard_restore_file /opt/etc/init.d/S96kvas S96kvas || return 1
+	adguard_restore_file /opt/etc/init.d/S99adguardhome S99adguardhome || return 1
+	[ -x /opt/etc/init.d/S56dnsmasq ] && /opt/etc/init.d/S56dnsmasq restart >/dev/null 2>&1 || return 1
+	[ -x /opt/etc/init.d/S09dnscrypt-proxy2 ] && /opt/etc/init.d/S09dnscrypt-proxy2 restart >/dev/null 2>&1 || true
+	type=iptables table=mangle /opt/etc/ndm/netfilter.d/100-vpn-mark >/dev/null 2>&1 || true
+	[ -x /opt/etc/init.d/S99kvas-awg-route ] && /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1 || true
+	rm -f "$ADGUARD_WEB_PID"
+}
+
+normalize_domain() {
+	domain=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+	case "$domain" in \*.*) domain=${domain#\*.} ;; esac
+	domain=${domain%.}
+	printf '%s\n' "$domain"
+}
+
+valid_domain() {
+	case "$1" in ''|.*|*.|*..*|*[!a-z0-9.-]*) return 1 ;; esac
+	printf '%s\n' "$1" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+}
 
 # Kill only the checker that KVAS started.  The cmdline guard prevents a stale
 # PID file from ever signalling an unrelated router process.
@@ -567,7 +662,9 @@ main() {
 			check_token "$token"
 			domain=$(echo "$QUERY_STRING" | sed 's/.*domain=//; s/&.*//' 2>/dev/null)
 			[ "$domain" = "$QUERY_STRING" ] && domain=""
-			[ -z "$domain" ] && json_error "domain required"
+			domain=$(normalize_domain "$domain")
+			valid_domain "$domain" || json_error "valid domain required"
+			adguard_active && json_error "Родительский контроль через dnsmasq недоступен, пока активен AdGuard Home"
 			# Автоматически включаем adblock, если выключен
 			if ! grep -q "addn-hosts=/opt/etc/adblock/ads.kvas.list" /opt/etc/dnsmasq.conf 2>/dev/null; then
 				echo "addn-hosts=/opt/etc/adblock/ads.kvas.list" >> /opt/etc/dnsmasq.conf
@@ -583,7 +680,9 @@ main() {
 			check_token "$token"
 			domain=$(echo "$QUERY_STRING" | sed 's/.*domain=//; s/&.*//' 2>/dev/null)
 			[ "$domain" = "$QUERY_STRING" ] && domain=""
-			[ -z "$domain" ] && json_error "domain required"
+			domain=$(normalize_domain "$domain")
+			valid_domain "$domain" || json_error "valid domain required"
+			adguard_active && json_error "Родительский контроль через dnsmasq недоступен, пока активен AdGuard Home"
 			out=$($KVAS_BIN adblock del "$domain" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "unblock failed: $out"
@@ -591,23 +690,54 @@ main() {
 			;;
 		adblock_status)
 			check_token "$token"
-			if grep -q "addn-hosts=/opt/etc/adblock/ads.kvas.list" /opt/etc/dnsmasq.conf 2>/dev/null; then
+			if adguard_active; then
+				echo '{"ok":true,"adblock":"unavailable"}'
+			elif grep -q "addn-hosts=/opt/etc/adblock/ads.kvas.list" /opt/etc/dnsmasq.conf 2>/dev/null; then
 				echo '{"ok":true,"adblock":"on"}'
 			else
 				echo '{"ok":true,"adblock":"off"}'
 			fi
 			;;
+		adguard_status)
+			check_token "$token"
+			adguard_status_json
+			;;
+		adguard_on)
+			check_token "$token"
+			if adguard_active; then
+				json_ok "AdGuard Home уже включен"
+			fi
+			if adguard_setup_running; then
+				json_ok "Настройка AdGuard Home уже выполняется"
+			fi
+			adguard_web_backup || json_error "Не удалось сохранить состояние DNS перед переключением"
+			: > "$ADGUARD_WEB_LOG"
+			"$KVAS_BIN" adguard on web > "$ADGUARD_WEB_LOG" 2>&1 &
+			echo $! > "$ADGUARD_WEB_PID"
+			json_ok "Состояние DNS сохранено. Запущена настройка AdGuard Home. Если это первая установка, откройте http://192.168.1.1:3000 и завершите мастер настройки. Кнопка «Вернуть dnsmasq» отменит настройку и восстановит сохранённое состояние."
+			;;
+		adguard_off)
+			check_token "$token"
+			[ -d "$ADGUARD_WEB_BACKUP" ] || json_error "Нет сохранённого состояния DNS: AdGuard был включён не через Web UI"
+			adguard_web_restore > "$ADGUARD_WEB_LOG" 2>&1 || json_error "Не удалось восстановить сохранённое состояние DNS"
+			adguard_active && json_error "AdGuard Home всё ещё запущен"
+			[ -x /opt/etc/init.d/S56dnsmasq ] && /opt/etc/init.d/S56dnsmasq status 2>/dev/null | grep -q alive || json_error "AdGuard остановлен, но dnsmasq не запустился"
+			json_ok "Восстановлены dnsmasq, dnscrypt и маршрутизация KVASEC"
+			;;
 		adblock_on)
 			check_token "$token"
+			adguard_active && json_error "Adblock через dnsmasq недоступен, пока активен AdGuard Home"
 			if ! grep -q "addn-hosts=/opt/etc/adblock/ads.kvas.list" /opt/etc/dnsmasq.conf 2>/dev/null; then
 				echo "addn-hosts=/opt/etc/adblock/ads.kvas.list" >> /opt/etc/dnsmasq.conf
 			fi
 			[ -f /opt/etc/adblock/ads.kvas.list ] || sh /opt/apps/kvas/bin/main/adblock >/dev/null 2>&1
+			/opt/apps/kvas/bin/main/parental_dns >/dev/null 2>&1
 			/opt/etc/init.d/S56dnsmasq restart >/dev/null 2>&1
 			echo '{"ok":true,"msg":"Adblock включен"}'
 			;;
 		adblock_off)
 			check_token "$token"
+			adguard_active && json_error "Adblock через dnsmasq недоступен, пока активен AdGuard Home"
 			sed -i '/addn-hosts=\/opt\/etc\/adblock\/ads.kvas.list/d' /opt/etc/dnsmasq.conf 2>/dev/null
 			/opt/etc/init.d/S56dnsmasq restart >/dev/null 2>&1
 			echo '{"ok":true,"msg":"Adblock выключен"}'

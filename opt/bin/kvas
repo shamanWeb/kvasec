@@ -257,7 +257,7 @@ case "${1}" in
 
 	adguard)
 		case "${2}" in
-			on) 			cmd_adguardhome_on ;;
+			on) 			cmd_adguardhome_on "${3}" ;;
 			off) 			cmd_adguardhome_off ;;
 			test)			cmd_adguard_check ;;
 			update)			cmd_adguard_update ;;

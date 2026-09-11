@@ -199,6 +199,10 @@ cmd_ads_add_host(){
 			echo "0.0.0.0 ${host}" >> "${ADBLOCK_HOSTS_FILE}" && \
 			when_ok "УСПЕШНО" || when_bad "С ОШИБКОЙ"
 		fi
+		/opt/apps/kvas/bin/main/parental_dns || {
+			error "Не удалось обновить правила dnsmasq для родительского контроля"
+			return 1
+		}
 		restart_dns_service
 	}
 }
@@ -214,10 +218,16 @@ cmd_ads_del_from_skip_list(){
 
 		if [ -f "${ADBLOCK_BLOCK_FILE}" ]; then
 			ready "Доменное имя ${host} удалено из списка блокировки рекламы"
-			sed -i "/.*${host}$/d" "${ADBLOCK_BLOCK_FILE}" && \
-			sed -i "/.*${host}$/d" "${ADBLOCK_HOSTS_FILE}" && \
-			[ -f "${ADBLOCK_LIST_EXCEPTION}" ] && sed -i "/.*${host}$/d" "${ADBLOCK_LIST_EXCEPTION}" && \
-			when_ok "УСПЕШНО" || when_bad "С ОШИБКОЙ"
+			tmp_file="${ADBLOCK_BLOCK_FILE}.tmp.$$"
+			awk -v domain="${host}" '$0 != domain' "${ADBLOCK_BLOCK_FILE}" > "${tmp_file}" && mv -f "${tmp_file}" "${ADBLOCK_BLOCK_FILE}" || return 1
+			tmp_file="${ADBLOCK_HOSTS_FILE}.tmp.$$"
+			awk -v domain="${host}" '$2 != domain' "${ADBLOCK_HOSTS_FILE}" > "${tmp_file}" && mv -f "${tmp_file}" "${ADBLOCK_HOSTS_FILE}" || return 1
+			if [ -f "${ADBLOCK_LIST_EXCEPTION}" ]; then
+				tmp_file="${ADBLOCK_LIST_EXCEPTION}.tmp.$$"
+				awk -v domain="${host}" '$0 != domain' "${ADBLOCK_LIST_EXCEPTION}" > "${tmp_file}" && mv -f "${tmp_file}" "${ADBLOCK_LIST_EXCEPTION}" || return 1
+			fi
+			/opt/apps/kvas/bin/main/parental_dns || return 1
+			when_ok "УСПЕШНО"
 			restart_dns_service
 		else
 			warning "Список блокировки еще не существует. "

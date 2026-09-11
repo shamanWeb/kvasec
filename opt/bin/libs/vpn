@@ -858,7 +858,12 @@ dns_server_install_remotely(){
 cmd_adguardhome_on() {
 
 	local _answer
-	read_ynq "Хотите подключить AdGuardHome на удаленном устройстве?" _answer
+	# Web UI always chooses the local scenario. The normal CLI keeps its
+	# interactive choice between a remote DNS server and a local installation.
+	case "${1:-}" in
+		web|local) _answer=n ;;
+		*) read_ynq "Хотите подключить AdGuardHome на удаленном устройстве?" _answer ;;
+	esac
 	if [ "${_answer}" = q ] ; then exit_q; print_line; exit 1; fi
 	if echo "${_answer}" | grep -qi y; then
 		# Если выбрали установку на удаленном устройсвте
