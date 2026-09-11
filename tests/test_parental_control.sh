@@ -30,7 +30,7 @@ grep -F 'address=/.%s/0.0.0.0' "$GENERATOR" >/dev/null
 # Web UI management starts the existing local setup non-interactively and
 # reports a real service state instead of claiming that AdGuard is available.
 grep -F 'adguard_status_json' "$CGI" >/dev/null
-grep -F '"$KVAS_BIN" adguard on web' "$CGI" >/dev/null
+grep -F 'start-stop-daemon -S -b -m -p "$ADGUARD_WEB_PID"' "$CGI" >/dev/null
 grep -F 'adguard_active && json_error "AdGuard Home всё ещё запущен"' "$CGI" >/dev/null
 grep -F 'adguard_web_backup || json_error' "$CGI" >/dev/null
 grep -F 'adguard_web_restore > "$ADGUARD_WEB_LOG"' "$CGI" >/dev/null

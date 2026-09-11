@@ -712,8 +712,8 @@ main() {
 			fi
 			adguard_web_backup || json_error "Не удалось сохранить состояние DNS перед переключением"
 			: > "$ADGUARD_WEB_LOG"
-			"$KVAS_BIN" adguard on web > "$ADGUARD_WEB_LOG" 2>&1 &
-			echo $! > "$ADGUARD_WEB_PID"
+			/opt/sbin/start-stop-daemon -S -b -m -p "$ADGUARD_WEB_PID" -O "$ADGUARD_WEB_LOG" -x "$KVAS_BIN" -- adguard on web || \
+				json_error "Не удалось запустить настройку AdGuard Home в фоне"
 			json_ok "Состояние DNS сохранено. Запущена настройка AdGuard Home. Если это первая установка, откройте http://192.168.1.1:3000 и завершите мастер настройки. Кнопка «Вернуть dnsmasq» отменит настройку и восстановит сохранённое состояние."
 			;;
 		adguard_off)
