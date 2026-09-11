@@ -285,6 +285,7 @@ restart_dnsmasq(){
 #--------------------------------------------------------------
 # Включаем в список блокировки уже зарекомендовавшие себя 100% рекламные домены
 add_regular_ads
+[ -x /opt/apps/kvas/bin/main/parental_dns ] && /opt/apps/kvas/bin/main/parental_dns
 # Проверяем на наличие необходимые файлы
 check_files_present
 print_line

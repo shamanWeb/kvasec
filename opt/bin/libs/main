@@ -46,6 +46,7 @@ ADBLOCK_LIST_EXCEPTION=/opt/etc/adblock/exception.list
 ADBLOCK_HOSTS_FILE=/opt/etc/adblock/ads.kvas.list
 ADBLOCK_SOURCES_LIST=/opt/etc/adblock/sources.list
 ADBLOCK_BLOCK_FILE=/opt/etc/adblock/block.list
+ADBLOCK_PARENTAL_DNS_FILE=/opt/etc/dnsmasq.d/kvas-parental.dnsmasq
 
 KVAS_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/kvas.conf
 KVAS_LIST_FILE_BACKUP=${KVAS_BACKUP_PATH}/kvas.list
