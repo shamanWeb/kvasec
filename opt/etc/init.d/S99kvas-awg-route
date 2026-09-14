@@ -9,8 +9,10 @@
 #   1) default в kvas VPN-redirect таблицах (1001; старая вестигиальная 4096)
 #      на opkgtunNN — иначе трафик из списка сваливается в WAN;
 #   2) ip rule fwmark 0xd1000 -> table 1001 (priority 99, выше system rule 104);
-#   3) цепочку KVAS_MARK в mangle — при пропаже пересоздаёт через штатный
-#      хук 100-vpn-mark (ip4_firewall_set_all_rules).
+#   3) цепочку KVAS_MARK в mangle — при пропаже ИЛИ пустой цепочке пересоздаёт
+#      через штатный хук 100-vpn-mark (ip4_firewall_set_all_rules).
+#      NDM при reload делает iptables -F (flush rules, не -X delete chain),
+#      поэтому chain существует, но пустая — детектируем по числу правил.
 #
 # Метка kvas 1.1.x = 0xd1000 -> table 1001. Для НЕ-opkgtun интерфейсов демон
 # сразу выходит (штатный NDM-механизм kvas работает сам).
@@ -53,12 +55,17 @@ watcher() {
         echo "$(date) fix: ip rule fwmark ${MARK} -> table ${RTABLE} (prio ${RPRIO})" >>"$LOG"
       fi
 
-      # 3) цепочка KVAS_MARK в mangle — при пропаже пересоздать штатным хуком
-      if ! iptables -t mangle -S KVAS_MARK >/dev/null 2>&1; then
+      # 3) цепочка KVAS_MARK в mangle — при пропаже ИЛИ пустой цепочке пересоздать.
+      # NDM при firewall-reload делает -F (flush rules, не -X delete chain): chain
+      # существует, но пуста → старая проверка через -S >/dev/null не замечала.
+      # Проверяем число правил (норма ≥5) и наличие jump из PREROUTING.
+      _km_rules=$(iptables -t mangle -S KVAS_MARK 2>/dev/null | grep -c "^-A")
+      _km_jump=$(iptables -t mangle -S PREROUTING 2>/dev/null | grep -c "KVAS_MARK")
+      if [ "${_km_rules}" -lt 5 ] || [ "${_km_jump}" -eq 0 ]; then
         if   [ -x "$NFHOOK_APP" ]; then type=iptables table=mangle "$NFHOOK_APP" >/dev/null 2>&1
         elif [ -x "$NFHOOK_ETC" ]; then type=iptables table=mangle "$NFHOOK_ETC" >/dev/null 2>&1
         fi
-        echo "$(date) fix: KVAS_MARK отсутствует -> перезапуск 100-vpn-mark" >>"$LOG"
+        echo "$(date) fix: KVAS_MARK восстановлен (rules=${_km_rules}, jumps=${_km_jump})" >>"$LOG"
       fi
 
       # 4) DoT-блок (DNS-over-TLS, порт 853) для LAN — форсируем DNS через роутер,
