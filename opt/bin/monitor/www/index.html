@@ -145,9 +145,9 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
       <div><div style="color:#8b949e;font-size:11px;">Handshake</div><div id="dashDpiHandshake" style="font-size:22px;font-weight:bold;">-</div></div>
       <div><div style="color:#8b949e;font-size:11px;">Всего дропов</div><div id="dashDpiTotal" style="font-size:22px;font-weight:bold;">-</div></div>
     </div>
-    <div class="legend"><span><span class="sw" style="background:#f85149"></span>дропов/мин</span></div>
+    <div class="legend"><span><span class="sw" style="background:#58a6ff"></span>дропов/мин</span><span><span class="sw" style="background:#d29922"></span>порог «лёгкая»</span><span><span class="sw" style="background:#f85149"></span>порог «блокировка»</span></div>
     <canvas id="chart-dpi-rate" style="width:100%;height:130px;display:block;"></canvas>
-    <div class="legend" style="margin-top:10px;"><span><span class="sw" style="background:#d29922"></span>% битых пакетов</span></div>
+    <div class="legend" style="margin-top:10px;"><span><span class="sw" style="background:#58a6ff"></span>% битых пакетов</span></div>
     <canvas id="chart-dpi-loss" style="width:100%;height:110px;display:block;"></canvas>
   </div>
 </div>
@@ -1101,7 +1101,6 @@ function fmtHsAge(sec) {
 }
 
 function setDpiUI(suffix, d) {
-  var led = document.getElementById('dpiLed' + suffix) || document.getElementById(suffix ? 'dashDpiLed' : 'dpiLed');
   // suffix '' -> bypass (dpiLed/dpiRate...), 'dash' -> dashboard (dashDpiLed...)
   var ids = suffix === 'dash'
     ? {led:'dashDpiLed', rate:'dashDpiRate', loss:'dashDpiLoss', hs:'dashDpiHandshake', tot:'dashDpiTotal'}
@@ -1115,9 +1114,11 @@ function setDpiUI(suffix, d) {
     return;
   }
   var r = d.drops_per_min || 0, lp = d.loss_pct || 0;
+  // Пороги откалиброваны по реальному фону порта 443 (~0.7/мин, 0% потерь):
+  // до 5/мин и 0% — фоновый шум (чисто); всплеск/потери — интерференция.
   var level, color, label;
-  if (r === 0 && lp === 0) { level='🟢'; color='#3fb950'; label='чисто, DPI не мешает'; }
-  else if (r <= 10 && lp < 2) { level='🟡'; color='#d29922'; label='лёгкая интерференция'; }
+  if (r <= 5 && lp < 1) { level='🟢'; color='#3fb950'; label='чисто, DPI не мешает'; }
+  else if (r <= 30 && lp <= 5) { level='🟡'; color='#d29922'; label='лёгкая интерференция'; }
   else { level='🔴'; color='#f85149'; label='активная блокировка / троттлинг'; }
   eLed.textContent = level + ' ' + label; eLed.style.color = color;
   if (eRate) { eRate.textContent = r + (suffix==='dash' ? '/мин' : ' пакетов/мин'); eRate.style.color = color; }
@@ -1134,8 +1135,10 @@ function dpiPoll() {
 }
 
 /* ---- canvas-график (портирован с серверного дашборда) ---- */
-function dpiDrawChart(canvas, data, times, color, unit) {
+// thresholds: [{value, color, label}] — горизонтальные пороговые линии
+function dpiDrawChart(canvas, data, times, color, unit, thresholds) {
   if (!canvas) return;
+  thresholds = thresholds || [];
   var dpr = window.devicePixelRatio || 1;
   var cssW = canvas.clientWidth || 300, cssH = canvas.clientHeight || 110;
   canvas.width = cssW * dpr; canvas.height = cssH * dpr;
@@ -1147,7 +1150,9 @@ function dpiDrawChart(canvas, data, times, color, unit) {
     return;
   }
   var dataMax = Math.max.apply(null, data);
-  var minY = 0, maxY = Math.max(dataMax * 1.15, 1), midY = (minY+maxY)/2;
+  // maxY учитывает нижний (жёлтый) порог, чтобы он всегда был виден как ориентир
+  var loThr = thresholds.length ? thresholds[0].value : 0;
+  var minY = 0, maxY = Math.max(dataMax * 1.15, loThr * 1.4, 1), midY = (minY+maxY)/2;
   var padL = 34*dpr, padR = 2*dpr, padT = 4*dpr, padB = 14*dpr;
   var plotW = canvas.width - padL - padR, plotH = canvas.height - padT - padB;
   ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1; ctx.fillStyle = '#484f58';
@@ -1157,6 +1162,21 @@ function dpiDrawChart(canvas, data, times, color, unit) {
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(canvas.width - padR, y); ctx.stroke();
     var lbl = (Math.abs(val) >= 10 || val === 0) ? Math.round(val).toString() : val.toFixed(1);
     ctx.fillText(lbl + unit, padL - 4*dpr, y);
+  });
+  // пороговые линии (пунктир) — видно, где «много», а где «мало»
+  thresholds.forEach(function(thr){
+    if (thr.value > maxY) return;  // порог выше шкалы — данные спокойные, не рисуем
+    var y = padT + plotH - plotH * (thr.value - minY) / (maxY - minY);
+    ctx.save();
+    ctx.setLineDash([4*dpr, 3*dpr]);
+    ctx.strokeStyle = thr.color; ctx.lineWidth = 1*dpr; ctx.globalAlpha = 0.7;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(canvas.width - padR, y); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = thr.color; ctx.globalAlpha = 0.9;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    ctx.font = (8.5*dpr)+'px monospace';
+    ctx.fillText(thr.label, padL + 3*dpr, y - 1*dpr);
+    ctx.globalAlpha = 1;
   });
   ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.5*dpr;
   data.forEach(function(v, i){
@@ -1186,8 +1206,14 @@ function loadDpiHistory() {
     var times = pts.map(function(p){ return p.t; });
     var rate = pts.map(function(p){ return p.rate; });
     var loss = pts.map(function(p){ return p.loss; });
-    dpiDrawChart(document.getElementById('chart-dpi-rate'), rate, times, '#f85149', '');
-    dpiDrawChart(document.getElementById('chart-dpi-loss'), loss, times, '#d29922', '%');
+    dpiDrawChart(document.getElementById('chart-dpi-rate'), rate, times, '#58a6ff', '', [
+      {value: 5,  color: '#d29922', label: '5 — лёгкая'},
+      {value: 30, color: '#f85149', label: '30 — активная блокировка'}
+    ]);
+    dpiDrawChart(document.getElementById('chart-dpi-loss'), loss, times, '#58a6ff', '%', [
+      {value: 1, color: '#d29922', label: '1% — лёгкая'},
+      {value: 5, color: '#f85149', label: '5% — активная'}
+    ]);
   });
 }
 
