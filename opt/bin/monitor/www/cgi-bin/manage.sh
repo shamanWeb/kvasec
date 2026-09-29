@@ -625,6 +625,52 @@ main() {
 			fi
 			echo ']}'
 			;;
+		tunnel_dpi)
+			# Индикатор DPI-интерференции (РКН/ТСПУ) на не-NDM AWG-туннеле.
+			# RX drops на opkgtunNN = пакеты, испорченные/отброшенные на пути —
+			# прямой след DPI (в отличие от awg0 сервера, где на входе всегда 0).
+			check_token "$token"
+			iface=$(sed -n 's/^INFACE_ENT=//p' /opt/etc/kvas.conf 2>/dev/null | tr -d ' \r')
+			[ -z "$iface" ] && iface=opkgtun10
+			stat="/sys/class/net/$iface/statistics"
+			if [ ! -d "$stat" ]; then
+				echo '{"ok":true,"up":false}'
+				return
+			fi
+			rx_drop=$(cat "$stat/rx_dropped" 2>/dev/null || echo 0)
+			rx_pkts=$(cat "$stat/rx_packets" 2>/dev/null || echo 0)
+			now=$(date +%s)
+			prev_file=/tmp/kvas_dpi_prev
+			rate=0; loss_pct=0
+			if [ -f "$prev_file" ]; then
+				read -r p_drop p_pkts p_time < "$prev_file"
+				dt=$((now - p_time)); dd=$((rx_drop - p_drop)); dp=$((rx_pkts - p_pkts))
+				if [ "$dd" -lt 0 ]; then
+					rate=0; loss_pct=0   # счётчик сбросился (реконнект туннеля)
+				else
+					[ "$dt" -gt 0 ] && rate=$(( dd * 60 / dt ))
+					[ $((dp + dd)) -gt 0 ] && loss_pct=$(( dd * 100 / (dp + dd) ))
+				fi
+			fi
+			echo "$rx_drop $rx_pkts $now" > "$prev_file"
+			hs=$(awg show "$iface" latest-handshakes 2>/dev/null | awk '{print $2; exit}')
+			hs_age=-1
+			[ -n "$hs" ] && [ "$hs" -gt 0 ] 2>/dev/null && hs_age=$((now - hs))
+			printf '{"ok":true,"up":true,"drops_total":%s,"drops_per_min":%s,"loss_pct":%s,"handshake_age":%s}\n' \
+				"${rx_drop:-0}" "${rate:-0}" "${loss_pct:-0}" "${hs_age:--1}"
+			;;
+		dpi_history)
+			# История DPI-интерференции для графика (собирается cron-скриптом
+			# dpi_history.sh раз в минуту, кольцевой буфер 1440 точек = 24ч).
+			check_token "$token"
+			if [ -s /opt/tmp/dpi-history.jsonl ]; then
+				printf '{"ok":true,"points":['
+				awk 'NR>1{printf ","} {printf "%s",$0}' /opt/tmp/dpi-history.jsonl
+				printf ']}\n'
+			else
+				echo '{"ok":true,"points":[]}'
+			fi
+			;;
 		backup)
 			check_token "$token"
 			out=$($KVAS_BIN backup 2>&1)
