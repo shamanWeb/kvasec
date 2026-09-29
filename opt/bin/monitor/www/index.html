@@ -126,6 +126,7 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
   <div class="tab" data-tab="tags" onclick="switchTab('tags')">Закваски</div>
   <div class="tab" data-tab="route" onclick="switchTab('route')">Маршрутизация</div>
   <div class="tab" data-tab="parental" onclick="switchTab('parental')">Родительский контроль</div>
+  <div class="tab" data-tab="adblock" onclick="switchTab('adblock')">Реклама</div>
   <div class="tab" data-tab="bypass" onclick="switchTab('bypass')">Мониторинг обхода</div>
   <div class="tab" data-tab="monitor" onclick="switchTab('monitor')">Мониторинг трафика</div>
 </div>
@@ -279,12 +280,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
       <button class="btn btn-sm danger" onclick="adguardOff(this)">Вернуть dnsmasq</button>
     </div>
     <p style="font-size:11px;color:#8b949e;margin:-6px 0 12px;">При первой установке откроется мастер AdGuard Home на порту 3000. Пока AdGuard включён, родительский контроль через dnsmasq недоступен.</p>
-    <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-      <label>Блокировка рекламы (adblock):</label>
-      <span class="value" id="adblockStatus" style="color:#8b949e;">-</span>
-      <button class="btn btn-sm success" onclick="adblockOn(this)">Adblock on</button>
-      <button class="btn btn-sm danger" onclick="adblockOff(this)">Adblock off</button>
-    </div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;">
       <div style="flex:1;min-width:250px;">
         <h4 style="font-size:13px;color:#58a6ff;margin-bottom:8px;">Заблокированные сайты</h4>
@@ -301,6 +296,31 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     </div>
   </div>
 
+</div>
+
+<!-- ========== TAB: Реклама ========== -->
+<div id="tab-adblock" class="tab-content">
+  <div class="card">
+    <h3>Блокировка рекламы</h3>
+    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Сетевая блокировка рекламы и трекеров для всех устройств за роутером (через dnsmasq). Работает для рекламы в играх и приложениях, баннеров и аналитики. Видеорекламу YouTube НЕ убирает (общий CDN). Домены из VPN-списка KVASEC автоматически исключаются из блокировки.</p>
+    <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <label>Статус:</label>
+      <span class="value" id="adblockStatus" style="color:#8b949e;">-</span>
+      <button class="btn btn-sm success" onclick="adblockOn(this)">Включить</button>
+      <button class="btn btn-sm danger" onclick="adblockOff(this)">Выключить</button>
+    </div>
+    <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;">
+      <label>Заблокировано доменов:</label>
+      <span class="value" id="adblockCount">-</span>
+      <button class="btn btn-sm primary" onclick="adblockUpdate(this)">Обновить списки</button>
+    </div>
+    <p style="font-size:11px;color:#8b949e;margin-top:6px;">«Обновить списки» скачивает актуальные списки рекламы из источников (может занять до минуты). Недоступно, пока активен AdGuard Home.</p>
+    <div id="adblockMsg" class="msg"></div>
+    <div class="progress-wrap" id="adblockProgress">
+      <div class="progress-bar"><div class="progress-fill" id="adblockProgressFill"></div></div>
+      <div class="progress-text" id="adblockProgressText"></div>
+    </div>
+  </div>
 </div>
 
 <!-- ========== TAB: Мониторинг обхода ========== -->
@@ -534,6 +554,7 @@ function switchTab(name) {
     clearInterval(blockWatchTimer);
     blockWatchTimer = null;
   }
+  if (name === 'adblock') loadAdblockStatus();
 }
 
 /* ========== TAGS ========== */
@@ -1451,24 +1472,25 @@ function adguardOff(btn) {
 function loadAdblockStatus() {
   api('/cgi-bin/manage.sh?action=adblock_status', function(d){
     var el = document.getElementById('adblockStatus');
+    var cnt = document.getElementById('adblockCount');
     if (!el) return;
     if (d.adblock === 'unavailable') {
       el.textContent = 'недоступен: активен AdGuard Home';
       el.style.color = '#f85149';
+      if (cnt) cnt.textContent = '-';
       return;
     }
     var on = d.adblock === 'on';
-    el.textContent = on ? 'включен' : 'выключен';
+    el.textContent = on ? 'включена' : 'выключена';
     el.style.color = on ? '#3fb950' : '#ff6b6b';
+    if (cnt) cnt.textContent = (d.count && d.count > 0) ? d.count.toLocaleString('ru-RU') : '—';
   });
 }
 
 function adblockOn(btn) {
   apiBtn('/cgi-bin/manage.sh?action=adblock_on', btn, function(d){
-    if (!d.ok) {
-      var el = document.getElementById('parentalMsg');
-      if (el) { el.className = 'msg err'; el.textContent = d.error || 'Ошибка'; }
-    }
+    var el = document.getElementById('adblockMsg');
+    if (el) { el.className = d.ok ? 'msg ok' : 'msg err'; el.textContent = d.ok ? (d.msg || 'Включено') : (d.error || 'Ошибка'); }
     loadAdblockStatus();
     loadParentalList();
   });
@@ -1476,12 +1498,52 @@ function adblockOn(btn) {
 
 function adblockOff(btn) {
   apiBtn('/cgi-bin/manage.sh?action=adblock_off', btn, function(d){
-    if (!d.ok) {
-      var el = document.getElementById('parentalMsg');
-      if (el) { el.className = 'msg err'; el.textContent = d.error || 'Ошибка'; }
-    }
+    var el = document.getElementById('adblockMsg');
+    if (el) { el.className = d.ok ? 'msg ok' : 'msg err'; el.textContent = d.ok ? (d.msg || 'Выключено') : (d.error || 'Ошибка'); }
     loadAdblockStatus();
     loadParentalList();
+  });
+}
+
+function adblockProgress(pct, text) {
+  var el = document.getElementById('adblockProgress');
+  var fill = document.getElementById('adblockProgressFill');
+  var txt = document.getElementById('adblockProgressText');
+  if (!el) return;
+  if (pct < 0) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  fill.style.width = pct + '%';
+  txt.innerHTML = '<span class="spinner"></span> ' + text;
+}
+
+function adblockUpdate(btn) {
+  var msg = document.getElementById('adblockMsg');
+  if (msg) { msg.className = 'msg'; msg.textContent = ''; }
+  // Держим кнопку заблокированной на всё время обновления (не только на запрос),
+  // чтобы повторный клик не запустил второй процесс поверх идущего.
+  loadingBtn(btn, true);
+  var finish = function() { loadingBtn(btn, false); };
+  api('/cgi-bin/manage.sh?action=adblock_update', function(d){
+    if (!d.ok) { finish(); if (msg) { msg.className = 'msg err'; msg.textContent = d.error || 'Не удалось запустить обновление'; } return; }
+    adblockProgress(0, 'Скачивание списков рекламы...');
+    var start = Date.now();
+    var poll = function() {
+      api('/cgi-bin/manage.sh?action=adblock_update_poll', function(p){
+        if (!p.ok) { finish(); adblockProgress(-1); if (msg) { msg.className = 'msg err'; msg.textContent = p.error || 'Ошибка обновления'; } return; }
+        if (p.done) {
+          finish();
+          adblockProgress(-1);
+          var sec = Math.round((Date.now() - start) / 1000);
+          if (msg) { msg.className = 'msg ok'; msg.textContent = 'Списки обновлены за ' + sec + 'c' + (p.count ? ' (' + Number(p.count).toLocaleString('ru-RU') + ' доменов)' : ''); }
+          loadAdblockStatus();
+        } else {
+          var sec = Math.round((Date.now() - start) / 1000);
+          adblockProgress(0, 'Обновление... (' + sec + 'c)' + (p.last ? ' ' + p.last : ''));
+          setTimeout(poll, 1500);
+        }
+      });
+    };
+    setTimeout(poll, 1500);
   });
 }
 

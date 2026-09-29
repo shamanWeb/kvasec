@@ -690,12 +690,47 @@ main() {
 			;;
 		adblock_status)
 			check_token "$token"
+			ads_count=0
+			[ -f /opt/etc/adblock/ads.kvas.list ] && ads_count=$(wc -l < /opt/etc/adblock/ads.kvas.list 2>/dev/null | tr -d ' ')
 			if adguard_active; then
 				echo '{"ok":true,"adblock":"unavailable"}'
 			elif grep -q "addn-hosts=/opt/etc/adblock/ads.kvas.list" /opt/etc/dnsmasq.conf 2>/dev/null; then
-				echo '{"ok":true,"adblock":"on"}'
+				printf '{"ok":true,"adblock":"on","count":%s}\n' "${ads_count:-0}"
 			else
-				echo '{"ok":true,"adblock":"off"}'
+				printf '{"ok":true,"adblock":"off","count":%s}\n' "${ads_count:-0}"
+			fi
+			;;
+		adblock_update)
+			check_token "$token"
+			adguard_active && json_error "Adblock через dnsmasq недоступен, пока активен AdGuard Home"
+			[ -f /tmp/kvas_adblock_pid.txt ] && kill "$(cat /tmp/kvas_adblock_pid.txt)" 2>/dev/null
+			rm -f /tmp/kvas_adblock_out.txt /tmp/kvas_adblock_pid.txt
+			(
+				sh /opt/apps/kvas/bin/main/adblock yes > /tmp/kvas_adblock_out.txt 2>&1
+				echo ">>>EXIT:$?" >> /tmp/kvas_adblock_out.txt
+			) < /dev/null &
+			echo $! > /tmp/kvas_adblock_pid.txt
+			echo '{"ok":true}'
+			;;
+		adblock_update_poll)
+			check_token "$token"
+			if [ ! -f /tmp/kvas_adblock_out.txt ]; then
+				printf '{"ok":true,"done":true,"running":false}\n'
+				return
+			fi
+			# adblock красит вывод ANSI-кодами и \r — чистим, иначе в UI виден мусор
+			ansi_strip="s/$(printf '\033')\[[0-9;]*m//g; s/$(printf '\r')//g"
+			if grep -q ">>>EXIT:" /tmp/kvas_adblock_out.txt 2>/dev/null; then
+				ab_out=$(grep -v ">>>EXIT:" /tmp/kvas_adblock_out.txt 2>/dev/null | tail -8 | sed "$ansi_strip")
+				ab_exit=$(grep ">>>EXIT:" /tmp/kvas_adblock_out.txt 2>/dev/null | sed 's/>>>EXIT://')
+				ab_count=0
+				[ -f /opt/etc/adblock/ads.kvas.list ] && ab_count=$(wc -l < /opt/etc/adblock/ads.kvas.list 2>/dev/null | tr -d ' ')
+				rm -f /tmp/kvas_adblock_out.txt /tmp/kvas_adblock_pid.txt
+				[ "$ab_exit" != "0" ] && printf '{"ok":false,"error":"update failed","output":%s}\n' "$(json_str "$ab_out")" && return
+				printf '{"ok":true,"done":true,"count":%s,"output":%s}\n' "${ab_count:-0}" "$(json_str "$ab_out")"
+			else
+				ab_last=$(tail -1 /tmp/kvas_adblock_out.txt 2>/dev/null | sed "$ansi_strip" || echo "")
+				printf '{"ok":true,"done":false,"last":%s}\n' "$(json_str "$ab_last")"
 			fi
 			;;
 		adguard_status)
