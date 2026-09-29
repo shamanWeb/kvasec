@@ -239,6 +239,14 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     chmod +x /opt/etc/init.d/S99kvas-awg-route 2>/dev/null
     /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1 &
 
+    # Сборщик истории DPI-интерференции для дашборда веб-монитора (раз в минуту).
+    # Пишет дропы туннеля opkgtunNN в кольцевой буфер 24ч. Идемпотентно.
+    chmod +x /opt/apps/kvas/bin/monitor/dpi_history.sh 2>/dev/null
+    if [ -f /opt/etc/crontab ] && ! grep -q 'dpi_history.sh' /opt/etc/crontab; then
+        echo '* * * * * root /opt/apps/kvas/bin/monitor/dpi_history.sh' >> /opt/etc/crontab
+        [ -x /opt/etc/init.d/S10cron ] && /opt/etc/init.d/S10cron restart >/dev/null 2>&1
+    fi
+
     # Web UI: если был включён, обязательно останавливаем старый socat/handler
     # перед стартом. Иначе «kvas monitor web» видит занятый порт и после upgrade
     # продолжает обслуживать старый handler из /tmp.
