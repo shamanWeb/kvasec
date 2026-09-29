@@ -94,6 +94,8 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 .status-err { color: #f85149; }
 #pollCount { color: #484f58; }
 .filter-active { color: #d29922; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: #8b949e; margin-bottom: 6px; }
+.legend span.sw { display: inline-block; width: 10px; height: 2px; margin-right: 5px; position: relative; top: -3px; }
 </style>
 </head>
 <body>
@@ -122,7 +124,8 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 <div id="mainUi" style="display:none;">
 
 <div class="tabs">
-  <div class="tab active" data-tab="manage" onclick="switchTab('manage')">Управление</div>
+  <div class="tab active" data-tab="dashboard" onclick="switchTab('dashboard')">Дашборд</div>
+  <div class="tab" data-tab="manage" onclick="switchTab('manage')">Управление</div>
   <div class="tab" data-tab="tags" onclick="switchTab('tags')">Закваски</div>
   <div class="tab" data-tab="route" onclick="switchTab('route')">Маршрутизация</div>
   <div class="tab" data-tab="parental" onclick="switchTab('parental')">Родительский контроль</div>
@@ -131,8 +134,26 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
   <div class="tab" data-tab="monitor" onclick="switchTab('monitor')">Мониторинг трафика</div>
 </div>
 
+<!-- ========== TAB: Дашборд ========== -->
+<div id="tab-dashboard" class="tab-content active">
+  <div class="card">
+    <h3>DPI-интерференция на туннеле <span id="dashDpiLed" style="font-size:12px;">—</span></h3>
+    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Испорченные/отброшенные пакеты на туннельном интерфейсе — прямой след DPI (РКН/ТСПУ). Рост потерь = активная блокировка или троттлинг. График — за последние 24 часа (обновляется раз в минуту).</p>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px;">
+      <div><div style="color:#8b949e;font-size:11px;">Потери сейчас</div><div id="dashDpiRate" style="font-size:22px;font-weight:bold;">-</div></div>
+      <div><div style="color:#8b949e;font-size:11px;">Доля битых</div><div id="dashDpiLoss" style="font-size:22px;font-weight:bold;">-</div></div>
+      <div><div style="color:#8b949e;font-size:11px;">Handshake</div><div id="dashDpiHandshake" style="font-size:22px;font-weight:bold;">-</div></div>
+      <div><div style="color:#8b949e;font-size:11px;">Всего дропов</div><div id="dashDpiTotal" style="font-size:22px;font-weight:bold;">-</div></div>
+    </div>
+    <div class="legend"><span><span class="sw" style="background:#58a6ff"></span>дропов/мин</span><span><span class="sw" style="background:#d29922"></span>порог «лёгкая»</span><span><span class="sw" style="background:#f85149"></span>порог «блокировка»</span></div>
+    <canvas id="chart-dpi-rate" style="width:100%;height:130px;display:block;"></canvas>
+    <div class="legend" style="margin-top:10px;"><span><span class="sw" style="background:#58a6ff"></span>% битых пакетов</span></div>
+    <canvas id="chart-dpi-loss" style="width:100%;height:110px;display:block;"></canvas>
+  </div>
+</div>
+
 <!-- ========== TAB: Управление ========== -->
-<div id="tab-manage" class="tab-content active">
+<div id="tab-manage" class="tab-content">
 
   <!-- System Status -->
   <div class="card">
@@ -325,6 +346,14 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 
 <!-- ========== TAB: Мониторинг обхода ========== -->
 <div id="tab-bypass" class="tab-content">
+  <div class="card">
+    <h3>DPI-интерференция на туннеле <span id="dpiLed" style="font-size:12px;">—</span></h3>
+    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Испорченные/отброшенные пакеты на туннельном интерфейсе — прямой след DPI (РКН/ТСПУ), который портит трафик на пути. Рост потерь = активная блокировка или троттлинг. В норме — ноль или единичные.</p>
+    <div class="card-row"><label>Потери сейчас:</label><span class="value" id="dpiRate">-</span></div>
+    <div class="card-row"><label>Доля битых пакетов:</label><span class="value" id="dpiLoss">-</span></div>
+    <div class="card-row"><label>Handshake:</label><span class="value" id="dpiHandshake">-</span></div>
+    <div class="card-row"><label>Всего дропов:</label><span class="value" id="dpiTotal">-</span></div>
+  </div>
   <div class="card">
     <h3>Мониторинг обхода блокировок</h3>
     <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Проверка запускается только вручную. Она показывает этап сбоя: DNS, TCP, TLS или HTTP. Для домена, который не открылся напрямую, но открылся через AWG, будет предложено добавить wildcard в VPN-список.</p>
@@ -527,7 +556,19 @@ function showMain() {
   loadTags();
   fetchDevices();
   blockWatchPoll();
+  startDashboard();  // вкладка "Дашборд" открыта по умолчанию
   logMsg('log-info', 'Мониторинг трафика KVASEC');
+}
+
+var dashboardTimer = null, dashboardHistTimer = null;
+function startDashboard() {
+  dpiPoll(); loadDpiHistory();
+  if (!dashboardTimer) dashboardTimer = setInterval(dpiPoll, 3000);
+  if (!dashboardHistTimer) dashboardHistTimer = setInterval(loadDpiHistory, 60000);
+}
+function stopDashboard() {
+  if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
+  if (dashboardHistTimer) { clearInterval(dashboardHistTimer); dashboardHistTimer = null; }
 }
 
 function changePassword() {
@@ -555,6 +596,7 @@ function switchTab(name) {
     blockWatchTimer = null;
   }
   if (name === 'adblock') loadAdblockStatus();
+  if (name === 'dashboard') startDashboard(); else stopDashboard();
 }
 
 /* ========== TAGS ========== */
@@ -1051,7 +1093,133 @@ function blockWatchStop(btn) {
     document.getElementById('blockWatchStatus').textContent = d.ok ? 'Выключен' : (d.error || 'Ошибка');
   });
 }
+function fmtHsAge(sec) {
+  if (sec === undefined || sec === null || sec < 0) return {t:'нет данных', c:'#8b949e'};
+  if (sec < 180) return {t:sec + ' сек назад', c:'#3fb950'};
+  if (sec < 600) return {t:Math.round(sec/60) + ' мин назад', c:'#d29922'};
+  return {t:Math.round(sec/60) + ' мин назад', c:'#f85149'};
+}
+
+function setDpiUI(suffix, d) {
+  var led = document.getElementById('dpiLed' + suffix) || document.getElementById(suffix ? 'dashDpiLed' : 'dpiLed');
+  // suffix '' -> bypass (dpiLed/dpiRate...), 'dash' -> dashboard (dashDpiLed...)
+  var ids = suffix === 'dash'
+    ? {led:'dashDpiLed', rate:'dashDpiRate', loss:'dashDpiLoss', hs:'dashDpiHandshake', tot:'dashDpiTotal'}
+    : {led:'dpiLed', rate:'dpiRate', loss:'dpiLoss', hs:'dpiHandshake', tot:'dpiTotal'};
+  var eLed = document.getElementById(ids.led), eRate = document.getElementById(ids.rate),
+      eLoss = document.getElementById(ids.loss), eHs = document.getElementById(ids.hs), eTot = document.getElementById(ids.tot);
+  if (!eLed) return;
+  if (!d.ok || !d.up) {
+    eLed.textContent = '⚪ туннель не поднят'; eLed.style.color = '#8b949e';
+    [eRate,eLoss,eHs,eTot].forEach(function(x){ if (x) x.textContent = '-'; });
+    return;
+  }
+  var r = d.drops_per_min || 0, lp = d.loss_pct || 0;
+  // Пороги откалиброваны по реальному фону порта 443 (~0.7/мин, 0% потерь):
+  // до 5/мин и 0% — фоновый шум (чисто); всплеск/потери — интерференция.
+  var level, color, label;
+  if (r <= 5 && lp < 1) { level='🟢'; color='#3fb950'; label='чисто, DPI не мешает'; }
+  else if (r <= 30 && lp <= 5) { level='🟡'; color='#d29922'; label='лёгкая интерференция'; }
+  else { level='🔴'; color='#f85149'; label='активная блокировка / троттлинг'; }
+  eLed.textContent = level + ' ' + label; eLed.style.color = color;
+  if (eRate) { eRate.textContent = r + (suffix==='dash' ? '/мин' : ' пакетов/мин'); eRate.style.color = color; }
+  if (eLoss) { eLoss.textContent = lp + '%'; eLoss.style.color = color; }
+  if (eHs) { var h = fmtHsAge(d.handshake_age); eHs.textContent = h.t; eHs.style.color = h.c; }
+  if (eTot) eTot.textContent = (d.drops_total || 0).toLocaleString('ru-RU');
+}
+
+function dpiPoll() {
+  api('/cgi-bin/manage.sh?action=tunnel_dpi', function(d){
+    setDpiUI('', d);      // карточка на вкладке "Мониторинг обхода"
+    setDpiUI('dash', d);  // дашборд
+  });
+}
+
+/* ---- canvas-график (портирован с серверного дашборда) ---- */
+// thresholds: [{value, color, label}] — горизонтальные пороговые линии
+function dpiDrawChart(canvas, data, times, color, unit, thresholds) {
+  if (!canvas) return;
+  thresholds = thresholds || [];
+  var dpr = window.devicePixelRatio || 1;
+  var cssW = canvas.clientWidth || 300, cssH = canvas.clientHeight || 110;
+  canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+  var ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!data || !data.length) {
+    ctx.fillStyle = '#484f58'; ctx.font = (12*dpr)+'px monospace';
+    ctx.fillText('собираем историю... (точка раз в минуту)', 8*dpr, canvas.height/2);
+    return;
+  }
+  var dataMax = Math.max.apply(null, data);
+  // maxY учитывает нижний (жёлтый) порог, чтобы он всегда был виден как ориентир
+  var loThr = thresholds.length ? thresholds[0].value : 0;
+  var minY = 0, maxY = Math.max(dataMax * 1.15, loThr * 1.4, 1), midY = (minY+maxY)/2;
+  var padL = 34*dpr, padR = 2*dpr, padT = 4*dpr, padB = 14*dpr;
+  var plotW = canvas.width - padL - padR, plotH = canvas.height - padT - padB;
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1; ctx.fillStyle = '#484f58';
+  ctx.font = (9*dpr)+'px monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  [maxY, midY, minY].forEach(function(val, i){
+    var y = padT + plotH * i / 2;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(canvas.width - padR, y); ctx.stroke();
+    var lbl = (Math.abs(val) >= 10 || val === 0) ? Math.round(val).toString() : val.toFixed(1);
+    ctx.fillText(lbl + unit, padL - 4*dpr, y);
+  });
+  // пороговые линии (пунктир) — видно, где «много», а где «мало»
+  thresholds.forEach(function(thr){
+    if (thr.value > maxY) return;  // порог выше шкалы — данные спокойные, не рисуем
+    var y = padT + plotH - plotH * (thr.value - minY) / (maxY - minY);
+    ctx.save();
+    ctx.setLineDash([4*dpr, 3*dpr]);
+    ctx.strokeStyle = thr.color; ctx.lineWidth = 1*dpr; ctx.globalAlpha = 0.7;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(canvas.width - padR, y); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = thr.color; ctx.globalAlpha = 0.9;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    ctx.font = (8.5*dpr)+'px monospace';
+    ctx.fillText(thr.label, padL + 3*dpr, y - 1*dpr);
+    ctx.globalAlpha = 1;
+  });
+  ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.5*dpr;
+  data.forEach(function(v, i){
+    var x = padL + plotW * i / Math.max(data.length - 1, 1);
+    var y = padT + plotH - plotH * (v - minY) / (maxY - minY);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  if (times && times.length > 1) {
+    var nowT = times[times.length - 1];
+    ctx.fillStyle = '#484f58'; ctx.textBaseline = 'top'; ctx.font = (9*dpr)+'px monospace';
+    var ticks = Math.min(5, times.length);
+    for (var i = 0; i < ticks; i++) {
+      var idx = Math.round(i * (times.length - 1) / (ticks - 1));
+      var x = padL + plotW * idx / Math.max(times.length - 1, 1);
+      ctx.textAlign = i === 0 ? 'left' : (i === ticks - 1 ? 'right' : 'center');
+      var ago = nowT - times[idx], lbl = ago < 60 ? 'сейчас' : '-' + (ago/3600 >= 1 ? Math.round(ago/3600) + 'ч' : Math.round(ago/60) + 'м');
+      ctx.fillText(lbl, x, canvas.height - padB + 3*dpr);
+    }
+  }
+}
+
+function loadDpiHistory() {
+  api('/cgi-bin/manage.sh?action=dpi_history', function(d){
+    if (!d.ok) return;
+    var pts = d.points || [];
+    var times = pts.map(function(p){ return p.t; });
+    var rate = pts.map(function(p){ return p.rate; });
+    var loss = pts.map(function(p){ return p.loss; });
+    dpiDrawChart(document.getElementById('chart-dpi-rate'), rate, times, '#58a6ff', '', [
+      {value: 5,  color: '#d29922', label: '5 — лёгкая'},
+      {value: 30, color: '#f85149', label: '30 — активная блокировка'}
+    ]);
+    dpiDrawChart(document.getElementById('chart-dpi-loss'), loss, times, '#58a6ff', '%', [
+      {value: 1, color: '#d29922', label: '1% — лёгкая'},
+      {value: 5, color: '#f85149', label: '5% — активная'}
+    ]);
+  });
+}
+
 function blockWatchPoll() {
+  dpiPoll();
   api('/cgi-bin/manage.sh?action=block_watch_status', function(d){
     var status = document.getElementById('blockWatchStatus'), list = document.getElementById('blockWatchList');
     if (!d.ok) { status.textContent = d.error || 'Ошибка'; return; }

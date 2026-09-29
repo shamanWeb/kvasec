@@ -154,6 +154,29 @@ build.sh кладёт туда `100-dns-local` + `100-vpn-mark` (иначе KVAS
   (уникальные endpoint за 5 мин). Диагностика подключений: `/proc/net/nf_conntrack` (conntrack
   не установлен), `docker exec amnezia-awg2 awg show awg0`, `.../clientsTable`.
 
+## 1a. Веб-монитор kvas (`http://192.168.1.1:8085/`) — фичи мониторинга DPI и adblock
+
+Веб-морда на socat+CGI (`opt/bin/monitor/`: `httpd.sh`, `www/index.html`, `www/cgi-bin/{manage,data}.sh`).
+Токен-авторизация (пароль в `/opt/kvas_web_pass`, сброс — `rm` этого файла). Вкладки:
+Дашборд (по умолчанию), Управление, Закваски, Маршрутизация, Родительский контроль, Реклама,
+Мониторинг обхода, Мониторинг трафика.
+
+- **DPI-дашборд (2026-09-29):** вкладка «Дашборд» — 24ч-графики DPI-интерференции РКН/ТСПУ.
+  Метрика — RX drops на **роутерной** стороне туннеля (`opkgtunNN`), т.к. на `awg0` сервера
+  дропы = 0 (DPI портит пакеты на пути к клиенту, видно только на приёме роутера).
+  - Сборщик `opt/bin/monitor/dpi_history.sh` по cron раз в минуту → кольцевой буфер
+    `/opt/tmp/dpi-history.jsonl` (1440 точек = 24ч), точка `{t,rate,loss}`.
+  - Backend `manage.sh`: `tunnel_dpi` (текущие: drops/мин, % битых, handshake age),
+    `dpi_history` (массив точек). Cron регистрируется в postinst идемпотентно.
+  - Светофор 🟢/🟡/🔴: `0` → чисто; `≤10/мин и <2%` → лёгкая; иначе → активная блокировка/троттлинг.
+- **Adblock-вкладка «Реклама» (2026-09-28):** сетевая блокировка рекламы через штатный kvas
+  adblock (`bin/main/adblock`, `bin/libs/adblock`). Toggle = `addn-hosts=/opt/etc/adblock/ads.kvas.list`
+  в `dnsmasq.conf`. Источник по умолчанию — **StevenBlack базовый** (`opt/etc/conf/adblock.sources`;
+  реклама+malware БЕЗ social/porn — иначе ломает соцсети в VPN). `bin/main/adblock` авто-исключает
+  домены из `KVAS_LIST` (белый список) + `/opt/etc/adblock/exception.list` (туда добавлены github-домены,
+  т.к. телеметрия `collector.githubapp.com` была в блоке). Backend actions: `adblock_status/on/off/update`.
+  ⚠️ Видеорекламу YouTube НЕ убирает (общий CDN `googlevideo.com`) — для ТВ ставить SmartTube.
+
 ## 2. `kvas update` — безопасность списка маршрутизации
 
 `kvas update` → `bin/main/update` → `cmd_kvas_init update` (`bin/libs/vpn:148`):
