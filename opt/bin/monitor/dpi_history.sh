@@ -27,11 +27,14 @@ now=$(date +%s)
 rate=0; loss=0
 if [ -f "${PREV}" ]; then
 	read -r p_drop p_pkts p_time < "${PREV}"
+	# защита от битого/частично записанного prev (иначе busybox падает на арифметике)
+	if echo "${p_drop} ${p_pkts} ${p_time}" | grep -qE '^[0-9]+ [0-9]+ [0-9]+$'; then
 	dd=$((drop - p_drop)); dp=$((pkts - p_pkts)); dt=$((now - p_time))
 	# dd<0 => счётчик сбросился (реконнект туннеля) — точку считаем нулевой
 	if [ "${dd}" -ge 0 ] && [ "${dt}" -gt 0 ]; then
 		rate=$((dd * 60 / dt))
 		[ $((dp + dd)) -gt 0 ] && loss=$((dd * 100 / (dp + dd)))
+	fi
 	fi
 fi
 echo "${drop} ${pkts} ${now}" > "${PREV}"

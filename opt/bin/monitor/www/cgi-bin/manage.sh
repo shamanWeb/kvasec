@@ -644,12 +644,15 @@ main() {
 			rate=0; loss_pct=0
 			if [ -f "$prev_file" ]; then
 				read -r p_drop p_pkts p_time < "$prev_file"
-				dt=$((now - p_time)); dd=$((rx_drop - p_drop)); dp=$((rx_pkts - p_pkts))
-				if [ "$dd" -lt 0 ]; then
-					rate=0; loss_pct=0   # счётчик сбросился (реконнект туннеля)
-				else
-					[ "$dt" -gt 0 ] && rate=$(( dd * 60 / dt ))
-					[ $((dp + dd)) -gt 0 ] && loss_pct=$(( dd * 100 / (dp + dd) ))
+				# защита от битого/частично записанного prev (busybox падает на пустой арифметике)
+				if echo "$p_drop $p_pkts $p_time" | grep -qE '^[0-9]+ [0-9]+ [0-9]+$'; then
+					dt=$((now - p_time)); dd=$((rx_drop - p_drop)); dp=$((rx_pkts - p_pkts))
+					if [ "$dd" -lt 0 ]; then
+						rate=0; loss_pct=0   # счётчик сбросился (реконнект туннеля)
+					else
+						[ "$dt" -gt 0 ] && rate=$(( dd * 60 / dt ))
+						[ $((dp + dd)) -gt 0 ] && loss_pct=$(( dd * 100 / (dp + dd) ))
+					fi
 				fi
 			fi
 			echo "$rx_drop $rx_pkts $now" > "$prev_file"

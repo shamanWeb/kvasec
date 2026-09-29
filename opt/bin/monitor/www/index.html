@@ -1101,7 +1101,6 @@ function fmtHsAge(sec) {
 }
 
 function setDpiUI(suffix, d) {
-  var led = document.getElementById('dpiLed' + suffix) || document.getElementById(suffix ? 'dashDpiLed' : 'dpiLed');
   // suffix '' -> bypass (dpiLed/dpiRate...), 'dash' -> dashboard (dashDpiLed...)
   var ids = suffix === 'dash'
     ? {led:'dashDpiLed', rate:'dashDpiRate', loss:'dashDpiLoss', hs:'dashDpiHandshake', tot:'dashDpiTotal'}
