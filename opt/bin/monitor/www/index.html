@@ -1090,6 +1090,7 @@ function doRestore(btn) {
 
 /* ========== BYPASS MONITOR ========== */
 var bypassPollTimer = null;
+var bypassCheckMode = null;
 var blockWatchTimer = null;
 
 function bypassCheckStop(btn) {
@@ -1271,6 +1272,7 @@ function blockWatchPoll() {
 function bypassCheckStart(mode, btn, domain) {
   var label = mode === 'all' ? 'весь VPN-список' : (mode === 'domain' ? domain : 'последние 100 DNS-доменов');
   if (!confirm('Проверить ' + label + '? Проверка выполняется в фоне.')) return;
+  bypassCheckMode = mode;
   var url = '/cgi-bin/manage.sh?action=bypass_check_start&mode=' + mode;
   if (mode === 'domain') url += '&domain=' + encodeURIComponent(domain || '');
   apiPostBtn(url, btn, function(d){
@@ -1335,7 +1337,14 @@ function bypassStatusColor(status) {
 function renderBypassResults(rows) {
   var el = document.getElementById('bypassCheckList');
   el.innerHTML = '';
-  if (!rows.length) { el.innerHTML = '<div class="status">Нет доменов из VPN-списка и DNS-лога</div>'; return; }
+  if (!rows.length) {
+    if (bypassCheckMode === 'dns') {
+      el.innerHTML = '<div class="status">История DNS пуста. Журнал DNS-запросов ведётся только пока включён сбор «Последняя минута: подозрительные блокировки» (карточка ниже). Включите его, походите по сайтам минуту и повторите проверку.</div>';
+    } else {
+      el.innerHTML = '<div class="status">Нет доменов из VPN-списка и DNS-лога</div>';
+    }
+    return;
+  }
   rows.forEach(function(row){
     var item = document.createElement('div');
     item.style.cssText = 'display:flex;gap:8px;align-items:center;padding:7px 8px;border-bottom:1px solid #30363d;flex-wrap:wrap;';

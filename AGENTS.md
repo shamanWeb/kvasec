@@ -272,5 +272,30 @@ kvas dnsmasq слушает ТОЛЬКО `127.0.0.1:9753`, а на `:53` для 
 refresh` её пересоздаёт, так что фикс подхватывается. Проверено: в режиме exclude у
 устройства есть `KVAS_MARK ... RETURN`, но НЕТ `KVAS_DNS ... RETURN`.
 
+## Веб-монитор: источник DNS для «Проверить последние 100 DNS»
+
+**Как наполняется**: вкладка «Мониторинг обхода» → «Проверить последние 100 DNS» читает
+журнал DNS-запросов (`bypass_check.sh` → `observed_dns_domains`). Источник: если активен
+AdGuard — его query-лог; иначе `/tmp/kvas-dns.log` (dnsmasq `log-queries`). **Лог DNS —
+opt-in и временный**: его создаёт/удаляет `block_watch.sh` (`enable/disable_dns_capture`),
+т.е. он существует ТОЛЬКО пока включён watcher «Последняя минута: подозрительные
+блокировки». Watcher выключен → лога нет → «последние 100 DNS» пусто (by design: постоянный
+`log-queries` писал бы во флеш).
+
+### Фикс: «призрак» AdGuard подавлял живой захват DNS
+
+**Симптом**: watcher включён, но `/tmp/kvas-dns.log`/drop-in не создаются, «последние 100
+DNS» пусто или устарело.
+**Причина**: `adguard_querylog_active()` (auto) проверял только `pidof AdGuardHome`. Если
+AdGuard оставлен запущенным, но НЕ резолвер (DNS идёт через kvas dnsmasq :9753), его
+query-лог протухает, а код всё равно считал его источником → `enable_dns_capture` пропускал
+живой dnsmasq-захват (ранний `return 0`), а `observed_dns_domains` читал мёртвый AdGuard-лог.
+**Фикс**: `adguard_querylog_active` теперь требует И живой процесс, И свежий лог
+(`find "$ADGUARD_QUERY_LOG" -mmin -${ADGUARD_QUERYLOG_FRESH_MIN:-60}`). Протухший AdGuard →
+считается неактивным → используется dnsmasq-захват.
+**Файлы**: `opt/bin/monitor/adguard_querylog.sh` (`adguard_querylog_active`);
+`opt/bin/monitor/www/index.html` (`bypassCheckMode` + понятное сообщение при пустой истории
+DNS с подсказкой включить watcher).
+
 ## Формат ipk
 gzip(tar( debian-binary + control.tar.gz + data.tar.gz )), строки с LF.

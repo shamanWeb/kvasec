@@ -13,7 +13,13 @@ adguard_querylog_active() {
         1|true|yes) return 0 ;;
         0|false|no) return 1 ;;
     esac
-    pidof AdGuardHome >/dev/null 2>&1
+    # Процесс может висеть, не будучи резолвером: DNS идёт через kvas dnsmasq
+    # (:9753), а AdGuard оставлен запущенным. Тогда его query-лог протухает, и
+    # опираться на него нельзя — иначе живой захват dnsmasq-лога подавляется, а
+    # проверка «последние 100 DNS» читает устаревшую историю. Поэтому считаем
+    # AdGuard активным ТОЛЬКО если процесс жив И его лог обновлялся недавно.
+    pidof AdGuardHome >/dev/null 2>&1 || return 1
+    [ -n "$(find "$ADGUARD_QUERY_LOG" -mmin -"${ADGUARD_QUERYLOG_FRESH_MIN:-60}" 2>/dev/null)" ]
 }
 
 adguard_query_domains() {
