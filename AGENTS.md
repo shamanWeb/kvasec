@@ -202,5 +202,100 @@ cp: can't create '/opt/etc/adblock/exception.list': No such file or directory
 
 **Версия**: `kvas_1.1.9_beta-10-352_all.ipk`.
 
+## Управление устройствами в WebUI (вкладка «Устройства»)
+
+**Идея**: вкладка `tab-devices` (между «Маршрутизация» и «Родительский контроль») даёт
+по-устройственный выбор режима доступа в интернет — без ручного ввода IP в списки.
+
+**Четыре режима**. Первые три — маршрутизация (поверх per-source-IP ключей
+`/opt/etc/kvas.conf`); четвёртый — доступ (штатный механизм Keenetic, по MAC):
+- **По спискам** (`list`, по умолчанию) — устройства НЕТ ни в одном поадресном ключе;
+  обход даёт общее home-правило (`ip4__add_routing_for_home`, ndm:589) для всей LAN.
+- **Напрямую** (`exclude`) — IP в `route_excluded_ip` → правило `-s <ip> -j RETURN` в
+  начале цепочки `KVAS_MARK`, весь трафик мимо тоннеля.
+- **Всё в тоннель** (`full`) — IP в `route_full_ip` → весь трафик устройства в VPN.
+- **Нет интернета** (`blocked`) — Keenetic hotspot `access=deny` по MAC через RCI
+  (`POST /rci/ip/hotspot/host {mac,access:deny}` + `POST /rci/system/configuration/save`).
+  Персистентно (переживает перезагрузку), НЕ iptables (иначе NDM сбрасывал бы правило).
+  Доступно только для зарегистрированных устройств (есть MAC); для arp/conntrack-only
+  IP без MAC кнопка блокировки неактивна. `blocked` имеет приоритет над маршрутным
+  режимом в отображении; при переключении на любой маршрутный режим блокировка
+  автоматически снимается (permit+save).
+
+**Важно (архитектура)**: home-правило тоннелит listed-домены для ВСЕЙ LAN, поэтому
+«по спискам» = просто отсутствие IP в `full`/`exclude` (отдельный ключ не нужен; из-за
+этого `route_by_list_ip` фактически избыточен и вкладкой не используется). Маршрутизация —
+по IP, блокировка интернета — по MAC.
+
+**Файлы**:
+- `opt/bin/monitor/www/cgi-bin/manage.sh`:
+  - `device_modes` — список устройств; авторитетный источник — Keenetic hotspot
+    (`rci/show/ip/hotspot` → `ip|name|mac|access`), плюс DHCP/ARP/conntrack для IP, не
+    попавших в hotspot. Режим считается awk-ом: `deny`→`blocked` (приоритет), иначе по
+    множествам `route_full_ip`/`route_excluded_ip` (`ENVIRON`). Имена JSON-экранируются.
+    **Фильтр `in_lan`** (denylist, не allowlist): устройство = on-link сосед в подсети
+    ЛЮБОГО интерфейса (кроме lo), но НЕ собственный адрес роутера и НЕ broadcast. Данные —
+    `KVAS_IFADDR` из `ip -o -f inet addr show` в формате `ip/prefix|broadcast` (broadcast
+    берётся из поля `brd`, только если `$5=="brd"` — у /32-интерфейсов его нет). Собственные
+    IP (все интерфейсы) → set `selfip`; broadcast’ы → set `bcast`; принадлежность подсети —
+    целочисленной арифметикой (`blk=2^(32-pfx)`, без битовых операций, которых может не быть
+    в busybox awk). Настроенные `full`/`exclude` IP показываем ВСЕГДА (в обход фильтра).
+    Так отсекаются адреса роутера, broadcast, WAN/туннель и удалённые служебные IP (из
+    conntrack), а реальные LAN- и VPN-клиенты (на своих интерфейсах, напр. 172.16.x SSTP/OC)
+    остаются. Нет интерфейсов → fail-open (показываем всё). ВАЖНО: jq на роутере собран БЕЗ
+    oniguruma → `gsub/test/match` недоступны, для очистки `|` в имени — `split("|")|join(" ")`.
+  - `device_set_mode&ip=&mac=&mode=list|full|exclude|block`:
+    - `block` — hotspot `deny` по MAC + config save (требует MAC, иначе ошибка).
+    - маршрутные — если устройство было `deny`, сперва `permit`+save; затем убирает IP из
+      обоих ключей, добавляет в целевой (для `list` — никуда), один `kvas route refresh`.
+- `opt/bin/monitor/www/index.html`: вкладка `tab-devices`, хук в `switchTab` (lazy
+  `loadDeviceModes()`), JS `loadDeviceModes`/`setDeviceMode` (кнопки через DOM-API,
+  имена устройств — `textContent`, без innerHTML → без XSS из DHCP-имён).
+
+**Проверено на живом роутере**: `device_modes` отдаёт валидный JSON с реальными именами;
+`device_set_mode exclude` пишет ключ, `route refresh` создаёт `-A KVAS_MARK -s <ip>/32 -j
+RETURN`, возврат в `list` чистит ключ.
+
+### Фикс: «Напрямую» (route_excluded_ip) ломал DNS устройству
+
+**Симптом**: устройство в режиме «Напрямую» теряло интернет (DNS-запросы к 192.168.1.1:53
+уходили в `[UNREPLIED]`), хотя уже установленные по IP соединения работали.
+**Причина**: `ip4__chain__exclude_source_by_config` (ndm) вызывалась ДВАЖДЫ — для
+`KVAS_MARK` (ndm:416, верно: убирает из туннеля) И для `KVAS_DNS` (ndm:618). Второй вызов
+добавлял `-A KVAS_DNS -s <ip> -j RETURN`, т.е. исключал устройство из DNS-редиректа. Но
+kvas dnsmasq слушает ТОЛЬКО `127.0.0.1:9753`, а на `:53` для не-завёрнутых клиентов ответа
+нет (нативный Keenetic DNS не отвечает — у юзера он не фолбэчит) → DNS ломался.
+**Фикс**: закомментирован вызов `ip4__chain__exclude_source_by_config` для DNS-цепочки в
+`ip4__dns__create_chain` (ndm:618). Теперь «Напрямую» убирает устройство только из туннеля
+(KVAS_MARK), а DNS по-прежнему резолвится через kvas dnsmasq (adblock тоже применяется).
+**Файл**: `opt/etc/ndm/ndm` (`ip4__dns__create_chain`). KVAS_DNS кэшируется, но `kvas route
+refresh` её пересоздаёт, так что фикс подхватывается. Проверено: в режиме exclude у
+устройства есть `KVAS_MARK ... RETURN`, но НЕТ `KVAS_DNS ... RETURN`.
+
+## Веб-монитор: источник DNS для «Проверить последние 100 DNS»
+
+**Как наполняется**: вкладка «Мониторинг обхода» → «Проверить последние 100 DNS» читает
+журнал DNS-запросов (`bypass_check.sh` → `observed_dns_domains`). Источник: если активен
+AdGuard — его query-лог; иначе `/tmp/kvas-dns.log` (dnsmasq `log-queries`). **Лог DNS —
+opt-in и временный**: его создаёт/удаляет `block_watch.sh` (`enable/disable_dns_capture`),
+т.е. он существует ТОЛЬКО пока включён watcher «Последняя минута: подозрительные
+блокировки». Watcher выключен → лога нет → «последние 100 DNS» пусто (by design: постоянный
+`log-queries` писал бы во флеш).
+
+### Фикс: «призрак» AdGuard подавлял живой захват DNS
+
+**Симптом**: watcher включён, но `/tmp/kvas-dns.log`/drop-in не создаются, «последние 100
+DNS» пусто или устарело.
+**Причина**: `adguard_querylog_active()` (auto) проверял только `pidof AdGuardHome`. Если
+AdGuard оставлен запущенным, но НЕ резолвер (DNS идёт через kvas dnsmasq :9753), его
+query-лог протухает, а код всё равно считал его источником → `enable_dns_capture` пропускал
+живой dnsmasq-захват (ранний `return 0`), а `observed_dns_domains` читал мёртвый AdGuard-лог.
+**Фикс**: `adguard_querylog_active` теперь требует И живой процесс, И свежий лог
+(`find "$ADGUARD_QUERY_LOG" -mmin -${ADGUARD_QUERYLOG_FRESH_MIN:-60}`). Протухший AdGuard →
+считается неактивным → используется dnsmasq-захват.
+**Файлы**: `opt/bin/monitor/adguard_querylog.sh` (`adguard_querylog_active`);
+`opt/bin/monitor/www/index.html` (`bypassCheckMode` + понятное сообщение при пустой истории
+DNS с подсказкой включить watcher).
+
 ## Формат ipk
 gzip(tar( debian-binary + control.tar.gz + data.tar.gz )), строки с LF.

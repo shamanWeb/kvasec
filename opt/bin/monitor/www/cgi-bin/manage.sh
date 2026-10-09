@@ -960,6 +960,166 @@ main() {
 			rm -f "$_tmpdev"
 			echo ']}'
 			;;
+		device_modes)
+			check_token "$token"
+			route_full=$(grep "^route_full_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
+			route_exclude=$(grep "^route_excluded_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
+			_tmpdev="/tmp/kvas_dev_modes.$$"
+			: > "$_tmpdev"
+			# Keenetic hotspot — авторитетный источник: ip|name|mac|access (вкл. запрет интернета)
+			# '|' в имени → пробел (split/join, т.к. jq на роутере без oniguruma → без gsub);
+			# null mac/access → пусто/permit
+			curl -s "127.0.0.1:79/rci/show/ip/hotspot" 2>/dev/null | \
+				jq -r '.host[] | select(.ip != "" and .ip != null) | "\(.ip)|\((.name // "") | split("|") | join(" "))|\(.mac // "")|\(.access // "permit")"' 2>/dev/null >> "$_tmpdev"
+			# DHCP bindings — статические аренды, не попавшие в hotspot (mac/access неизвестны)
+			curl -s "127.0.0.1:79/rci/show/ip/dhcp/bindings" 2>/dev/null | \
+				jq -r '.lease[] | "\(.ip)|\((.name // "") | split("|") | join(" "))||permit"' 2>/dev/null >> "$_tmpdev"
+			# ARP-соседи (только IPv4) — с MAC, чтобы их тоже можно было блокировать
+			if command -v ip >/dev/null 2>&1; then
+				ip neigh show 2>/dev/null | grep -E 'REACHABLE|STALE|DELAY' | \
+					awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print $1 "|arp|" ($5 ? $5 : "") "|permit"}' >> "$_tmpdev"
+			elif [ -f /proc/net/arp ]; then
+				tail -n +2 /proc/net/arp 2>/dev/null | awk '$2 != "0x0" {print $1 "|arp|" $4 "|permit"}' >> "$_tmpdev"
+			fi
+			# Активные IP из conntrack — только частные диапазоны (RFC 1918)
+			_priv_re='src=(10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+)'
+			if command -v conntrack >/dev/null 2>&1; then
+				conntrack -L 2>/dev/null | grep -oE "$_priv_re" | cut -d= -f2 | sort -u | \
+					awk '{print $1 "|conntrack||permit"}' >> "$_tmpdev"
+			elif [ -f /proc/net/nf_conntrack ]; then
+				grep -oE "$_priv_re" /proc/net/nf_conntrack 2>/dev/null | cut -d= -f2 | sort -u | \
+					awk '{print $1 "|conntrack||permit"}' >> "$_tmpdev"
+			fi
+			unset _priv_re
+			# Настроенные IP (full/exclude) — чтобы показать их, даже если устройство сейчас не активно
+			for _ip in $(echo "${route_full} ${route_exclude}" | tr '+' ' '); do
+				[ -n "$_ip" ] && echo "${_ip}|||permit" >> "$_tmpdev"
+			done
+			# Подключённые подсети всех интерфейсов (кроме lo) — "ip/prefix|broadcast".
+			# Устройство = on-link сосед в одной из этих подсетей, но НЕ сам роутер и НЕ
+			# broadcast. Так отсекаются собственные адреса роутера, broadcast, WAN/туннель и
+			# удалённые служебные IP (видны в conntrack как src), а реальные LAN- и
+			# VPN-клиенты (на своих интерфейсах) остаются.
+			if_addr=$(ip -o -f inet addr show 2>/dev/null | \
+				awk '$2 != "lo" { print $4 "|" ($5 == "brd" ? $6 : "") }' | tr '\n' ' ')
+			# Вывод: режим list|full|exclude (маршрутизация) либо blocked (нет интернета)
+			printf '{"ok":true,"devices":['
+			KVAS_FULL="$(echo "$route_full" | tr '+' ' ')" KVAS_EXCL="$(echo "$route_exclude" | tr '+' ' ')" \
+			KVAS_IFADDR="$if_addr" \
+			awk -F'|' '
+				function ip2int(s,  p) { split(s, p, "."); return p[1]*16777216 + p[2]*65536 + p[3]*256 + p[4] }
+				function in_lan(s,  di, i) {
+					if (nlan == 0) return 1;              # нет данных об интерфейсах — не фильтруем
+					if (s !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return 0;
+					di = ip2int(s);
+					if (di in selfip) return 0;           # собственный адрес роутера
+					if (di in bcast) return 0;            # broadcast
+					for (i = 1; i <= nlan; i++)
+						if (int(di / lblk[i]) * lblk[i] == lnet[i]) return 1;  # on-link сосед
+					return 0;                             # вне всех подсетей (WAN-шлюз/служебное)
+				}
+				BEGIN {
+					n = split(ENVIRON["KVAS_FULL"], a, " "); for (i=1;i<=n;i++) full[a[i]]=1;
+					m = split(ENVIRON["KVAS_EXCL"], b, " "); for (i=1;i<=m;i++) excl[b[i]]=1;
+					k = split(ENVIRON["KVAS_IFADDR"], ifs, " "); nlan = 0;
+					for (i = 1; i <= k; i++) {
+						if (ifs[i] == "") continue;
+						split(ifs[i], parts, "|");        # parts[1]=ip/prefix, parts[2]=broadcast
+						if (split(parts[1], cc, "/") != 2) continue;
+						pfx = cc[2] + 0; if (pfx < 1 || pfx > 32) continue;
+						blk = 2 ^ (32 - pfx);
+						self = ip2int(cc[1]);
+						selfip[self] = 1;
+						nlan++;
+						lblk[nlan] = blk; lnet[nlan] = int(self / blk) * blk;
+						if (parts[2] != "") bcast[ip2int(parts[2])] = 1;
+						else bcast[lnet[nlan] + blk - 1] = 1;
+					}
+				}
+				!seen[$1]++ {
+					# настроенные (full/exclude) показываем всегда; остальные — только on-link
+					if (!($1 in full) && !($1 in excl) && !in_lan($1)) next;
+					ip=$1; name=$2; mac=$3; access=$4;
+					gsub(/\\/, "\\\\", name); gsub(/"/, "\\\"", name);
+					if (access == "deny") mode = "blocked";
+					else if (ip in full) mode = "full";
+					else if (ip in excl) mode = "exclude";
+					else mode = "list";
+					if (f++) printf ",";
+					printf "{\"ip\":\"%s\",\"name\":\"%s\",\"mac\":\"%s\",\"mode\":\"%s\"}", ip, name, mac, mode;
+				}' "$_tmpdev" 2>/dev/null
+			rm -f "$_tmpdev"
+			echo ']}'
+			;;
+		device_set_mode)
+			check_token "$token"
+			ip=$(query_param ip)
+			mac=$(query_param mac)
+			mode=$(query_param mode)
+			case "$mode" in
+				list|full|exclude|block) ;;
+				*) json_error "mode must be list, full, exclude, or block" ;;
+			esac
+			# Блокировка интернета — штатный механизм Keenetic (hotspot deny), по MAC, персистентно
+			if [ "$mode" = "block" ]; then
+				[ -z "$mac" ] && json_error "устройство не зарегистрировано — блокировка недоступна"
+				curl -s "127.0.0.1:79/rci/ip/hotspot/host" -X POST -H "Content-Type: application/json" \
+					-d "{\"mac\":\"${mac}\",\"access\":\"deny\"}" >/dev/null 2>&1
+				curl -s "127.0.0.1:79/rci/system/configuration/save" -X POST -H "Content-Type: application/json" -d '{}' >/dev/null 2>&1
+				# Проверяем, что блокировка действительно применилась (не рапортуем успех вслепую)
+				verify=$(curl -s "127.0.0.1:79/rci/show/ip/hotspot" 2>/dev/null | \
+					jq -r ".host[] | select(.mac==\"${mac}\") | .access" 2>/dev/null | head -1)
+				if [ "$verify" = "deny" ]; then
+					json_ok "internet blocked"
+				else
+					json_error "не удалось отключить интернет (проверьте, что устройство зарегистрировано)"
+				fi
+			fi
+			# Маршрутные режимы: если устройство было заблокировано — сперва снять блокировку
+			[ -z "$ip" ] && json_error "ip required"
+			if [ -n "$mac" ]; then
+				cur_access=$(curl -s "127.0.0.1:79/rci/show/ip/hotspot" 2>/dev/null | \
+					jq -r ".host[] | select(.mac==\"${mac}\") | .access" 2>/dev/null | head -1)
+				if [ "$cur_access" = "deny" ]; then
+					curl -s "127.0.0.1:79/rci/ip/hotspot/host" -X POST -H "Content-Type: application/json" \
+						-d "{\"mac\":\"${mac}\",\"access\":\"permit\"}" >/dev/null 2>&1
+					curl -s "127.0.0.1:79/rci/system/configuration/save" -X POST -H "Content-Type: application/json" -d '{}' >/dev/null 2>&1
+				fi
+			fi
+			# Чистое переключение: убираем IP из всех поадресных ключей (вкл. route_by_list_ip
+			# из вкладки «Маршрутизация», иначе остался бы невидимый дубль)
+			changed=0
+			for key in route_full_ip route_excluded_ip route_by_list_ip; do
+				current=$(grep "^${key}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
+				if echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
+					new_list=$(echo "$current" | tr '+' '\n' | grep -Fxv "$ip" | tr '\n' '+' | sed 's/+$//')
+					sed -i "/^${key}=/d" "$KVAS_CONF_FILE" 2>/dev/null
+					[ -n "$new_list" ] && echo "${key}=${new_list}" >> "$KVAS_CONF_FILE"
+					changed=1
+				fi
+			done
+			# Добавляем в целевой список (list = режим по умолчанию, отдельного ключа не требует)
+			tgt=""
+			[ "$mode" = "full" ] && tgt="route_full_ip"
+			[ "$mode" = "exclude" ] && tgt="route_excluded_ip"
+			if [ -n "$tgt" ]; then
+				current=$(grep "^${tgt}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
+				if ! echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
+					[ -n "$current" ] && current="${current}+${ip}" || current="$ip"
+					sed -i "/^${tgt}=/d" "$KVAS_CONF_FILE" 2>/dev/null
+					echo "${tgt}=${current}" >> "$KVAS_CONF_FILE"
+					changed=1
+				fi
+			fi
+			# route refresh нужен только если конфиг реально поменялся
+			if [ "$changed" = 0 ]; then
+				json_ok "mode set"
+			elif $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
+				json_ok "mode set"
+			else
+				json_error "route refresh failed, see /tmp/kvas-route-refresh.log"
+			fi
+			;;
 		route_guest_networks)
 			check_token "$token"
 			_tmp="/tmp/kvas_guest_nets.$$"
