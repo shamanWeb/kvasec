@@ -1855,6 +1855,7 @@ function loadDeviceModes(btn) {
         tag.textContent = '⛔ без интернета';
         head.appendChild(tag);
       }
+      var hasMac = dev.mac && dev.mac !== 'null';
       var bar = document.createElement('div');
       bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
       modes.forEach(function(m) {
@@ -1864,11 +1865,11 @@ function loadDeviceModes(btn) {
         b.textContent = m.t;
         if (active) {
           b.disabled = true;
-        } else if (m.set === 'block' && !dev.mac) {
+        } else if (m.set === 'block' && !hasMac) {
           b.disabled = true;
           b.title = 'Устройство не зарегистрировано — блокировка недоступна';
         }
-        b.onclick = function() { setDeviceMode(dev.ip, dev.mac || '', m.set, b); };
+        b.onclick = function() { setDeviceMode(dev.ip, hasMac ? dev.mac : '', m.set, b); };
         bar.appendChild(b);
       });
       row.appendChild(head);
