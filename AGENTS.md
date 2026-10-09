@@ -233,13 +233,17 @@ cp: can't create '/opt/etc/adblock/exception.list': No such file or directory
     (`rci/show/ip/hotspot` → `ip|name|mac|access`), плюс DHCP/ARP/conntrack для IP, не
     попавших в hotspot. Режим считается awk-ом: `deny`→`blocked` (приоритет), иначе по
     множествам `route_full_ip`/`route_excluded_ip` (`ENVIRON`). Имена JSON-экранируются.
-    **Фильтр LAN** (`in_lan`): оставляем только IP внутри подсетей мостов `br*`
-    (`KVAS_LANNETS` из `ip -o addr show`), выкидывая собственные адреса роутера, broadcast
-    и всё вне локалки (WAN/туннель/служебные IP, которые иначе просачивались из conntrack).
-    Проверка попадания в подсеть — целочисленной арифметикой (`blk=2^(32-pfx)`, без битовых
-    операций, которых может не быть в busybox awk). Если мостов не нашли — фильтр выключается
-    (fail-open). ВАЖНО: jq на роутере собран БЕЗ oniguruma → `gsub/test/match` недоступны,
-    для очистки `|` в имени используется `split("|")|join(" ")`.
+    **Фильтр `in_lan`** (denylist, не allowlist): устройство = on-link сосед в подсети
+    ЛЮБОГО интерфейса (кроме lo), но НЕ собственный адрес роутера и НЕ broadcast. Данные —
+    `KVAS_IFADDR` из `ip -o -f inet addr show` в формате `ip/prefix|broadcast` (broadcast
+    берётся из поля `brd`, только если `$5=="brd"` — у /32-интерфейсов его нет). Собственные
+    IP (все интерфейсы) → set `selfip`; broadcast’ы → set `bcast`; принадлежность подсети —
+    целочисленной арифметикой (`blk=2^(32-pfx)`, без битовых операций, которых может не быть
+    в busybox awk). Настроенные `full`/`exclude` IP показываем ВСЕГДА (в обход фильтра).
+    Так отсекаются адреса роутера, broadcast, WAN/туннель и удалённые служебные IP (из
+    conntrack), а реальные LAN- и VPN-клиенты (на своих интерфейсах, напр. 172.16.x SSTP/OC)
+    остаются. Нет интерфейсов → fail-open (показываем всё). ВАЖНО: jq на роутере собран БЕЗ
+    oniguruma → `gsub/test/match` недоступны, для очистки `|` в имени — `split("|")|join(" ")`.
   - `device_set_mode&ip=&mac=&mode=list|full|exclude|block`:
     - `block` — hotspot `deny` по MAC + config save (требует MAC, иначе ошибка).
     - маршрутные — если устройство было `deny`, сперва `permit`+save; затем убирает IP из
