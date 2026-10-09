@@ -302,8 +302,8 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <div class="card-row" style="margin-bottom:8px;">
       <button class="btn btn-sm" onclick="loadDeviceModes(this)">Обновить список</button>
     </div>
-    <div id="deviceList" class="host-list" style="max-height:400px;"><div class="status">Загрузка...</div></div>
-    <div id="deviceMsg" class="msg"></div>
+    <div id="devModeList" class="host-list" style="max-height:400px;"><div class="status">Загрузка...</div></div>
+    <div id="devModeMsg" class="msg"></div>
   </div>
 
 </div>
@@ -1819,7 +1819,7 @@ initAuth();
 
 // Device management — режим доступа по устройствам
 function loadDeviceModes(btn) {
-  var el = document.getElementById('deviceList');
+  var el = document.getElementById('devModeList');
   if (btn) loadingBtn(btn, true);
   api('/cgi-bin/manage.sh?action=device_modes', function(d) {
     if (btn) loadingBtn(btn, false);
@@ -1880,7 +1880,7 @@ function loadDeviceModes(btn) {
 }
 
 function setDeviceMode(ip, mac, mode, btn) {
-  var el = document.getElementById('deviceMsg');
+  var el = document.getElementById('devModeMsg');
   el.className = 'msg'; el.textContent = 'Применяю…';
   var url = '/cgi-bin/manage.sh?action=device_set_mode&ip=' + encodeURIComponent(ip) + '&mode=' + mode;
   if (mac) url += '&mac=' + encodeURIComponent(mac);
