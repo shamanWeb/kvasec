@@ -207,26 +207,36 @@ cp: can't create '/opt/etc/adblock/exception.list': No such file or directory
 **Идея**: вкладка `tab-devices` (между «Маршрутизация» и «Родительский контроль») даёт
 по-устройственный выбор режима доступа в интернет — без ручного ввода IP в списки.
 
-**Три режима** (строятся поверх уже существующих per-source-IP ключей в `/opt/etc/kvas.conf`):
+**Четыре режима**. Первые три — маршрутизация (поверх per-source-IP ключей
+`/opt/etc/kvas.conf`); четвёртый — доступ (штатный механизм Keenetic, по MAC):
 - **По спискам** (`list`, по умолчанию) — устройства НЕТ ни в одном поадресном ключе;
   обход даёт общее home-правило (`ip4__add_routing_for_home`, ndm:589) для всей LAN.
 - **Напрямую** (`exclude`) — IP в `route_excluded_ip` → правило `-s <ip> -j RETURN` в
   начале цепочки `KVAS_MARK`, весь трафик мимо тоннеля.
 - **Всё в тоннель** (`full`) — IP в `route_full_ip` → весь трафик устройства в VPN.
+- **Нет интернета** (`blocked`) — Keenetic hotspot `access=deny` по MAC через RCI
+  (`POST /rci/ip/hotspot/host {mac,access:deny}` + `POST /rci/system/configuration/save`).
+  Персистентно (переживает перезагрузку), НЕ iptables (иначе NDM сбрасывал бы правило).
+  Доступно только для зарегистрированных устройств (есть MAC); для arp/conntrack-only
+  IP без MAC кнопка блокировки неактивна. `blocked` имеет приоритет над маршрутным
+  режимом в отображении; при переключении на любой маршрутный режим блокировка
+  автоматически снимается (permit+save).
 
 **Важно (архитектура)**: home-правило тоннелит listed-домены для ВСЕЙ LAN, поэтому
 «по спискам» = просто отсутствие IP в `full`/`exclude` (отдельный ключ не нужен; из-за
-этого `route_by_list_ip` фактически избыточен и вкладкой не используется). MAC-матчинга
-в ndm нет — переключение только по IP.
+этого `route_by_list_ip` фактически избыточен и вкладкой не используется). Маршрутизация —
+по IP, блокировка интернета — по MAC.
 
 **Файлы**:
 - `opt/bin/monitor/www/cgi-bin/manage.sh`:
-  - `device_modes` — список устройств (DHCP+ARP+conntrack, как `route_devices`) с текущим
-    режимом; режим считается awk-ом по множествам `route_full_ip`/`route_excluded_ip`
-    (передаются через `ENVIRON`). В выдачу добавляются и настроенные IP, даже если
-    устройство сейчас не активно.
-  - `device_set_mode&ip=&mode=list|full|exclude` — атомарно: убирает IP из обоих ключей,
-    добавляет в целевой (для `list` — никуда), один `kvas route refresh`.
+  - `device_modes` — список устройств; авторитетный источник — Keenetic hotspot
+    (`rci/show/ip/hotspot` → `ip|name|mac|access`), плюс DHCP/ARP/conntrack для IP, не
+    попавших в hotspot. Режим считается awk-ом: `deny`→`blocked` (приоритет), иначе по
+    множествам `route_full_ip`/`route_excluded_ip` (`ENVIRON`). Имена JSON-экранируются.
+  - `device_set_mode&ip=&mac=&mode=list|full|exclude|block`:
+    - `block` — hotspot `deny` по MAC + config save (требует MAC, иначе ошибка).
+    - маршрутные — если устройство было `deny`, сперва `permit`+save; затем убирает IP из
+      обоих ключей, добавляет в целевой (для `list` — никуда), один `kvas route refresh`.
 - `opt/bin/monitor/www/index.html`: вкладка `tab-devices`, хук в `switchTab` (lazy
   `loadDeviceModes()`), JS `loadDeviceModes`/`setDeviceMode` (кнопки через DOM-API,
   имена устройств — `textContent`, без innerHTML → без XSS из DHCP-имён).

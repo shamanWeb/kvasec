@@ -966,31 +966,34 @@ main() {
 			route_exclude=$(grep "^route_excluded_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
 			_tmpdev="/tmp/kvas_dev_modes.$$"
 			: > "$_tmpdev"
-			# DHCP bindings (приоритет — реальные имена)
+			# Keenetic hotspot — авторитетный источник: ip|name|mac|access (вкл. запрет интернета)
+			curl -s "127.0.0.1:79/rci/show/ip/hotspot" 2>/dev/null | \
+				jq -r '.host[] | select(.ip != "" and .ip != null) | "\(.ip)|\(.name)|\(.mac)|\(.access)"' 2>/dev/null >> "$_tmpdev"
+			# DHCP bindings — статические аренды, не попавшие в hotspot (mac/access неизвестны)
 			curl -s "127.0.0.1:79/rci/show/ip/dhcp/bindings" 2>/dev/null | \
-				jq -r '.lease[] | "\(.ip)|\(.name)"' 2>/dev/null >> "$_tmpdev"
-			# ARP-соседи (только IPv4)
+				jq -r '.lease[] | "\(.ip)|\(.name)||permit"' 2>/dev/null >> "$_tmpdev"
+			# ARP-соседи (только IPv4) — с MAC, чтобы их тоже можно было блокировать
 			if command -v ip >/dev/null 2>&1; then
 				ip neigh show 2>/dev/null | grep -E 'REACHABLE|STALE|DELAY' | \
-					awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print $1 "|" ($5 ? $5 : "arp")}' >> "$_tmpdev"
+					awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print $1 "|arp|" ($5 ? $5 : "") "|permit"}' >> "$_tmpdev"
 			elif [ -f /proc/net/arp ]; then
-				tail -n +2 /proc/net/arp 2>/dev/null | awk '$2 != "0x0" {print $1 "|arp"}' >> "$_tmpdev"
+				tail -n +2 /proc/net/arp 2>/dev/null | awk '$2 != "0x0" {print $1 "|arp|" $4 "|permit"}' >> "$_tmpdev"
 			fi
 			# Активные IP из conntrack — только частные диапазоны (RFC 1918)
 			_priv_re='src=(10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+)'
 			if command -v conntrack >/dev/null 2>&1; then
 				conntrack -L 2>/dev/null | grep -oE "$_priv_re" | cut -d= -f2 | sort -u | \
-					awk '{print $1 "|conntrack"}' >> "$_tmpdev"
+					awk '{print $1 "|conntrack||permit"}' >> "$_tmpdev"
 			elif [ -f /proc/net/nf_conntrack ]; then
 				grep -oE "$_priv_re" /proc/net/nf_conntrack 2>/dev/null | cut -d= -f2 | sort -u | \
-					awk '{print $1 "|conntrack"}' >> "$_tmpdev"
+					awk '{print $1 "|conntrack||permit"}' >> "$_tmpdev"
 			fi
 			unset _priv_re
 			# Настроенные IP (full/exclude) — чтобы показать их, даже если устройство сейчас не активно
 			for _ip in $(echo "${route_full} ${route_exclude}" | tr '+' ' '); do
-				[ -n "$_ip" ] && echo "${_ip}|" >> "$_tmpdev"
+				[ -n "$_ip" ] && echo "${_ip}|||permit" >> "$_tmpdev"
 			done
-			# Вывод: для каждого устройства режим (list=по спискам по умолчанию | full | exclude)
+			# Вывод: режим list|full|exclude (маршрутизация) либо blocked (нет интернета)
 			printf '{"ok":true,"devices":['
 			KVAS_FULL="$(echo "$route_full" | tr '+' ' ')" KVAS_EXCL="$(echo "$route_exclude" | tr '+' ' ')" \
 			awk -F'|' '
@@ -999,10 +1002,14 @@ main() {
 					m = split(ENVIRON["KVAS_EXCL"], b, " "); for (i=1;i<=m;i++) excl[b[i]]=1;
 				}
 				!seen[$1]++ {
-					mode = "list";
-					if ($1 in full) mode = "full"; else if ($1 in excl) mode = "exclude";
+					ip=$1; name=$2; mac=$3; access=$4;
+					gsub(/\\/, "\\\\", name); gsub(/"/, "\\\"", name);
+					if (access == "deny") mode = "blocked";
+					else if (ip in full) mode = "full";
+					else if (ip in excl) mode = "exclude";
+					else mode = "list";
 					if (f++) printf ",";
-					printf "{\"ip\":\"%s\",\"name\":\"%s\",\"mode\":\"%s\"}", $1, $2, mode;
+					printf "{\"ip\":\"%s\",\"name\":\"%s\",\"mac\":\"%s\",\"mode\":\"%s\"}", ip, name, mac, mode;
 				}' "$_tmpdev" 2>/dev/null
 			rm -f "$_tmpdev"
 			echo ']}'
@@ -1010,12 +1017,34 @@ main() {
 		device_set_mode)
 			check_token "$token"
 			ip=$(echo "$QUERY_STRING" | sed 's/.*ip=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
-			mode=$(echo "$QUERY_STRING" | sed 's/.*mode=//; s/&.*//' 2>/dev/null)
-			[ -z "$ip" ] && json_error "ip required"
-			case "$mode" in
-				list|full|exclude) ;;
-				*) json_error "mode must be list, full, or exclude" ;;
+			case "$QUERY_STRING" in
+				*mac=*) mac=$(echo "$QUERY_STRING" | sed 's/.*mac=//; s/&.*//; s/%3A/:/gi') ;;
+				*) mac="" ;;
 			esac
+			mode=$(echo "$QUERY_STRING" | sed 's/.*mode=//; s/&.*//' 2>/dev/null)
+			case "$mode" in
+				list|full|exclude|block) ;;
+				*) json_error "mode must be list, full, exclude, or block" ;;
+			esac
+			# Блокировка интернета — штатный механизм Keenetic (hotspot deny), по MAC, персистентно
+			if [ "$mode" = "block" ]; then
+				[ -z "$mac" ] && json_error "устройство не зарегистрировано — блокировка недоступна"
+				curl -s "127.0.0.1:79/rci/ip/hotspot/host" -X POST -H "Content-Type: application/json" \
+					-d "{\"mac\":\"${mac}\",\"access\":\"deny\"}" >/dev/null 2>&1
+				curl -s "127.0.0.1:79/rci/system/configuration/save" -X POST -H "Content-Type: application/json" -d '{}' >/dev/null 2>&1
+				json_ok "internet blocked"
+			fi
+			# Маршрутные режимы: если устройство было заблокировано — сперва снять блокировку
+			[ -z "$ip" ] && json_error "ip required"
+			if [ -n "$mac" ]; then
+				cur_access=$(curl -s "127.0.0.1:79/rci/show/ip/hotspot" 2>/dev/null | \
+					jq -r ".host[] | select(.mac==\"${mac}\") | .access" 2>/dev/null | head -1)
+				if [ "$cur_access" = "deny" ]; then
+					curl -s "127.0.0.1:79/rci/ip/hotspot/host" -X POST -H "Content-Type: application/json" \
+						-d "{\"mac\":\"${mac}\",\"access\":\"permit\"}" >/dev/null 2>&1
+					curl -s "127.0.0.1:79/rci/system/configuration/save" -X POST -H "Content-Type: application/json" -d '{}' >/dev/null 2>&1
+				fi
+			fi
 			# Сначала убираем IP из обоих поадресных списков (чистое переключение)
 			for key in route_full_ip route_excluded_ip; do
 				current=$(grep "^${key}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
