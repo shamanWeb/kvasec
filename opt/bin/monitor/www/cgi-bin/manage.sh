@@ -995,15 +995,43 @@ main() {
 			for _ip in $(echo "${route_full} ${route_exclude}" | tr '+' ' '); do
 				[ -n "$_ip" ] && echo "${_ip}|||permit" >> "$_tmpdev"
 			done
+			# LAN-подсети мостов (br*) — чтобы отфильтровать собственные адреса роутера,
+			# broadcast и всё вне локалки (WAN/туннель/служебные IP из conntrack)
+			lan_nets=$(ip -o -f inet addr show 2>/dev/null | awk '$2 ~ /^br[0-9]/ {print $4}' | tr '\n' ' ')
 			# Вывод: режим list|full|exclude (маршрутизация) либо blocked (нет интернета)
 			printf '{"ok":true,"devices":['
 			KVAS_FULL="$(echo "$route_full" | tr '+' ' ')" KVAS_EXCL="$(echo "$route_exclude" | tr '+' ' ')" \
+			KVAS_LANNETS="$lan_nets" \
 			awk -F'|' '
+				function ip2int(s,  p) { split(s, p, "."); return p[1]*16777216 + p[2]*65536 + p[3]*256 + p[4] }
+				function in_lan(s,  di, i) {
+					if (nlan == 0) return 1;              # нет данных о мостах — не фильтруем
+					if (s !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return 0;
+					di = ip2int(s);
+					for (i = 1; i <= nlan; i++) {
+						if (int(di / lblk[i]) * lblk[i] == lnet[i]) {
+							if (di == lself[i] || di == lbc[i]) return 0;  # сам роутер / broadcast
+							return 1;
+						}
+					}
+					return 0;                             # вне LAN-подсетей
+				}
 				BEGIN {
 					n = split(ENVIRON["KVAS_FULL"], a, " "); for (i=1;i<=n;i++) full[a[i]]=1;
 					m = split(ENVIRON["KVAS_EXCL"], b, " "); for (i=1;i<=m;i++) excl[b[i]]=1;
+					nn = split(ENVIRON["KVAS_LANNETS"], nets, " "); nlan = 0;
+					for (i = 1; i <= nn; i++) {
+						if (split(nets[i], cc, "/") != 2) continue;
+						pfx = cc[2] + 0; if (pfx < 1 || pfx > 32) continue;
+						blk = 2 ^ (32 - pfx);
+						self = ip2int(cc[1]);
+						nlan++;
+						lblk[nlan] = blk; lnet[nlan] = int(self / blk) * blk;
+						lself[nlan] = self; lbc[nlan] = lnet[nlan] + blk - 1;
+					}
 				}
 				!seen[$1]++ {
+					if (!in_lan($1)) next;
 					ip=$1; name=$2; mac=$3; access=$4;
 					gsub(/\\/, "\\\\", name); gsub(/"/, "\\\"", name);
 					if (access == "deny") mode = "blocked";

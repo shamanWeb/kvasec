@@ -233,6 +233,13 @@ cp: can't create '/opt/etc/adblock/exception.list': No such file or directory
     (`rci/show/ip/hotspot` → `ip|name|mac|access`), плюс DHCP/ARP/conntrack для IP, не
     попавших в hotspot. Режим считается awk-ом: `deny`→`blocked` (приоритет), иначе по
     множествам `route_full_ip`/`route_excluded_ip` (`ENVIRON`). Имена JSON-экранируются.
+    **Фильтр LAN** (`in_lan`): оставляем только IP внутри подсетей мостов `br*`
+    (`KVAS_LANNETS` из `ip -o addr show`), выкидывая собственные адреса роутера, broadcast
+    и всё вне локалки (WAN/туннель/служебные IP, которые иначе просачивались из conntrack).
+    Проверка попадания в подсеть — целочисленной арифметикой (`blk=2^(32-pfx)`, без битовых
+    операций, которых может не быть в busybox awk). Если мостов не нашли — фильтр выключается
+    (fail-open). ВАЖНО: jq на роутере собран БЕЗ oniguruma → `gsub/test/match` недоступны,
+    для очистки `|` в имени используется `split("|")|join(" ")`.
   - `device_set_mode&ip=&mac=&mode=list|full|exclude|block`:
     - `block` — hotspot `deny` по MAC + config save (требует MAC, иначе ошибка).
     - маршрутные — если устройство было `deny`, сперва `permit`+save; затем убирает IP из
