@@ -615,7 +615,11 @@ ip4__dns__create_chain() {
 
 	/opt/sbin/iptables -N "${CHAIN_DNS}" -w -t "${TABLE_DNS}"
 
-	ip4__chain__exclude_source_by_config "${TABLE_DNS}" "${CHAIN_DNS}"
+	# НЕ исключаем route_excluded_ip из DNS-редиректа: иначе устройство в режиме
+	# «Напрямую» теряет DNS (kvas dnsmasq слушает только :9753, а на :53 для
+	# не-завёрнутых клиентов ответа нет). «Напрямую» должно убирать устройство
+	# только из туннеля (KVAS_MARK), но DNS по-прежнему резолвить через kvas.
+	# ip4__chain__exclude_source_by_config "${TABLE_DNS}" "${CHAIN_DNS}"
 
 	IFS=' '
 	for protocol in udp tcp ; do

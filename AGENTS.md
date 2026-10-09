@@ -256,5 +256,21 @@ cp: can't create '/opt/etc/adblock/exception.list': No such file or directory
 `device_set_mode exclude` пишет ключ, `route refresh` создаёт `-A KVAS_MARK -s <ip>/32 -j
 RETURN`, возврат в `list` чистит ключ.
 
+### Фикс: «Напрямую» (route_excluded_ip) ломал DNS устройству
+
+**Симптом**: устройство в режиме «Напрямую» теряло интернет (DNS-запросы к 192.168.1.1:53
+уходили в `[UNREPLIED]`), хотя уже установленные по IP соединения работали.
+**Причина**: `ip4__chain__exclude_source_by_config` (ndm) вызывалась ДВАЖДЫ — для
+`KVAS_MARK` (ndm:416, верно: убирает из туннеля) И для `KVAS_DNS` (ndm:618). Второй вызов
+добавлял `-A KVAS_DNS -s <ip> -j RETURN`, т.е. исключал устройство из DNS-редиректа. Но
+kvas dnsmasq слушает ТОЛЬКО `127.0.0.1:9753`, а на `:53` для не-завёрнутых клиентов ответа
+нет (нативный Keenetic DNS не отвечает — у юзера он не фолбэчит) → DNS ломался.
+**Фикс**: закомментирован вызов `ip4__chain__exclude_source_by_config` для DNS-цепочки в
+`ip4__dns__create_chain` (ndm:618). Теперь «Напрямую» убирает устройство только из туннеля
+(KVAS_MARK), а DNS по-прежнему резолвится через kvas dnsmasq (adblock тоже применяется).
+**Файл**: `opt/etc/ndm/ndm` (`ip4__dns__create_chain`). KVAS_DNS кэшируется, но `kvas route
+refresh` её пересоздаёт, так что фикс подхватывается. Проверено: в режиме exclude у
+устройства есть `KVAS_MARK ... RETURN`, но НЕТ `KVAS_DNS ... RETURN`.
+
 ## Формат ipk
 gzip(tar( debian-binary + control.tar.gz + data.tar.gz )), строки с LF.
