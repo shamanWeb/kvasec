@@ -960,6 +960,89 @@ main() {
 			rm -f "$_tmpdev"
 			echo ']}'
 			;;
+		device_modes)
+			check_token "$token"
+			route_full=$(grep "^route_full_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
+			route_exclude=$(grep "^route_excluded_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
+			_tmpdev="/tmp/kvas_dev_modes.$$"
+			: > "$_tmpdev"
+			# DHCP bindings (приоритет — реальные имена)
+			curl -s "127.0.0.1:79/rci/show/ip/dhcp/bindings" 2>/dev/null | \
+				jq -r '.lease[] | "\(.ip)|\(.name)"' 2>/dev/null >> "$_tmpdev"
+			# ARP-соседи (только IPv4)
+			if command -v ip >/dev/null 2>&1; then
+				ip neigh show 2>/dev/null | grep -E 'REACHABLE|STALE|DELAY' | \
+					awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print $1 "|" ($5 ? $5 : "arp")}' >> "$_tmpdev"
+			elif [ -f /proc/net/arp ]; then
+				tail -n +2 /proc/net/arp 2>/dev/null | awk '$2 != "0x0" {print $1 "|arp"}' >> "$_tmpdev"
+			fi
+			# Активные IP из conntrack — только частные диапазоны (RFC 1918)
+			_priv_re='src=(10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+)'
+			if command -v conntrack >/dev/null 2>&1; then
+				conntrack -L 2>/dev/null | grep -oE "$_priv_re" | cut -d= -f2 | sort -u | \
+					awk '{print $1 "|conntrack"}' >> "$_tmpdev"
+			elif [ -f /proc/net/nf_conntrack ]; then
+				grep -oE "$_priv_re" /proc/net/nf_conntrack 2>/dev/null | cut -d= -f2 | sort -u | \
+					awk '{print $1 "|conntrack"}' >> "$_tmpdev"
+			fi
+			unset _priv_re
+			# Настроенные IP (full/exclude) — чтобы показать их, даже если устройство сейчас не активно
+			for _ip in $(echo "${route_full} ${route_exclude}" | tr '+' ' '); do
+				[ -n "$_ip" ] && echo "${_ip}|" >> "$_tmpdev"
+			done
+			# Вывод: для каждого устройства режим (list=по спискам по умолчанию | full | exclude)
+			printf '{"ok":true,"devices":['
+			KVAS_FULL="$(echo "$route_full" | tr '+' ' ')" KVAS_EXCL="$(echo "$route_exclude" | tr '+' ' ')" \
+			awk -F'|' '
+				BEGIN {
+					n = split(ENVIRON["KVAS_FULL"], a, " "); for (i=1;i<=n;i++) full[a[i]]=1;
+					m = split(ENVIRON["KVAS_EXCL"], b, " "); for (i=1;i<=m;i++) excl[b[i]]=1;
+				}
+				!seen[$1]++ {
+					mode = "list";
+					if ($1 in full) mode = "full"; else if ($1 in excl) mode = "exclude";
+					if (f++) printf ",";
+					printf "{\"ip\":\"%s\",\"name\":\"%s\",\"mode\":\"%s\"}", $1, $2, mode;
+				}' "$_tmpdev" 2>/dev/null
+			rm -f "$_tmpdev"
+			echo ']}'
+			;;
+		device_set_mode)
+			check_token "$token"
+			ip=$(echo "$QUERY_STRING" | sed 's/.*ip=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
+			mode=$(echo "$QUERY_STRING" | sed 's/.*mode=//; s/&.*//' 2>/dev/null)
+			[ -z "$ip" ] && json_error "ip required"
+			case "$mode" in
+				list|full|exclude) ;;
+				*) json_error "mode must be list, full, or exclude" ;;
+			esac
+			# Сначала убираем IP из обоих поадресных списков (чистое переключение)
+			for key in route_full_ip route_excluded_ip; do
+				current=$(grep "^${key}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
+				if echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
+					new_list=$(echo "$current" | tr '+' '\n' | grep -v "^${ip}$" | tr '\n' '+' | sed 's/+$//')
+					sed -i "/^${key}=/d" "$KVAS_CONF_FILE" 2>/dev/null
+					[ -n "$new_list" ] && echo "${key}=${new_list}" >> "$KVAS_CONF_FILE"
+				fi
+			done
+			# Добавляем в целевой список (list = режим по умолчанию, отдельного ключа не требует)
+			tgt=""
+			[ "$mode" = "full" ] && tgt="route_full_ip"
+			[ "$mode" = "exclude" ] && tgt="route_excluded_ip"
+			if [ -n "$tgt" ]; then
+				current=$(grep "^${tgt}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
+				if ! echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
+					[ -n "$current" ] && current="${current}+${ip}" || current="$ip"
+					sed -i "/^${tgt}=/d" "$KVAS_CONF_FILE" 2>/dev/null
+					echo "${tgt}=${current}" >> "$KVAS_CONF_FILE"
+				fi
+			fi
+			if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
+				json_ok "mode set"
+			else
+				json_error "route refresh failed, see /tmp/kvas-route-refresh.log"
+			fi
+			;;
 		route_guest_networks)
 			check_token "$token"
 			_tmp="/tmp/kvas_guest_nets.$$"

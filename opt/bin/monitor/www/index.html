@@ -128,6 +128,7 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
   <div class="tab" data-tab="manage" onclick="switchTab('manage')">Управление</div>
   <div class="tab" data-tab="tags" onclick="switchTab('tags')">Закваски</div>
   <div class="tab" data-tab="route" onclick="switchTab('route')">Маршрутизация</div>
+  <div class="tab" data-tab="devices" onclick="switchTab('devices')">Устройства</div>
   <div class="tab" data-tab="parental" onclick="switchTab('parental')">Родительский контроль</div>
   <div class="tab" data-tab="adblock" onclick="switchTab('adblock')">Реклама</div>
   <div class="tab" data-tab="bypass" onclick="switchTab('bypass')">Мониторинг обхода</div>
@@ -284,6 +285,24 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
       <button class="btn btn-sm danger" onclick="routeGuestDel()">Удалить сеть</button>
     </div>
     <div id="routeGuestMsg" class="msg"></div>
+  </div>
+
+</div>
+
+<!-- ========== TAB: Устройства ========== -->
+<div id="tab-devices" class="tab-content">
+
+  <div class="card">
+    <h3>Управление устройствами</h3>
+    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Для каждого устройства в сети выберите режим доступа в интернет.<br>
+    <b style="color:#2ea043;">По спискам</b> — обход блокировок только для сайтов из списков KVASEC (режим по умолчанию).<br>
+    <b style="color:#58a6ff;">Напрямую</b> — весь трафик идёт мимо тоннеля, ничего не обходится.<br>
+    <b style="color:#58a6ff;">Всё в тоннель</b> — весь трафик устройства идёт через VPN.</p>
+    <div class="card-row" style="margin-bottom:8px;">
+      <button class="btn btn-sm" onclick="loadDeviceModes(this)">Обновить список</button>
+    </div>
+    <div id="deviceList" class="host-list" style="max-height:400px;"><div class="status">Загрузка...</div></div>
+    <div id="deviceMsg" class="msg"></div>
   </div>
 
 </div>
@@ -596,6 +615,7 @@ function switchTab(name) {
     blockWatchTimer = null;
   }
   if (name === 'adblock') loadAdblockStatus();
+  if (name === 'devices') loadDeviceModes();
   if (name === 'dashboard') startDashboard(); else stopDashboard();
 }
 
@@ -1795,6 +1815,69 @@ function doLogout() {
 
 /* ========== INIT ========== */
 initAuth();
+
+// Device management — режим доступа по устройствам
+function loadDeviceModes(btn) {
+  var el = document.getElementById('deviceList');
+  if (btn) loadingBtn(btn, true);
+  api('/cgi-bin/manage.sh?action=device_modes', function(d) {
+    if (btn) loadingBtn(btn, false);
+    if (!d.ok || !d.devices || !d.devices.length) {
+      el.innerHTML = '<div class="status" style="color:#8b949e;">Нет устройств</div>';
+      return;
+    }
+    var modes = [
+      {k:'list', t:'По спискам', cls:'success'},
+      {k:'exclude', t:'Напрямую', cls:'primary'},
+      {k:'full', t:'Всё в тоннель', cls:'primary'}
+    ];
+    el.innerHTML = '';
+    d.devices.forEach(function(dev) {
+      var row = document.createElement('div');
+      row.className = 'host-item';
+      row.style.flexWrap = 'wrap';
+      var head = document.createElement('div');
+      head.style.cssText = 'min-width:100%;margin-bottom:4px;';
+      var ipSpan = document.createElement('span');
+      ipSpan.style.cssText = 'color:#58a6ff;font-family:monospace;';
+      ipSpan.textContent = dev.ip;
+      var nameSpan = document.createElement('span');
+      nameSpan.style.cssText = 'color:#8b949e;margin-left:8px;';
+      nameSpan.textContent = dev.name || '—';
+      head.appendChild(ipSpan);
+      head.appendChild(nameSpan);
+      var bar = document.createElement('div');
+      bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
+      modes.forEach(function(m) {
+        var b = document.createElement('button');
+        var active = dev.mode === m.k;
+        b.className = 'btn btn-sm' + (active ? ' ' + m.cls : '');
+        b.textContent = m.t;
+        b.disabled = active;
+        b.onclick = function() { setDeviceMode(dev.ip, m.k, b); };
+        bar.appendChild(b);
+      });
+      row.appendChild(head);
+      row.appendChild(bar);
+      el.appendChild(row);
+    });
+  });
+}
+
+function setDeviceMode(ip, mode, btn) {
+  var el = document.getElementById('deviceMsg');
+  el.className = 'msg'; el.textContent = 'Применяю…';
+  apiBtn('/cgi-bin/manage.sh?action=device_set_mode&ip=' + encodeURIComponent(ip) + '&mode=' + mode, btn, function(d) {
+    if (d.ok) {
+      el.className = 'msg ok';
+      el.textContent = 'Режим изменён, маршруты обновлены';
+      loadDeviceModes();
+    } else {
+      el.className = 'msg err';
+      el.textContent = d.error || 'Ошибка';
+    }
+  });
+}
 
 // Route management
 function routeAction(action, btn) {

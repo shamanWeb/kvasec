@@ -202,5 +202,38 @@ cp: can't create '/opt/etc/adblock/exception.list': No such file or directory
 
 **Версия**: `kvas_1.1.9_beta-10-352_all.ipk`.
 
+## Управление устройствами в WebUI (вкладка «Устройства»)
+
+**Идея**: вкладка `tab-devices` (между «Маршрутизация» и «Родительский контроль») даёт
+по-устройственный выбор режима доступа в интернет — без ручного ввода IP в списки.
+
+**Три режима** (строятся поверх уже существующих per-source-IP ключей в `/opt/etc/kvas.conf`):
+- **По спискам** (`list`, по умолчанию) — устройства НЕТ ни в одном поадресном ключе;
+  обход даёт общее home-правило (`ip4__add_routing_for_home`, ndm:589) для всей LAN.
+- **Напрямую** (`exclude`) — IP в `route_excluded_ip` → правило `-s <ip> -j RETURN` в
+  начале цепочки `KVAS_MARK`, весь трафик мимо тоннеля.
+- **Всё в тоннель** (`full`) — IP в `route_full_ip` → весь трафик устройства в VPN.
+
+**Важно (архитектура)**: home-правило тоннелит listed-домены для ВСЕЙ LAN, поэтому
+«по спискам» = просто отсутствие IP в `full`/`exclude` (отдельный ключ не нужен; из-за
+этого `route_by_list_ip` фактически избыточен и вкладкой не используется). MAC-матчинга
+в ndm нет — переключение только по IP.
+
+**Файлы**:
+- `opt/bin/monitor/www/cgi-bin/manage.sh`:
+  - `device_modes` — список устройств (DHCP+ARP+conntrack, как `route_devices`) с текущим
+    режимом; режим считается awk-ом по множествам `route_full_ip`/`route_excluded_ip`
+    (передаются через `ENVIRON`). В выдачу добавляются и настроенные IP, даже если
+    устройство сейчас не активно.
+  - `device_set_mode&ip=&mode=list|full|exclude` — атомарно: убирает IP из обоих ключей,
+    добавляет в целевой (для `list` — никуда), один `kvas route refresh`.
+- `opt/bin/monitor/www/index.html`: вкладка `tab-devices`, хук в `switchTab` (lazy
+  `loadDeviceModes()`), JS `loadDeviceModes`/`setDeviceMode` (кнопки через DOM-API,
+  имена устройств — `textContent`, без innerHTML → без XSS из DHCP-имён).
+
+**Проверено на живом роутере**: `device_modes` отдаёт валидный JSON с реальными именами;
+`device_set_mode exclude` пишет ключ, `route refresh` создаёт `-A KVAS_MARK -s <ip>/32 -j
+RETURN`, возврат в `list` чистит ключ.
+
 ## Формат ipk
 gzip(tar( debian-binary + control.tar.gz + data.tar.gz )), строки с LF.
