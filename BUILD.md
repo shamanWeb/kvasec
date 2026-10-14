@@ -36,7 +36,8 @@ make test
 
 Формат идентичен отгружаемым релизам: `gzip(tar( debian-binary + control.tar.gz + data.tar.gz ))`.
 Всё дерево `opt/` кладётся в `/opt/apps/kvas/`, плюс системные точки входа
-(`S96kvas`, `15-kvas-start.sh`, `100-dns-local`) дублируются в `/opt/etc/`.
+(`S96kvas`, `S99kvas-awg-route`, `15-kvas-start.sh`, netfilter.d-хуки `100-dns-local`,
+`100-vpn-mark`, `090-iot-lockdown`) дублируются в `/opt/etc/` — только там их читает NDM.
 
 **Важно:** `bin/libs/ndm` в репозитории нет — он генерируется `postinst` из `etc/ndm/ndm`
 (поэтому правка `RULE_PRIORITY=99` в `etc/ndm/ndm` автоматически попадает в рантайм-хук).
