@@ -64,6 +64,10 @@ cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/100-dns-local"     "${DATA}/opt/etc/n
 # пересоздавал маркировку KVAS_MARK на netfilter-сбросах (иначе выживал только
 # DNS-редирект, а маркировка слетала — корень хрупкости KVAS_MARK).
 cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/100-vpn-mark"      "${DATA}/opt/etc/ndm/netfilter.d/"
+# 090-iot-lockdown: изоляция недоверенных устройств от портов управления роутера
+# (по MAC из /opt/etc/kvas-iot-lockdown.list, которым управляет веб-UI). Как и
+# прочие хуки — в активный /opt/etc/ndm/netfilter.d/, иначе NDM его не запустит.
+cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/090-iot-lockdown"  "${DATA}/opt/etc/ndm/netfilter.d/"
 
 # Права на исполнение
 chmod -R +x "${DATA}/opt/apps/kvas/bin"          2>/dev/null || true
@@ -73,7 +77,8 @@ chmod +x    "${DATA}/opt/etc/init.d/S96kvas" \
             "${DATA}/opt/etc/init.d/S99kvas-awg-route" \
             "${DATA}/opt/etc/ndm/fs.d/15-kvas-start.sh" \
             "${DATA}/opt/etc/ndm/netfilter.d/100-dns-local" \
-            "${DATA}/opt/etc/ndm/netfilter.d/100-vpn-mark"
+            "${DATA}/opt/etc/ndm/netfilter.d/100-vpn-mark" \
+            "${DATA}/opt/etc/ndm/netfilter.d/090-iot-lockdown"
 
 INSTALLED_SIZE="$(du -sb "${DATA}" | cut -f1)"
 

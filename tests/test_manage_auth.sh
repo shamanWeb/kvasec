@@ -24,8 +24,8 @@ run_api() {
     QUERY_STRING="$1" REQUEST_METHOD="$2" sh "$WORK/manage.sh"
 }
 
-# Первичная установка — только POST и минимум 4 символа.
-run_api 'action=set_pass&pass=abc' POST | grep -F 'min 4 symbols' >/dev/null
+# Первичная установка — только POST и минимум 8 символов.
+run_api 'action=set_pass&pass=abc' POST | grep -F 'min 8 symbols' >/dev/null
 run_api 'action=set_pass&pass=first%2Dpassword%2D123' GET | grep -F 'POST required' >/dev/null
 run_api 'action=set_pass&pass=first%2Dpassword%2D123' POST | grep -F '"ok":true' >/dev/null
 grep -Eq '^sha256:[0-9a-f]{64}$' "$WORK/pass"

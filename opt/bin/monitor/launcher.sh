@@ -1,6 +1,9 @@
 #!/bin/sh
 # Launch KVAS monitoring web UI
 PORT=${MONITOR_PORT:-8085}
+# Веб-UI — админ-доступ, не публичный сервис. Python-fallback тоже должен
+# слушать только LAN-интерфейс, а не 0.0.0.0 (иначе торчал бы на WAN).
+MONITOR_BIND=${MONITOR_BIND:-192.168.1.1}
 WWW_DIR=/opt/apps/kvas/bin/monitor/www
 PID_FILE=/var/run/kvas-monitor-web.pid
 HTTPD_SCRIPT=/opt/apps/kvas/bin/monitor/httpd.sh
@@ -86,7 +89,7 @@ start_python_server() {
     "$pybin" -c "
 import http.server, os
 os.chdir('${WWW_DIR}')
-http.server.test(HandlerClass=http.server.CGIHTTPRequestHandler, port=${PORT})
+http.server.test(HandlerClass=http.server.CGIHTTPRequestHandler, port=${PORT}, bind='${MONITOR_BIND}')
 " >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     sleep 1

@@ -363,6 +363,9 @@ case "$action" in
 		echo
 		;;
 	action=debug)
+		# Диагностика раскрывает $PATH, DNS-лог и срезы conntrack — выключена по
+		# умолчанию, включается только наличием флаг-файла (для траблшутинга).
+		[ -f /opt/etc/kvas-monitor-debug ] || json_error "debug disabled"
 		echo -n '{'
 		echo -n '"path":"'
 		json_escape "$PATH"
@@ -431,6 +434,7 @@ case "$action" in
 		echo
 		;;
 	action=test_data*)
+		[ -f /opt/etc/kvas-monitor-debug ] || json_error "debug disabled"
 		ips=$(echo "$QUERY_STRING" | sed 's/.*ips=//; s/&.*//; s/%2C/,/g' | sed 's/%20/ /g')
 		echo -n '{'
 		echo -n '"ips":"'

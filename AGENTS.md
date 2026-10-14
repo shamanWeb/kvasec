@@ -297,5 +297,73 @@ query-лог протухает, а код всё равно считал его
 `opt/bin/monitor/www/index.html` (`bypassCheckMode` + понятное сообщение при пустой истории
 DNS с подсказкой включить watcher).
 
+## Изоляция устройств от админки роутера (вкладка «Устройства», 2026-10-14)
+
+**Идея**: защита от «пивота» со взломанного IoT — запрет недоверенным устройствам (по MAC)
+доступа к портам управления роутера (**SSH 22, Telnet 23, RCI 79, админка 80/443,
+веб-монитор 8085**). Интернет/DNS устройства НЕ затрагиваются. Ортогонально режиму
+маршрутизации: устройство может быть «по спискам» И изолировано одновременно.
+
+**Почему именно так**: устройства в одной подсети общаются на L2 (свитч), роутер этот
+трафик не видит → firewall’ом нельзя блокировать «IoT → ПК» в одном сегменте. Но можно
+блокировать «IoT → сам роутер» (цепочка INPUT). Полная L2-изоляция требует отдельного
+сегмента+SSID с переподключением устройств (не реализовано в UI).
+
+**Механизм**:
+- **Источник правды** — `/opt/etc/kvas-iot-lockdown.list` (один MAC в строке, нижний регистр).
+- **Хук** `opt/etc/ndm/netfilter.d/090-iot-lockdown`: читает список, строит цепочку
+  `_IOT_LOCKDOWN` (правило `-m mac --mac-source <mac> -p tcp --dport <port> -j DROP` на порт),
+  джампит в неё из `INPUT -i br0`. Идемпотентен, срабатывает при каждой пересборке netfilter
+  (переживает перезагрузку/`kvas route refresh`). **ВАЖНО**: ядро Keenetic БЕЗ `xt_multiport`
+  → правила по одному порту (матч `mac` есть); `br0` = LAN-мост.
+- **CGI** (`manage.sh`):
+  - `device_modes` отдаёт доп. флаг `"isolated":true/false` (MAC в списке; env `KVAS_LOCKED`
+    → awk-set `locked`, сравнение `tolower(mac)`).
+  - `device_set_isolation&mac=&state=on|off`: `normalize_mac` (валидация+нижний регистр,
+    `grep -Eo` с якорями гасит инъекцию `%0A`), проверяет что хук `-x` ДО правки списка,
+    правит список (`grep -ivxF` убирает без дублей, добавляет если on), перезапускает хук
+    и **делает readback** (`iptables -S _IOT_LOCKDOWN | grep -iF -- "--mac-source $mac"`) —
+    не рапортует успех вслепую (принцип AGENTS #13). Хук экспортит свой PATH (iptables в
+    /opt/sbin), т.к. вызывается и из NDM, и из CGI.
+  - Хелперы `normalize_mac`, `iot_locked_macs`; константы `IOT_LOCKDOWN_LIST/HOOK`.
+- **UI** (`index.html`): в строке устройства кнопка-тумблер «🔒 Изолировать»/«🔒 Изолировано»
+  (класс `.btn.warn`, янтарный), только при наличии MAC; JS `setDeviceIsolation`.
+
+**Проверено на живом роутере**: флаг isolated корректен (доверенные=false, IoT=true),
+on/off правит список и число правил (11 MAC×6 портов=66 ⇄ 60), дедуп без учёта регистра,
+плохой MAC отклоняется. Список host-specific (MAC юзера) — в ipk кладём хук пустым (список
+создаётся в рантайме через UI).
+
+## Хардненинг CGI веб-UI (2026-10-14, п.3 security-аудита)
+
+Все правки — defense-in-depth поверх токен-аутентификации (панель LAN-only). Цель —
+закрыть пост-ауth инъекции (config/argument/sed/info-disclosure), найденные аудитом.
+
+**manage.sh** — валидация ввода перед использованием:
+- Хелперы `valid_ip_or_cidr` (IPv4[/CIDR]) и `valid_ifname` (`[A-Za-z0-9_.+-]`).
+  **Ловушка awk**: в `valid_ip_or_cidr` НЕ использовать `END{exit 0}` — `exit N` в
+  основном блоке выполняет END, который перезатёр бы код выхода (из-за этого `1.2.3.999`
+  сначала проходил). Проверка октетов `$i+0>255` без END.
+- `route_add`/`route_del`: `valid_ip_or_cidr "$ip"` (писался в kvas.conf без проверки).
+- `device_set_mode`: `mac` через `normalize_mac` (шёл в RCI-JSON и jq-фильтр без валидации),
+  `ip` через `valid_ip_or_cidr`.
+- `route_guest_add`/`del`: `valid_ifname "$net"`.
+- `host_add`: очищенный домен в lower + `valid_domain` ДО `sed -i "s|^${clean}$|…"`
+  (раньше без проверки → sed-инъекция/порча kvas.list).
+- `tags_create`/`tags_edit_save`: `$domains` идёт в kvas БЕЗ кавычек (word-split) —
+  per-token гвард `case "$_d" in -*|*[!a-zA-Z0-9.*_-]*) ... ` (option/arg injection);
+  плюс запрет ведущего `-` у `name`.
+- Мин. длина пароля панели 4→8 (`set_pass`/`change_pass`); тест обновлён.
+
+**data.sh**: `action=debug` и `action=test_data` (раскрывали `$PATH`, DNS-лог, срезы
+conntrack) выключены по умолчанию — гейт `[ -f /opt/etc/kvas-monitor-debug ]`. В UI не
+используются; включать флаг-файлом только для траблшутинга.
+
+**launcher.sh**: python-fallback слушал `0.0.0.0` — теперь `bind='${MONITOR_BIND}'`
+(LAN-IP), чтобы при отсутствии socat панель не выставлялась на WAN.
+
+Проверено на живом роутере: плохие ip/mac/domain/iface отклоняются, валидные проходят,
+`debug disabled`, все `make test` зелёные.
+
 ## Формат ipk
 gzip(tar( debian-binary + control.tar.gz + data.tar.gz )), строки с LF.

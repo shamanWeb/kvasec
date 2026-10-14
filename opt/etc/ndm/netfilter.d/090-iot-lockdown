@@ -1,0 +1,53 @@
+#!/bin/sh
+
+#------------------------------------------------------------------------------
+#
+#	ПАКЕТ KVASEC
+#
+#------------------------------------------------------------------------------
+#
+#	IoT-изоляция: запрет недоверенным устройствам (по MAC) доступа к портам
+#	управления роутера (SSH/Telnet/RCI/админка/веб-монитор) на LAN-мосту.
+#	Источник правды — /opt/etc/kvas-iot-lockdown.list (один MAC в строке),
+#	которым управляет вкладка «Устройства» в веб-UI (device_set_isolation).
+#
+#	Срабатывает при каждой пересборке правил netfilter (как и прочие хуки KVAS),
+#	поэтому переживает перезагрузку и kvas route refresh. НЕ влияет на
+#	интернет/DNS устройств — блокируются только порты управления.
+#
+#	ВАЖНО: ядро Keenetic без xt_multiport → правила по одному порту; модуль
+#	mac присутствует.
+#
+# ------------------------------------------------------------------------------
+
+[ "$type" = "iptables" ] || exit 0
+[ "$table" = "filter" ] || exit 0
+
+# Явный PATH: хук вызывается и из NDM, и из веб-CGI (device_set_isolation) —
+# iptables лежит в /opt/sbin, который может отсутствовать в PATH вызывающего.
+export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
+
+LAN_IF=br0
+CHAIN=_IOT_LOCKDOWN
+PORTS="22 23 79 80 443 8085"
+LIST=/opt/etc/kvas-iot-lockdown.list
+
+iptables -t filter -N "$CHAIN" 2>/dev/null
+iptables -t filter -F "$CHAIN"
+
+if [ -f "$LIST" ]; then
+	while IFS= read -r mac; do
+		mac=$(printf '%s' "$mac" | tr -d ' \t\r' | tr 'A-F' 'a-f')
+		case "$mac" in ''|'#'*) continue ;; esac
+		echo "$mac" | grep -Eq '^([0-9a-f]{2}:){5}[0-9a-f]{2}$' || continue
+		for port in $PORTS; do
+			iptables -t filter -A "$CHAIN" -m mac --mac-source "$mac" -p tcp --dport "$port" -j DROP
+		done
+	done < "$LIST"
+fi
+
+# Джамп в INPUT ставим всегда (пустая цепочка = no-op), идемпотентно
+iptables -t filter -C INPUT -i "$LAN_IF" -j "$CHAIN" 2>/dev/null || \
+	iptables -t filter -I INPUT -i "$LAN_IF" -j "$CHAIN"
+
+exit 0
