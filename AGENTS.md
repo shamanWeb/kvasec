@@ -334,5 +334,36 @@ on/off правит список и число правил (11 MAC×6 порт�
 плохой MAC отклоняется. Список host-specific (MAC юзера) — в ipk кладём хук пустым (список
 создаётся в рантайме через UI).
 
+## Хардненинг CGI веб-UI (2026-10-14, п.3 security-аудита)
+
+Все правки — defense-in-depth поверх токен-аутентификации (панель LAN-only). Цель —
+закрыть пост-ауth инъекции (config/argument/sed/info-disclosure), найденные аудитом.
+
+**manage.sh** — валидация ввода перед использованием:
+- Хелперы `valid_ip_or_cidr` (IPv4[/CIDR]) и `valid_ifname` (`[A-Za-z0-9_.+-]`).
+  **Ловушка awk**: в `valid_ip_or_cidr` НЕ использовать `END{exit 0}` — `exit N` в
+  основном блоке выполняет END, который перезатёр бы код выхода (из-за этого `1.2.3.999`
+  сначала проходил). Проверка октетов `$i+0>255` без END.
+- `route_add`/`route_del`: `valid_ip_or_cidr "$ip"` (писался в kvas.conf без проверки).
+- `device_set_mode`: `mac` через `normalize_mac` (шёл в RCI-JSON и jq-фильтр без валидации),
+  `ip` через `valid_ip_or_cidr`.
+- `route_guest_add`/`del`: `valid_ifname "$net"`.
+- `host_add`: очищенный домен в lower + `valid_domain` ДО `sed -i "s|^${clean}$|…"`
+  (раньше без проверки → sed-инъекция/порча kvas.list).
+- `tags_create`/`tags_edit_save`: `$domains` идёт в kvas БЕЗ кавычек (word-split) —
+  per-token гвард `case "$_d" in -*|*[!a-zA-Z0-9.*_-]*) ... ` (option/arg injection);
+  плюс запрет ведущего `-` у `name`.
+- Мин. длина пароля панели 4→8 (`set_pass`/`change_pass`); тест обновлён.
+
+**data.sh**: `action=debug` и `action=test_data` (раскрывали `$PATH`, DNS-лог, срезы
+conntrack) выключены по умолчанию — гейт `[ -f /opt/etc/kvas-monitor-debug ]`. В UI не
+используются; включать флаг-файлом только для траблшутинга.
+
+**launcher.sh**: python-fallback слушал `0.0.0.0` — теперь `bind='${MONITOR_BIND}'`
+(LAN-IP), чтобы при отсутствии socat панель не выставлялась на WAN.
+
+Проверено на живом роутере: плохие ip/mac/domain/iface отклоняются, валидные проходят,
+`debug disabled`, все `make test` зелёные.
+
 ## Формат ipk
 gzip(tar( debian-binary + control.tar.gz + data.tar.gz )), строки с LF.

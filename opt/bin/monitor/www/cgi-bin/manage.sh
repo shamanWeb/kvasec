@@ -135,6 +135,29 @@ iot_locked_macs() {
 	grep -vE '^[[:space:]]*#' "$IOT_LOCKDOWN_LIST" 2>/dev/null | tr 'A-F' 'a-f' | tr -d ' \t\r' | grep -E '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'
 }
 
+# IPv4 или IPv4/CIDR — защищает от инъекции произвольной строки в kvas.conf.
+valid_ip_or_cidr() {
+	_vic_pfx=""
+	case "$1" in
+		*/*) _vic_ip=${1%%/*}; _vic_pfx=${1#*/} ;;
+		*)   _vic_ip=$1 ;;
+	esac
+	case "$_vic_ip" in ''|*[!0-9.]*) return 1 ;; esac
+	# Без END{exit 0}: в awk `exit N` выполняет END-блок, который перезатёр бы код.
+	printf '%s\n' "$_vic_ip" | awk -F. 'NF!=4{exit 1} {for(i=1;i<=4;i++){ if($i=="" || $i ~ /[^0-9]/ || $i+0>255) exit 1 }}' || return 1
+	if [ -n "$_vic_pfx" ]; then
+		case "$_vic_pfx" in ''|*[!0-9]*) return 1 ;; esac
+		[ "$_vic_pfx" -le 32 ] || return 1
+	fi
+	return 0
+}
+
+# Имя интерфейса/сегмента (buk, sstp0, oc0, …) — только безопасный набор символов.
+valid_ifname() {
+	case "$1" in ''|*[!A-Za-z0-9_.+-]*) return 1 ;; esac
+	return 0
+}
+
 # Kill only the checker that KVAS started.  The cmdline guard prevents a stale
 # PID file from ever signalling an unrelated router process.
 stop_bypass_check() {
@@ -365,7 +388,7 @@ main() {
 			[ -s "$PASS_FILE" ] && json_error "password already set; authenticate to change it"
 			pass=$(query_param pass); [ -z "$pass" ] && pass=$(url_decode "$HTTP_X_KVAS_PASS")
 			[ -z "$pass" ] && json_error "pass required"
-			[ ${#pass} -lt 4 ] && json_error "min 4 symbols"
+			[ ${#pass} -lt 8 ] && json_error "min 8 symbols"
 			write_password_hash "$(password_hash "$pass")" || json_error "cannot save password"
 			json_ok "password set"
 			;;
@@ -389,7 +412,7 @@ main() {
 			current=$(query_param current); [ -z "$current" ] && current=$(url_decode "$HTTP_X_KVAS_CURRENT")
 			new_pass=$(query_param new_pass); [ -z "$new_pass" ] && new_pass=$(url_decode "$HTTP_X_KVAS_NEW_PASS")
 			[ -n "$current" ] && [ -n "$new_pass" ] || json_error "current and new password required"
-			[ ${#new_pass} -lt 4 ] && json_error "min 4 symbols"
+			[ ${#new_pass} -lt 8 ] && json_error "min 8 symbols"
 			verify_password "$current" || json_error "wrong current password"
 			write_password_hash "$(password_hash "$new_pass")" || json_error "cannot save password"
 			json_ok "password changed"
@@ -427,6 +450,10 @@ main() {
 				\**) wildcard=true; clean=$(echo "$domain" | sed 's/^\*\.*//');;
 				*)   clean="$domain";;
 			esac
+			# Валидируем очищенный домен ДО использования в sed/kvas: отсекает
+			# спецсимволы sed (|, &, / …) и прочую инъекцию в kvas.list.
+			clean=$(printf '%s' "$clean" | tr 'A-Z' 'a-z')
+			valid_domain "$clean" || json_error "invalid domain"
 			out=$($KVAS_BIN add "$clean" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "add failed: $out"
@@ -893,6 +920,7 @@ main() {
 			type=$(echo "$QUERY_STRING" | sed 's/.*type=//; s/&.*//' 2>/dev/null)
 			ip=$(echo "$QUERY_STRING" | sed 's/.*ip=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
 			[ -z "$ip" ] && json_error "ip required"
+			valid_ip_or_cidr "$ip" || json_error "invalid ip"
 			case "$type" in
 				full) key="route_full_ip" ;;
 				list) key="route_by_list_ip" ;;
@@ -918,6 +946,7 @@ main() {
 			type=$(echo "$QUERY_STRING" | sed 's/.*type=//; s/&.*//' 2>/dev/null)
 			ip=$(echo "$QUERY_STRING" | sed 's/.*ip=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
 			[ -z "$ip" ] && json_error "ip required"
+			valid_ip_or_cidr "$ip" || json_error "invalid ip"
 			case "$type" in
 				full) key="route_full_ip" ;;
 				list) key="route_by_list_ip" ;;
@@ -1071,6 +1100,9 @@ main() {
 			ip=$(query_param ip)
 			mac=$(query_param mac)
 			mode=$(query_param mode)
+			# mac идёт в RCI-JSON и jq-фильтр, ip — в kvas.conf: валидируем до использования
+			if [ -n "$mac" ]; then mac=$(normalize_mac "$mac"); [ -z "$mac" ] && json_error "invalid mac"; fi
+			[ -n "$ip" ] && { valid_ip_or_cidr "$ip" || json_error "invalid ip"; }
 			case "$mode" in
 				list|full|exclude|block) ;;
 				*) json_error "mode must be list, full, exclude, or block" ;;
@@ -1248,6 +1280,7 @@ main() {
 			check_token "$token"
 			net=$(echo "$QUERY_STRING" | sed 's/.*net=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
 			[ -z "$net" ] && json_error "net required"
+			valid_ifname "$net" || json_error "invalid interface"
 			current=$(grep "^INFACE_GUEST_ENT=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
 			if echo "$current" | tr ',' '\n' | grep -Fxq "$net"; then
 				json_ok "already added"
@@ -1266,6 +1299,7 @@ main() {
 			check_token "$token"
 			net=$(echo "$QUERY_STRING" | sed 's/.*net=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
 			[ -z "$net" ] && json_error "net required"
+			valid_ifname "$net" || json_error "invalid interface"
 			current=$(grep "^INFACE_GUEST_ENT=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
 			if ! echo "$current" | tr ',' '\n' | grep -Fxq "$net"; then
 				json_ok "not found"
@@ -1347,6 +1381,12 @@ main() {
 			[ "$name" = "$QUERY_STRING" ] && name=""
 			[ -z "$name" ] && json_error "name required"
 			[ -z "$domains" ] && json_error "domains required"
+			case "$name" in -*) json_error "invalid name" ;; esac
+			# $domains идёт в kvas БЕЗ кавычек (word-split) → валидируем каждый токен:
+			# запрещаем ведущий '-' (option injection) и спецсимволы
+			for _d in $domains; do
+				case "$_d" in -*|*[!a-zA-Z0-9.*_-]*) json_error "invalid domain" ;; esac
+			done
 			out=$($KVAS_BIN tags create "$name" $domains 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "create failed: $out"
@@ -1385,6 +1425,9 @@ main() {
 			raw_domains=$(echo "$QUERY_STRING" | sed 's/.*domains=//; s/&.*//' 2>/dev/null)
 			raw_domains=$(printf '%s' "$raw_domains" | sed 's/%0D%0A/ /g; s/%0A/ /g; s/%0D/ /g; s/%20/ /g; s/+/ /g')
 			domains=$(echo "$raw_domains" | sed 's/  */ /g; s/^ //; s/ $//')
+			for _d in $domains; do
+				case "$_d" in -*|*[!a-zA-Z0-9.*_-]*) json_error "invalid domain" ;; esac
+			done
 			out=$($KVAS_BIN tags edit-save "$tag" $domains 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "edit failed: $out"
