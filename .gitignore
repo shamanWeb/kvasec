@@ -93,3 +93,8 @@ fabric.properties
 # Логи сборки (build.sh / CI)
 /logs/
 *.log
+
+# Артефакты сборки ipk (build.sh собирает в корень репо)
+/kvasec_*.ipk
+/kvas_*.ipk
+/.build/
