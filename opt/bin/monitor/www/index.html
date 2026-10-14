@@ -41,6 +41,8 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 .btn.success:hover { background: #2ea043; }
 .btn.danger { border-color: #f85149; color: #f85149; }
 .btn.danger:hover { background: #f8514922; }
+.btn.warn { background: #9e6a03; border-color: #d29922; color: #fff; }
+.btn.warn:hover { background: #bb8009; }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn-sm { padding: 3px 10px; font-size: 11px; }
 
@@ -298,7 +300,8 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <b style="color:#2ea043;">По спискам</b> — обход блокировок только для сайтов из списков KVASEC (режим по умолчанию).<br>
     <b style="color:#58a6ff;">Напрямую</b> — весь трафик идёт мимо тоннеля, ничего не обходится.<br>
     <b style="color:#58a6ff;">Всё в тоннель</b> — весь трафик устройства идёт через VPN.<br>
-    <b style="color:#f85149;">Нет интернета</b> — устройство полностью отключается от интернета (штатная блокировка Keenetic, сохраняется после перезагрузки).</p>
+    <b style="color:#f85149;">Нет интернета</b> — устройство полностью отключается от интернета (штатная блокировка Keenetic, сохраняется после перезагрузки).<br>
+    <b style="color:#d29922;">🔒 Изоляция</b> — запрет доступа к панелям управления роутера (SSH/Telnet/админка/веб-монитор). Интернет и управление самим устройством не затрагиваются. Защита от «пивота» со взломанного IoT. Доступно для устройств с известным MAC.</p>
     <div class="card-row" style="margin-bottom:8px;">
       <button class="btn btn-sm" onclick="loadDeviceModes(this)">Обновить список</button>
     </div>
@@ -1881,6 +1884,18 @@ function loadDeviceModes(btn) {
         b.onclick = function() { setDeviceMode(dev.ip, hasMac ? dev.mac : '', m.set, b); };
         bar.appendChild(b);
       });
+      if (hasMac) {
+        var iso = document.createElement('button');
+        iso.className = 'btn btn-sm' + (dev.isolated ? ' warn' : '');
+        iso.textContent = dev.isolated ? '🔒 Изолировано' : '🔒 Изолировать';
+        iso.title = dev.isolated
+          ? 'Устройство не может обращаться к панелям управления роутера. Нажмите, чтобы снять.'
+          : 'Запретить устройству доступ к SSH/Telnet/админке/веб-монитору роутера';
+        iso.onclick = (function(mac, next, b) {
+          return function() { setDeviceIsolation(mac, next, b); };
+        })(dev.mac, dev.isolated ? 'off' : 'on', iso);
+        bar.appendChild(iso);
+      }
       row.appendChild(head);
       row.appendChild(bar);
       el.appendChild(row);
@@ -1897,6 +1912,22 @@ function setDeviceMode(ip, mac, mode, btn) {
     if (d.ok) {
       el.className = 'msg ok';
       el.textContent = (mode === 'block') ? 'Интернет для устройства отключён' : 'Режим изменён, маршруты обновлены';
+      loadDeviceModes();
+    } else {
+      el.className = 'msg err';
+      el.textContent = d.error || 'Ошибка';
+    }
+  });
+}
+
+function setDeviceIsolation(mac, state, btn) {
+  var el = document.getElementById('devModeMsg');
+  el.className = 'msg'; el.textContent = 'Применяю…';
+  var url = '/cgi-bin/manage.sh?action=device_set_isolation&mac=' + encodeURIComponent(mac) + '&state=' + state;
+  apiBtn(url, btn, function(d) {
+    if (d.ok) {
+      el.className = 'msg ok';
+      el.textContent = (state === 'on') ? 'Устройство изолировано от панелей управления роутера' : 'Изоляция снята';
       loadDeviceModes();
     } else {
       el.className = 'msg err';
