@@ -18,6 +18,14 @@
 
 case ${1} in
 	start|restart)
+		# Износ флеша: /opt/tmp держим в RAM (tmpfs /tmp), а не на USB-флеше.
+		# dpi_history.sh (cron * * * * *) и временные файлы adblock/загрузок иначе
+		# пишут на флеш каждую минуту. Идемпотентно: чиним симлинк, если апгрейд
+		# или распаковка ipk вернули обычную папку. /tmp смонтирован ядром заранее.
+		if [ ! -L /opt/tmp ]; then
+			rm -rf /opt/tmp 2>/dev/null
+			ln -s /tmp /opt/tmp
+		fi
 		. /opt/apps/kvas/bin/libs/vpn
 		cmd_kvas_init no
 		# Автозапуск Web UI после ребута, если был включён (флаг в /opt/etc — persistent)
