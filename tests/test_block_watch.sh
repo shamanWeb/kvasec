@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 WATCH="$ROOT/opt/bin/monitor/block_watch.sh"
 MANAGE="$ROOT/opt/bin/monitor/www/cgi-bin/manage.sh"
 
@@ -41,7 +41,7 @@ printf '%s\n' '#!/bin/sh' 'printf "tcp 6 120 SYN_SENT src=192.168.1.50 dst=203.0
 chmod +x "$WORK/bin/ip" "$WORK/bin/logread" "$WORK/bin/dig" "$WORK/bin/conntrack"
 PATH="$WORK/bin:$PATH" BLOCK_WATCH_EVENTS="$WORK/events" BLOCK_WATCH_PID="$WORK/pid" BLOCK_WATCH_LOCK_DIR="$WORK/lock" BLOCK_WATCH_DNS_CONF="$WORK/dns.dnsmasq" BLOCK_WATCH_DNS_LOG="$WORK/dns.log" BLOCK_WATCH_DNS_RESTART_BIN=/bin/true BLOCK_WATCH_INTERVAL=1 sh "$WATCH" >/dev/null 2>&1 &
 watch_pid=$!
-for wait_event in 1 2 3 4; do
+for _ in 1 2 3 4; do
   grep -F '|fail|192.168.1.50|203.0.113.7:443' "$WORK/events" >/dev/null 2>&1 && break
   sleep 1
 done
@@ -61,7 +61,7 @@ printf '%s\n' '#!/bin/sh' 'printf "tcp 6 120 SYN_SENT src=192.168.1.55 dst=203.0
 chmod +x "$WORK/bin/conntrack"
 PATH="$WORK/bin:$PATH" KVAS_ADGUARD_QUERYLOG_ACTIVE=1 ADGUARD_QUERY_LOG="$WORK/adguard-querylog.json" BLOCK_WATCH_EVENTS="$WORK/adguard-events" BLOCK_WATCH_PID="$WORK/adguard-pid" BLOCK_WATCH_LOCK_DIR="$WORK/adguard-lock" BLOCK_WATCH_DNS_CONF="$WORK/adguard.dnsmasq" BLOCK_WATCH_DNS_LOG="$WORK/adguard-dns.log" BLOCK_WATCH_DNS_RESTART_BIN=/bin/true BLOCK_WATCH_INTERVAL=1 sh "$WATCH" >/dev/null 2>&1 &
 watch_pid=$!
-for wait_event in 1 2 3 4; do
+for _ in 1 2 3 4; do
   grep -F '|map|203.0.113.9|adguard.example' "$WORK/adguard-events" >/dev/null 2>&1 && break
   sleep 1
 done

@@ -33,6 +33,7 @@ CHAIN_DNAT_TO_PORT=KVAS_DNAT_TO_PORT
 TABLE_DNAT_TO_PORT=nat
 #ToDo: переписать на https://github.com/shadowsocks/shadowsocks-libev?tab=readme-ov-file#transparent-proxy-pure-tproxy
 
+# shellcheck disable=SC2034  # используется в файлах, подключающих ndm
 IPv4='IPv4::'
 IPv6='IPv6::'
 
@@ -76,6 +77,7 @@ version_os() {
 	fi
 
 	# иначе любой
+	# shellcheck disable=SC2046  # намеренно: echo $(...) обрезает пробелы/переводы строк
 	echo $(get_version "${versions_data}")
 }
 
@@ -187,6 +189,7 @@ iptables__delete_rule() {
 		return
 	fi
 
+	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 	/opt/sbin/iptables -t "${table}" -D $(echo "${rule:3}")
 }
 
@@ -257,6 +260,7 @@ ip4__ipset__create() {
 
 	log_warning "Cоздание набора IP ${ipset_name}${submessage}"
 
+	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 	/opt/sbin/ipset create "${ipset_name}" hash:net family inet -exist$(echo "${subcomand}") \
 	 || {
 		error "[${FUNCNAME}] Ошибка при создании набора IP ${ipset_name}${submessage}"
@@ -641,6 +645,7 @@ ip4__get_rulenum() {
 	local table='nat'
 	local chain='PREROUTING'
 
+	# shellcheck disable=SC2046  # намеренно: echo $(...) склеивает вывод в одну строку
 	echo $(save_iptables -t "${table}" | grep -F "${chain}" | grep -vF :"${chain}" \
 	 | grep -nF -- "${find}" | head -n 1 | grep -oE '^[0-9]+')
 }
@@ -691,6 +696,7 @@ ip4__dns__add_routing() {
 
 	ip4__dns__create_chain
 	# без echo дублирование пробелов (что даёт warning и проблему наличия)
+	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 	/opt/sbin/iptables -I PREROUTING "${rulenum}" -w -t "${TABLE_DNS}"$(echo "${iptables_filter}") -j "${CHAIN_DNS}"
 }
 
@@ -716,6 +722,7 @@ ip4__dns__delete_routing() {
 	log_warning "Отключение DNS перенаправления${submessage}"
 
 	# без echo дублирование пробелов (что даёт warning и проблему наличия)
+	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 	/opt/sbin/iptables -D PREROUTING -t "${TABLE_DNS}"$(echo "${iptables_filter}") -j "${CHAIN_DNS}"
 }
 
@@ -779,6 +786,7 @@ ip4__add_routing() {
 
 	log_warning "Подключение перехвата трафика по${submessage}"
 
+	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 	/opt/sbin/iptables -A PREROUTING -w -t "${table}" $(echo "${iptables_filter}") -j "${chain_name}"
 }
 
@@ -836,6 +844,7 @@ ip4__delete_routing() {
 
 	log_warning "Отключение перехвата трафика по${submessage}"
 
+	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 	/opt/sbin/iptables -D PREROUTING -t "${table}" $(echo "${iptables_filter}") -j "${chain_name}"
 }
 
@@ -1128,7 +1137,7 @@ ip4__route__is_exist_table() {
 	fi
 	local table_id="${1}"
 
-	[ $(ip4__route__show_table "${table_id}" | head -c1 | wc -c) -gt 0 ]
+	[ "$(ip4__route__show_table "${table_id}" | head -c1 | wc -c)" -gt 0 ]
 }
 
 ip4__route__add_table() {
@@ -1166,6 +1175,7 @@ ip4__route__add_table() {
 	if [ -z "${route_show}" ] ; then
 		log_warning "Добавление ${submessage}"
 
+		# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 		/opt/sbin/ip route add table "${ROUTE_TABLE_ID}" $(echo "${subroute}") \
 		 || {
 			error "[${FUNCNAME}] Ошибка при добавлении ${submessage}"
@@ -1187,6 +1197,7 @@ ip4__route__add_table() {
 			if ! echo "${route_show}" | grep -Fq "${subroute}" ; then
 				log_warning "Добавление ${submessage}"
 
+				# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 				/opt/sbin/ip route add $(echo "${subroute}") table "${ROUTE_TABLE_ID}" \
 				 || {
 					error "[${FUNCNAME}] Ошибка при добавлении ${submessage}"
@@ -1244,6 +1255,7 @@ ip4__rule__add_mark_to_table() {
 	local submessage="$(ip4__rule__get_submessage)"
 	log_warning "Добавление ${submessage}"
 
+	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 	/opt/sbin/ip rule add $(echo "${subrule}") priority "${RULE_PRIORITY}" \
 	 || {
 		error "[${FUNCNAME}] Ошибка при добавлении ${submessage}"
@@ -1259,6 +1271,7 @@ ip4__rule__delete_mark_to_table() {
 	local submessage="$(ip4__rule__get_submessage)"
 	log_warning "Удаление ${submessage}"
 
+	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 	/opt/sbin/ip rule del $(echo "${subrule}") priority "${RULE_PRIORITY}" \
 	 || {
 		error "[${FUNCNAME}] Ошибка при удалении ${submessage}"

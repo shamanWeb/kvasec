@@ -2,7 +2,7 @@
 # Traffic-monitor regressions: one slow PTR must never block a WebUI poll.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 SOURCE="$ROOT/opt/bin/monitor/www/cgi-bin/data.sh"
 UI="$ROOT/opt/bin/monitor/www/index.html"
 WORK=$(mktemp -d)

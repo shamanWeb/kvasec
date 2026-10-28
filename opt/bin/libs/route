@@ -433,34 +433,34 @@ DEVICES
 					selected_ip="${dev_choice}"
 				fi
 				if [ -z "${selected_ip}" ]; then
-					echo "Адрес не указан."; echo -n "Enter..."; read dummy; continue
+					echo "Адрес не указан."; echo -n "Enter..."; read -r _; continue
 				fi
 				case "${choice}" in
 					a) cmd_route_add "full" "${selected_ip}" ;;
 					b) cmd_route_add "list" "${selected_ip}" ;;
 					c) cmd_route_add "exclude" "${selected_ip}" ;;
 				esac
-				echo -n "Enter..."; read dummy
+				echo -n "Enter..."; read -r _
 				;;
 			d)
 				local all_entries="${full} ${list} ${exclude}"
 				all_entries=$(echo "${all_entries}" | tr ' ' '\n' | grep -v '^$' | sort -u)
 				if [ -z "${all_entries}" ]; then
-					echo "Все списки пусты."; echo -n "Enter..."; read dummy; continue
+					echo "Все списки пусты."; echo -n "Enter..."; read -r _; continue
 				fi
 				echo "Записи для удаления:"
 				echo "${all_entries}" | awk '{print NR, $0}'
 				echo -n "Введите адрес или номер: "
 				read del_ip
-				[ -z "${del_ip}" ] && { echo -n "Enter..."; read dummy; continue; }
+				[ -z "${del_ip}" ] && { echo -n "Enter..."; read -r _; continue; }
 				if [ "${del_ip}" -eq "${del_ip}" ] 2>/dev/null; then
 					del_ip=$(echo "${all_entries}" | awk -v n="${del_ip}" 'NR==n{print $0}')
-					[ -z "${del_ip}" ] && { echo "Неверный номер."; echo -n "Enter..."; read dummy; continue; }
+					[ -z "${del_ip}" ] && { echo "Неверный номер."; echo -n "Enter..."; read -r _; continue; }
 				fi
 				cmd_route_del "full" "${del_ip}" 2>/dev/null
 				cmd_route_del "list" "${del_ip}" 2>/dev/null
 				cmd_route_del "exclude" "${del_ip}" 2>/dev/null
-				echo -n "Enter..."; read dummy
+				echo -n "Enter..."; read -r _
 				;;
 			n)
 				echo ""
@@ -488,7 +488,7 @@ DEVICES
 						echo "Гостевая сеть ${guest_iface} добавлена."
 					fi
 				fi
-				echo -n "Enter..."; read dummy
+				echo -n "Enter..."; read -r _
 				;;
 			N)
 				local current=$(get_config_value "INFACE_GUEST_ENT")
@@ -513,14 +513,14 @@ DEVICES
 						fi
 					fi
 				fi
-				echo -n "Enter..."; read dummy
+				echo -n "Enter..."; read -r _
 				;;
 			r)
 				cmd_route_refresh
-				echo -n "Enter..."; read dummy
+				echo -n "Enter..."; read -r _
 				;;
 			q|Q) break ;;
-			*) echo -n "Enter..."; read dummy ;;
+			*) echo -n "Enter..."; read -r _ ;;
 		esac
 	done
 }

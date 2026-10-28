@@ -2,7 +2,7 @@
 # Регрессия для WebUI-аутентификации без доступа к роутеру.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 SOURCE="$ROOT/opt/bin/monitor/www/cgi-bin/manage.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM

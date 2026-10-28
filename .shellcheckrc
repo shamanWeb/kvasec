@@ -1,0 +1,15 @@
+# Диалект задаёт Makefile: opt/ и install.sh исполняются BusyBox ash на роутере
+# (-s busybox), build.sh и tests/ — обычным sh на ПК/CI (по shebang).
+# Расширения ash (local, [[ ]], ${v//a/b}, echo -e, &> …) проверены на роутере 2026-10-28.
+
+# В BusyBox ash правая часть =~ в кавычках — тоже регулярка (в bash — литерал).
+disable=SC2076
+# $FUNCNAME в ash — строка, а не массив, как в bash.
+disable=SC2128
+# `local x=$(cmd)` — стиль проекта; код возврата после такой строки нигде не проверяется.
+disable=SC2155
+# Функции с необязательным аргументом (is_os_below_4_2 [version] и т.п.).
+disable=SC2120
+# Тоже поддерживаются BusyBox 1.37 на роутере, но диалект busybox о них не знает:
+# $FUNCNAME, [[ =~ ]], read -t/-s/-p.
+disable=SC3028,SC3015,SC3045

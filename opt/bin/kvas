@@ -230,6 +230,7 @@ case "${1}" in
 			ip) 			cmd_dnsmasq_dns_change "${3}";;
 			on)				cmd_adguardhome_off ;;
 			status | *) 	exit_when_adguard_on status;
+							# shellcheck disable=SC2154  # присваивается по имени (eval) внутри exit_when_adguard_on
 							[ "${status}" = 0 ] && {
 								cmd_dnsmasq_listen_show;
 							} ;;
@@ -321,7 +322,7 @@ case "${1}" in
 				fi
 			;;
 			info)        syslog__show "${2}" 'KVASEC' 'Информационные сообщения KVASEC:' "${3}" ;;
-			clear)       > /opt/tmp/kvas_errors.log 2>/dev/null; echo "Лог очищен." ;;
+			clear)       : > /opt/tmp/kvas_errors.log 2>/dev/null; echo "Лог очищен." ;;
 			*)           syslog__show ''     'KVASEC' 'События KVASEC:'                  "${2}" ;;
 		esac
 	;;

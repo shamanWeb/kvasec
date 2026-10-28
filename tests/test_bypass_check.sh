@@ -2,7 +2,7 @@
 # Проверяет классификацию bypass checker без сети и роутера.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 CHECKER="$ROOT/opt/bin/monitor/bypass_check.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM

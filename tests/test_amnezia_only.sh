@@ -2,7 +2,7 @@
 # Статические гарантии: публичный путь KVASEC использует только AmneziaWG.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
 for file in opt/bin/kvas opt/bin/libs/vpn opt/bin/main/setup opt/etc/init.d/S96kvas opt/etc/ndm/ndm; do

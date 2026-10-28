@@ -81,29 +81,18 @@ NR==FNR { gsub(/\*/, "", $0); if ($0 !~ /^#/ && $0 != "") wl[$0]=1; next }
 **Проблема**: ни StevenBlack, ни другие активные источники не содержали `rs.mail.ru` (лента-реклама mail.ru) и `ads.vk.com` (VK Ads). `rs.mail.ru` есть только в blocklistproject (закомментирован в sources.list), `ads.vk.com` — нигде.  
 **Фикс**: домены зашиты в `add_regular_ads()` (`main/adblock`) — блокируются при каждом обновлении.
 
-## Скрипт сборки
+## Сборка
 
-**Файл**: `build_fixed.ps1` (в `%TEMP%\opencode\build_fixed.ps1`).  
-**Исходники ipk**: `C:\Users\Pavel\AppData\Local\Temp\opencode\ipk_build\` (извлечено из v25).  
-**Готовые ipk**: `C:\Users\Pavel\kvas\kvas_1.1.9_beta-10-{version}_all.ipk`.
+Пакет собирается **из git-дерева**: `./build.sh <version>` (или `make build`), раскладка —
+каталог `opt/`. Правки в репо попадают в ipk напрямую. CI (`.github/workflows/build.yml`):
+сборка → `make test` → `make lint` (shellcheck, блокирует) → GitHub Release, откуда
+тянет `kvas upgrade`. Подробности — `BUILD.md`.
 
-### Варианты сборки
-| Variant | Fixes |
-|---------|-------|
-| 331 | postinst cp ndm |
-| 332 | postinst cp ndm + no conntrack flush |
-| 340 | RULE_PRIORITY 99 |
-| 341 | RULE_PRIORITY 99 + no conntrack flush |
-| 342 | RULE_PRIORITY 99 + data.sh BusyBox fix |
-| **343** | **RULE_PRIORITY 99 + route_devices JSON + ARP/conntrack filters** (рабочий) |
-| **346** | v343 + external SOCKS5 на базе xray (не зашёл — заменён 3proxy в v347) |
-| **347** | **v343 + external SOCKS5 via 3proxy** (`kvas proxy on\|off\|status\|passwd`) |
-| **344** | v343 + adblock awk-fix + curl !-s (пересобранный корректно) |
-| **345** | v344 + fix `kvas adblock del` (правил не тот файл) + rs.mail.ru/ads.vk.com в add_regular_ads |
-| **346a** | v345 + перевёрнутая семантика adblock add/del + block.list |
-| **347a** | v346 + add/del чистят exception.list (итоговый рабочий adblock) |
+Проверки перед коммитом: `make verify`, `make test`, `make lint`.
 
-**Примечание**: версии 346/347 совпадают с номерами из прокси-фичи — разные ветки правок шли параллельно и обе использовали номера. Итоговый adblock-fix — в `kvas_1.1.9_beta-10-347_all.ipk` (файл от 2026-08-01).
+**История**: до ~окт. 2026 ipk собирался на Windows (`build_fixed.ps1`, номера
+`kvas_1.1.9_beta-10-3xx`); эта схема удалена. Номера v331–v352 в разделах выше — ссылки на
+те сборки (346/347 использовались дважды: proxy и adblock — разные ветки).
 
 ## External SOCKS5 Proxy (v347, на базе 3proxy)
 
