@@ -81,6 +81,11 @@ jobs:
       - name: Регрессионные тесты
         run: make test
 
+      # Пока не блокирует релиз: сначала разобрать накопленные замечания.
+      - name: shellcheck
+        continue-on-error: true
+        run: make lint
+
       - name: Публикация релиза
         uses: softprops/action-gh-release@v2
         with:
