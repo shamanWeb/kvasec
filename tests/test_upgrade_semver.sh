@@ -2,7 +2,7 @@
 # Проверяет фактические helper-функции updater для старого и нового имени IPK.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 UPGRADE="$ROOT/opt/bin/main/upgrade"
 
 # The legacy cleanup scanned the entire router filesystem and was unused.

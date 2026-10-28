@@ -2,7 +2,7 @@
 # Проверяет, что handler не отдаёт произвольные пути и не включает CORS wildcard.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 HTTPD="$ROOT/opt/bin/monitor/httpd.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM

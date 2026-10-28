@@ -1,6 +1,5 @@
 #!/bin/sh
 
-MONITOR_PID_FILE=/var/run/kvas-monitor.pid
 MONITOR_WEB_PID_FILE=/var/run/kvas-monitor-web.pid
 MONITOR_DNS_LOG=/tmp/kvas-dns.log
 MONITOR_DATA_DIR=/tmp/kvas-monitor
@@ -182,7 +181,7 @@ DEVICES
 						done ;;
 				esac
 				if [ -z "$selected_ips" ]; then
-					echo "IP не указан."; echo -n "Enter..."; read dummy; continue
+					echo "IP не указан."; echo -n "Enter..."; read -r _; continue
 				fi
 				MONITOR_ACTIVE_IPS="$selected_ips"
 				MONITOR_ACTIVE_IPS_SAVED="$selected_ips"
@@ -200,7 +199,7 @@ DEVICES
 			echo "Web UI остановлен"
 				;;
 			q|Q) break ;;
-			*) echo -n "Enter..."; read dummy ;;
+			*) echo -n "Enter..."; read -r _ ;;
 		esac
 	done
 }

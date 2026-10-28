@@ -2,7 +2,7 @@
 # Parent-control domains must cover subdomains and reject malformed entries.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 GENERATOR="$ROOT/opt/bin/main/parental_dns"
 CGI="$ROOT/opt/bin/monitor/www/cgi-bin/manage.sh"
 WORK=$(mktemp -d)

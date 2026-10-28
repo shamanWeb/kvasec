@@ -98,6 +98,7 @@ _check_section() {
     local section="$1"
     if ! grep -q "\[$section\]" "${TAGS_FILE}"; then
         read_ynq "Закваска '$section' не найдена. Добавить?" answer
+        # shellcheck disable=SC2154  # присваивается по имени (eval) внутри read_ynq
         if [[ "$answer" =~ [qn] ]] ; then return 1;
         elif [[ "$answer" =~ [y] ]] ; then
             echo -e "\n[$section]" >> "${TAGS_FILE}"
@@ -199,6 +200,7 @@ cmd_del_domain_from_tag_list() {
     # Если задана только секция - удаляем все домены в этой секции
     if [ -z "${domain}" ] ; then
         read_ynq "Будут удалены все домены с закваской '$section' и само имя закваски.\nВы уверены?" answer
+        # shellcheck disable=SC2154  # присваивается по имени (eval) внутри read_ynq
         if [[ "$answer" =~ [qn] ]] ; then return 1; fi
         [ "${answer}" = y ] && {
             sed -i "/\[$section\]/,/\[.*\]/ { /.*$/d }" "${TAGS_FILE}"
@@ -237,7 +239,6 @@ has_section_domains_in_list() {
 
     local all_present=true
     local none_present=true
-    local partial_present=false
     local missing_elements=""
 
     [ -f "${KVAS_LIST_FILE}" ] || {
@@ -382,7 +383,7 @@ EOF
         fi
 
     else
-        if [  $(cat < "${TAGS_FILE}" | wc -l) -le 1 ] ; then 
+        if [ "$(cat < "${TAGS_FILE}" | wc -l)" -le 1 ] ; then 
             error "Список заквасок пуст.\nПроверьте наличие заквасок в файле '${TAGS_FILE}'."
         else 
             print_line

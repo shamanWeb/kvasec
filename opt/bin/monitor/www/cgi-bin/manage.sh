@@ -23,7 +23,6 @@ KVAS_CONF_FILE=/opt/etc/kvas.conf
 IOT_LOCKDOWN_LIST=/opt/etc/kvas-iot-lockdown.list
 IOT_LOCKDOWN_HOOK=/opt/etc/ndm/netfilter.d/090-iot-lockdown
 PARENTAL_LIST=/opt/etc/adblock/block.list
-PARENTAL_PAGE=/opt/apps/kvas/bin/monitor/www/blocked.html
 ADGUARD_WEB_PID=/tmp/kvas-adguard-web.pid
 ADGUARD_WEB_LOG=/tmp/kvas-adguard-web.log
 ADGUARD_WEB_BACKUP=/opt/kvas_backup/web-adguard-dns
@@ -168,7 +167,7 @@ stop_bypass_check() {
 	esac
 	if [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]ypass_check.sh'; then
 		kill "$pid" 2>/dev/null || true
-		for wait_pid in 1 2 3; do
+		for _ in 1 2 3; do
 			kill -0 "$pid" 2>/dev/null || break
 			sleep 1
 		done
@@ -215,7 +214,7 @@ stop_block_watch() {
 	esac
 	if [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]lock_watch.sh'; then
 		kill "$pid" 2>/dev/null || true
-		for wait_pid in 1 2 3; do
+		for _ in 1 2 3; do
 			kill -0 "$pid" 2>/dev/null || break
 			sleep 1
 		done
@@ -369,7 +368,7 @@ get_tag_domain_list_from_file() {
 main() {
 	local action token pass hash stored kvaspkg kvaspkg_name kvaspkg_ver
 	local host_count first
-	local domain out rc mode enabled primary interval threshold cmd path
+	local domain out rc mode path
 
 	action=$(query_param action)
 	token=$(query_param token)
@@ -476,7 +475,7 @@ main() {
 			rc=$?
 			[ $rc -ne 0 ] && json_error "del failed: $out"
 			# Rebuild ipset and restart services
-			init_out=$($KVAS_BIN init 2>&1)
+			$KVAS_BIN init >/dev/null 2>&1
 			json_ok "removed $domain (ipset updated)"
 			;;
 		host_import)
@@ -1369,7 +1368,7 @@ main() {
 			out=$($KVAS_BIN tags add-protect "$tag" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "add failed: $out"
-			init_out=$($KVAS_BIN init 2>&1)
+			$KVAS_BIN init >/dev/null 2>&1
 			json_ok "added $tag"
 			;;
 		tags_create)
@@ -1401,7 +1400,7 @@ main() {
 			out=$($KVAS_BIN tags del-protect "$tag" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "del failed: $out"
-			init_out=$($KVAS_BIN init 2>&1)
+			$KVAS_BIN init >/dev/null 2>&1
 			json_ok "removed $tag"
 			;;
 		tags_delete)
@@ -1413,7 +1412,7 @@ main() {
 			out=$($KVAS_BIN tags delete "$tag" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "delete failed: $out"
-			init_out=$($KVAS_BIN init 2>&1)
+			$KVAS_BIN init >/dev/null 2>&1
 			json_ok "удалена закваска $tag"
 			;;
 		tags_edit_save)
@@ -1431,7 +1430,7 @@ main() {
 			out=$($KVAS_BIN tags edit-save "$tag" $domains 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "edit failed: $out"
-			init_out=$($KVAS_BIN init 2>&1)
+			$KVAS_BIN init >/dev/null 2>&1
 			json_ok "закваска $tag обновлена"
 			;;
 		tags_download)

@@ -2,7 +2,7 @@
 # Мониторинг трафика не должен отвечать до проверки токена WebUI.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 SOURCE="$ROOT/opt/bin/monitor/www/cgi-bin/data.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM

@@ -16,7 +16,9 @@ FLASHED_HOST_FILE=$(echo "${ADBLOCK_HOSTS_FILE}" | sed 's/\//\\\//g')
 #
 # ------------------------------------------------------------------------------------------
 cmd_ads_edit() {
-	exit_when_adguard_on status; [ "${status}" = 0 ] && {
+	exit_when_adguard_on status
+	# shellcheck disable=SC2154  # присваивается по имени (eval) внутри exit_when_adguard_on
+	[ "${status}" = 0 ] && {
 		nano "${ADBLOCK_SOURCES_LIST}" &&
 			{
 				cmd_ads_protect_on ask
@@ -30,7 +32,9 @@ cmd_ads_edit() {
 #
 # ------------------------------------------------------------------------------------------
 cmd_ads_protect_off() {
-	exit_when_adguard_on status; [ "${status}" = 0 ] && {
+	exit_when_adguard_on status
+	# shellcheck disable=SC2154  # присваивается по имени (eval) внутри exit_when_adguard_on
+	[ "${status}" = 0 ] && {
 #		if ! [ -f "${ADS_MAIN_SCRIPT}" ]; then
 #			cp -f '/opt/apps/kvas/bin/main/adblock' '/opt/apps/kvas/bin/main/adblock'
 #			chmod +x '/opt/apps/kvas/bin/main/adblock'
@@ -52,7 +56,9 @@ cmd_ads_protect_off() {
 #
 # ------------------------------------------------------------------------------------------
 cmd_ads_protect_on() {
-	exit_when_adguard_on status; [ "${status}" = 0 ] && {
+	exit_when_adguard_on status
+	# shellcheck disable=SC2154  # присваивается по имени (eval) внутри exit_when_adguard_on
+	[ "${status}" = 0 ] && {
 		perform_to_aks="${1}"
 #		if ! [ -f '/opt/apps/kvas/bin/main/adblock' ]; then
 #			cp -f '/opt/apps/kvas/bin/main/adblock' '/opt/apps/kvas/bin/main/adblock'
@@ -161,7 +167,7 @@ get_separated_host_list() {
 #--------------------------------------------------------------
 restart_dns_service(){
 
-	ready "${prefix}Перезапускаем сервис dnsmasq"
+	ready "Перезапускаем сервис dnsmasq"
 	if kill -HUP "$(pidof dnsmasq)" 2>/dev/null; then
 		when_ok "УСПЕШНО"
 	else
@@ -177,7 +183,9 @@ restart_dns_service(){
 #--------------------------------------------------------------
 cmd_ads_add_host(){
 
-	exit_when_adguard_on status; [ "${status}" = 0 ] && {
+	exit_when_adguard_on status
+	# shellcheck disable=SC2154  # присваивается по имени (eval) внутри exit_when_adguard_on
+	[ "${status}" = 0 ] && {
 		host=${1//\*/}
 		[ -z "${host}" ] && {
 			warning "Не задан домен. Использование: kvas adblock add <host>"
@@ -213,7 +221,9 @@ cmd_ads_add_host(){
 #
 #--------------------------------------------------------------
 cmd_ads_del_from_skip_list(){
-	exit_when_adguard_on status; [ "${status}" = 0 ] && {
+	exit_when_adguard_on status
+	# shellcheck disable=SC2154  # присваивается по имени (eval) внутри exit_when_adguard_on
+	[ "${status}" = 0 ] && {
 		host=${1//\*/}
 
 		if [ -f "${ADBLOCK_BLOCK_FILE}" ]; then

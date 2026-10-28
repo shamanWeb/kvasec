@@ -45,6 +45,7 @@ host_vpn_pass_check() {
 
 	ready "Проверка домена ${domain}"
 	print_line
+	# shellcheck disable=SC2034  # результат не используется (наследие); вызов оставлен как был
 	extern_ip=$(get_external_ip)
 	ip_list=$(get_iplist_from_domain "${domain}" | tr '\n' ' ' )
 	for adr in ${ip_list::-1}; do

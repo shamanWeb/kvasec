@@ -85,7 +85,7 @@ NR==FNR { gsub(/\*/, "", $0); if ($0 !~ /^#/ && $0 != "") wl[$0]=1; next }
 
 Пакет собирается **из git-дерева**: `./build.sh <version>` (или `make build`), раскладка —
 каталог `opt/`. Правки в репо попадают в ipk напрямую. CI (`.github/workflows/build.yml`):
-сборка → `make test` → `make lint` (shellcheck, пока не блокирует) → GitHub Release, откуда
+сборка → `make test` → `make lint` (shellcheck, блокирует) → GitHub Release, откуда
 тянет `kvas upgrade`. Подробности — `BUILD.md`.
 
 Проверки перед коммитом: `make verify`, `make test`, `make lint`.

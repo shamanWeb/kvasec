@@ -634,6 +634,8 @@ adguardhome_setup() {
 get_adguardhome_ip_port() {
 	ip_filter="[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}"
 	ip_dns_adguard=$(cat < "${ADGUARDHOME_CONFIG}" | sed -n '/^dns/,/port:/p' | grep -o "${ip_filter}")
+	# TODO: dns_ip не используется — похоже, имелось в виду заменить 0.0.0.0 на IP роутера.
+	# shellcheck disable=SC2034
 	echo "${ip_dns_adguard}" | grep -q '0.0.0.0' && dns_ip=$(get_router_ip)
 	echo "${ip_dns_adguard}#${MAIN_DNS_PORT}"
 }
@@ -800,8 +802,8 @@ adguardhome_install_locally() {
 			[ -f /opt/etc/init.d/S09dnscrypt-proxy2 ] && /opt/etc/init.d/S09dnscrypt-proxy2 stop &> /dev/null
 
 			# обнуляем файлы конфигурации 
-			> /opt/etc/dnsmasq.d/kvas.dnsmasq
-			> /opt/var/log/AdGuardHome.log
+			: > /opt/etc/dnsmasq.d/kvas.dnsmasq
+			: > /opt/var/log/AdGuardHome.log
 
 			[ -f /opt/etc/hosts ] && cp /opt/etc/hosts "${KVAS_BACKUP_PATH}/hosts"
 
@@ -1890,7 +1892,6 @@ cmd_shadowsocks_iptable_reset() {
 	if [ -f /opt/apps/kvas/bin/libs/ndm ]; then
 		local_ip=$(get_router_ip)
 		inface=$(get_inface_by_ip "${local_ip}")
-		proxy_port=$(get_config_value SSR_DNS_PORT)
 
 		update_iptables
 	else
@@ -2066,7 +2067,7 @@ EOF
 		# если при ежесекундной проверке интерфейс в файле появится, то ожидание прервётся
 		# если он уже на месте, задержки не будет
 		attempt=15
-		while [[ $attempt -gt 0 ]] && ! $(grep -Fq "${inface_cli}" "${INFACE_NAMES_FILE}"); do
+		while [[ $attempt -gt 0 ]] && ! grep -Fq "${inface_cli}" "${INFACE_NAMES_FILE}"; do
 			sleep 3
 			attempt=$(( $attempt - 1 ))
 		done
@@ -2330,7 +2331,6 @@ select_vpn_interface() {
 	show_vpn_list
 
 	total=$(cat < "${INFACE_NAMES_FILE}" | wc -l)
-	local skip_num=$((total + 1))
 	while true; do
 		print_line
 		echo -e "  ${GREEN}R${NOCL}) Restore — восстановить настройки из резервной копии"
@@ -2754,8 +2754,7 @@ host_add() {
 	fi
 
 	ready "Добавляем ${YELLOW}${_host}${NOCL} в защищенный список..."
-	echo "${_host}" >> "${KVAS_LIST_FILE}"
-	[ $? = 0 ] && when_ok "ДОБАВЛЕН" || when_bad "НЕ ДОБАВЛЕН"
+	echo "${_host}" >> "${KVAS_LIST_FILE}" && when_ok "ДОБАВЛЕН" || when_bad "НЕ ДОБАВЛЕН"
 
 #	если включен блокировщик рекламы
 	if cmd_ads_status | grep -q ВКЛЮЧЕН ; then
@@ -2823,7 +2822,7 @@ cmd_add_one_host() {
 	}
 	# Проверяем есть ли в этом списке домены
 	[ -s "${_tmpfile}" ] && {
-		[ -z "${tag_name}" ] && tagname=$(_get_tagname_by_domain "${host}" | tail -1)
+		[ -z "${tag_name}" ] && tag_name=$(_get_tagname_by_domain "${host}" | tail -1)
 		# Если есть, то спрашивем добавить ли их
 		read_ynq "Найдены доменные имена с тегом '${tag_name}',которых пока нет в списке защищенных доменнов.\nДобавить их в список?" answer
 		[[ "$answer" =~ [qn] ]] && return 1
@@ -3026,7 +3025,7 @@ cmd_clear_list() {
 		log_warning "${submessage}"
 
 		local tmp_file='/tmp/kvas_without_ip.txt'
-		>"${tmp_file}"
+		: >"${tmp_file}"
 		local regexp_ip
 		regexp_ip="$(get_regexp_ip_or_range)"
 		local readed_count=0
@@ -3150,7 +3149,7 @@ cmd_import_hosts() {
 
 	# файл с неверными переносами строк
 	if grep -Fq $'\r' "${user_list}"; then
-		if [ $(wc -l < "${user_list}") -gt 1 ]; then
+		if [ "$(wc -l < "${user_list}")" -gt 1 ]; then
 			# есть оба — Windows/DOS
 			local sed_regex='s/\r//'
 		else
@@ -3309,8 +3308,7 @@ cmd_export_hosts() {
 		mkdir -p "$(dirname "${backup_name}")" && touch "${backup_name}" &> /dev/null
 	fi
 	ready "Сохраняем записи в файл ${YELLOW}${backup_name}${GREEN}..."
-	echo "${HOSTS_LIST}" > "${backup_name}"
-	[ $? = 0 ] && when_ok "СОХРАНЕНЫ" || when_bad "ОШИБКА"
+	echo "${HOSTS_LIST}" > "${backup_name}" && when_ok "СОХРАНЕНЫ" || when_bad "ОШИБКА"
 }
 
 
@@ -3345,7 +3343,7 @@ add_tag_section_to_protect_list() {
 $grep_list_to_add
 EOF
 
-		exist_into_list=$(echo -e "${exist_into_list}" | sed '/^$/d' | sed = | sed 'N;s/\n/. /g')
+		exist_into_list=$(echo -e "${exist_into_list}" | sed '/^$/d' | sed '=' | sed 'N;s/\n/. /g')
 		echo "${exist_into_list}"
 		print_line
 		# read_ynq "Добавляем?" answer
@@ -3382,7 +3380,7 @@ del_tag_section_to_protect_list() {
 		domains=$(get_tag_domain_list "${tag_selected}")
 	fi
 	grep_list_to_del=$(echo -e "${domains}" | sed '/^$/d' | sort -u | sed -e 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed 's/\(.*\)/^\1$/g' )
-	exist_into_list=$(grep -oE "${grep_list_to_del}" "${KVAS_LIST_FILE}" | sed = | sed 'N;s/\n/. /g')
+	exist_into_list=$(grep -oE "${grep_list_to_del}" "${KVAS_LIST_FILE}" | sed '=' | sed 'N;s/\n/. /g')
 	
 	if [ -n "${exist_into_list}" ] ; then
 		echo -e "${exist_into_list}"

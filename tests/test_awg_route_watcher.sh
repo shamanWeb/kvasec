@@ -3,7 +3,7 @@
 # KVASEC state and never disrupt unrelated browser traffic.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 WATCHER="$ROOT/opt/etc/init.d/S99kvas-awg-route"
 
 sh -n "$WATCHER"

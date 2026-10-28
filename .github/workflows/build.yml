@@ -81,10 +81,18 @@ jobs:
       - name: Регрессионные тесты
         run: make test
 
-      # Пока не блокирует релиз: сначала разобрать накопленные замечания.
+      # shellcheck >= 0.10 нужен для -s busybox (Makefile); в ubuntu-latest — 0.9. Архив сверяется по sha256.
       - name: shellcheck
-        continue-on-error: true
-        run: make lint
+        run: |
+          v=v0.11.0
+          sha=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          curl -fsSL --retry 3 -o /tmp/shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${v}/shellcheck-${v}.linux.x86_64.tar.xz"
+          echo "${sha}  /tmp/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          export PATH="/tmp/shellcheck-${v}:$PATH"
+          shellcheck --version
+          make lint
 
       - name: Публикация релиза
         uses: softprops/action-gh-release@v2

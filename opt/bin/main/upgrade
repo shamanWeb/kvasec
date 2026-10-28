@@ -337,7 +337,9 @@ if [ -f /opt/bin/kvas ] && kvas | grep -q 'Настройка пакета не 
 else
 #	если все хорошо и обнаружена предыдущая версия пакета, то удаляем ее
 	if [ -f /opt/bin/kvas ]; then
+		# shellcheck disable=SC2034  # ver/rel нужны закомментированному сообщению ниже
 		ver=$(grep "APP_VERSION=" "${kvas_conf}" | cut -d'=' -f2)
+		# shellcheck disable=SC2034
 		rel=$(grep "APP_RELEASE=" "${kvas_conf}" | cut -d'=' -f2)
 		#ready "Удаляем предыдущую версию пакета  [${ver} ${rel}]..."
 		kvas uninstall "${remove_mode}" yes # && when_ok || when_err
@@ -355,7 +357,7 @@ ready "Устанавливаем новую версию пакета [${versio
 #--------------------------------------------------------------------------------------------------------------
 connect_home_nets(){
 	# подключаем одну гостевую сеть к KVASECу, если она имеется
-	/opt/sbin/ip a | grep global | grep -v br0 | grep -qE br[1-9] &&  {
+	/opt/sbin/ip a | grep global | grep -v br0 | grep -qE 'br[1-9]' &&  {
 		clear
 		kvas vpn net add
 	}

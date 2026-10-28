@@ -196,7 +196,7 @@ check_words_in_multiline_var() {
 
     echo "${multiline_var}" | while IFS= read -r line; do
         for word in $words; do
-            if [[ ! "${line//timeout*/}" == *"$word"* ]]; then
+            if ! case "${line//timeout*/}" in *"$word"*) true ;; *) false ;; esac; then
                 # echo "Слово '$word' не найдено в переменной."
                 return 1
             fi
@@ -316,7 +316,7 @@ dnsmasq__is_working() {
 		error "Не найден файл настроек ${DNSMASQ_CONFIG}"
 	elif ! [ -f "${DNSMASQ_IPSET_HOSTS}" ] ; then
 		error "Не найден файл настроек ${DNSMASQ_IPSET_HOSTS}"
-	elif ! command -v dnsmasq 2>&1 >/dev/null ; then
+	elif ! command -v dnsmasq >/dev/null 2>&1 ; then
 		error 'Не найдена команда dnsmasq'
 	elif ! dnsmasq --test 2>&1 | grep -Fq 'check OK' ; then
 		error "Ошибка в файлах конфигурации ${DNSMASQ_CONFIG} или ${DNSMASQ_IPSET_HOSTS}"
@@ -328,7 +328,7 @@ dnsmasq__is_working() {
 	# DNSCrypt
 	elif ! [ -f "${DNSCRYPT_CONFIG}" ] ; then
 		error "Не найден файл настроек ${DNSCRYPT_CONFIG}"
-	elif ! command -v dnscrypt-proxy 2>&1 >/dev/null ; then
+	elif ! command -v dnscrypt-proxy >/dev/null 2>&1 ; then
 		error 'Не найдена команда dnscrypt-proxy'
 	elif ! dnscrypt-proxy -config "${DNSCRYPT_CONFIG}" -check 2>&1 | grep -Fq 'successfully checked' ; then
 		error "Ошибка в файле конфигурации ${DNSCRYPT_CONFIG}"
@@ -837,7 +837,7 @@ syslog__show() {
 	local command
 	command=$(syslog__get_command "${facility}" "${filter}")
 	# быстрая проверка, чтобы не хранить огромный текст в переменной
-	if [ $(eval "${command}" | head -c1 | wc -c) -eq 0 ] ; then
+	if [ "$(eval "${command}" | head -c1 | wc -c)" -eq 0 ] ; then
 		return
 	fi
 
@@ -887,21 +887,21 @@ router_info() {
 	ready 'Время' && when_ok "$(date +'%y-%m-%d %T %Z')"
 
 	local info_cache=$(curl -s "${LOCALHOST_IP}:79/rci/show/defaults")
-	ready 'Модель'   && when_ok $(echo "${info_cache}" | jq -r '.ndmhwid  // empty')
-	ready 'Название' && when_ok $(echo "${info_cache}" | jq -r '.product  // empty')
-	ready 'Страна'   && when_ok $(echo "${info_cache}" | jq -r '.country  // empty')
-	ready 'Регион'   && when_ok $(echo "${info_cache}" | jq -r '.country_ // empty')
+	ready 'Модель'   && when_ok "$(echo "${info_cache}" | jq -r '.ndmhwid  // empty')"
+	ready 'Название' && when_ok "$(echo "${info_cache}" | jq -r '.product  // empty')"
+	ready 'Страна'   && when_ok "$(echo "${info_cache}" | jq -r '.country  // empty')"
+	ready 'Регион'   && when_ok "$(echo "${info_cache}" | jq -r '.country_ // empty')"
 
 	info_cache=$(cat /opt/etc/entware_release)
 	ready 'Архитектура' \
-		&& when_ok $(echo "${info_cache}" | grep -F 'arch='   | cut -d'=' -f2 | xargs)
+		&& when_ok "$(echo "${info_cache}" | grep -F 'arch='   | cut -d'=' -f2 | xargs)"
 	ready 'Версия ядра Linux' \
-		&& when_ok $(echo "${info_cache}" | grep -F 'Kernel' | grep -oE '[0-9\.]+')
-	ready        $(echo "${info_cache}" | grep -F 'NAME'    | cut -d'=' -f2 | xargs) \
-		&& when_ok $(echo "${info_cache}" | grep -F 'VERSION' | cut -d'=' -f2 | xargs)
+		&& when_ok "$(echo "${info_cache}" | grep -F 'Kernel' | grep -oE '[0-9\.]+' | head -1)"
+	ready        "$(echo "${info_cache}" | grep '^NAME='    | cut -d'=' -f2 | xargs)" \
+		&& when_ok "$(echo "${info_cache}" | grep '^VERSION=' | cut -d'=' -f2 | xargs)"
 
 	info_cache=$(curl -s "${LOCALHOST_IP}:79/rci/show/version")
-	ready 'Версия KeenOS' && when_ok $(echo "${info_cache}" | jq -r '.title // empty')
+	ready 'Версия KeenOS' && when_ok "$(echo "${info_cache}" | jq -r '.title // empty')"
 }
 
 kvas__show_config() {
@@ -958,7 +958,6 @@ cmd_print_debug() {
 		print_debug
 	else
 		# ready "Записываем данные отладки в файл ${1}..."
-		REP='_'
 		print_debug | sed -E "s/\\\033\[[0-9;]*[a-zA-Z]//g" | tee "${1}" 
 		#&& when_ok "УСПЕШНО" || when_bad "ОШИБКА"
 	fi

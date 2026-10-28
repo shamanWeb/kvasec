@@ -60,20 +60,20 @@ cmd_hosts_one_add(){
 		ip_host=${1}
 		host=${2}
 	elif echo "${2}" | grep -qE "${IP_FILTER}"; then
-		ip=${2}
+		ip_host=${2}
 		host=${1}
 	else
 		error "Неправильно задан один из аргументов!" nl
 		print_line
 		exit 0
 	fi
-	ready "Доменное имя или IP ${host} удален/о..."
-	"${host}" >> ${HOSTS_FILE}
-
-	[ $? = 0 ] && {
+	ready "Запись ${ip_host} ${host} добавлена..."
+	if echo "${ip_host} ${host}" >> "${HOSTS_FILE}"; then
 		when_ok "УСПЕШНО"
 		dns_server_restart "${host}"
-	} || when_bad "ОШИБКА"
+	else
+		when_bad "ОШИБКА"
+	fi
 
 }
 
@@ -95,8 +95,9 @@ cmd_hosts_one_del(){
 
 cmd_hosts_prune(){
 	read_ynq "Файл ${GREEN}${HOSTS_FILE}${NOCL} будет очищен. Продолжить?" answer
+	# shellcheck disable=SC2154  # присваивается по имени (eval) внутри read_ynq
 	if [ "${answer}" = y ] ; then
 		ready "Файл ${GREEN}${HOSTS_FILE}${NOCL} очищен..."
-		> ${HOSTS_FILE} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
+		: > "${HOSTS_FILE}" && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
 	fi
 }
