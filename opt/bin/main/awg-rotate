@@ -1,0 +1,49 @@
+#!/bin/sh
+#------------------------------------------------------------------------------
+#
+#	ПАКЕТ KVASEC
+#
+#------------------------------------------------------------------------------
+#
+#	Исполнитель ротации listen-port AmneziaWG (защита от ТСПУ-"заморозки по
+#	fingerprint"). Смена listen-port => новый внешний порт через CGNAT => новый
+#	4-tuple для DPI, что сбрасывает привязанное к потоку состояние заморозки.
+#
+#	Вызывается из cron.5mins (с самогейтом на интервал) и из `kvas rotate on`
+#	(аргумент force — ротация немедленно). Состояние последней ротации — в RAM.
+#
+# ------------------------------------------------------------------------------
+
+ROTATE_FLAG=/opt/etc/kvas-rotate-enabled
+ROTATE_LAST=/tmp/kvas-rotate.last
+AWG_BIN=/opt/sbin/awg
+
+# включено? (флаг хранит интервал в минутах)
+[ -f "${ROTATE_FLAG}" ] || exit 0
+interval=$(cat "${ROTATE_FLAG}" 2>/dev/null)
+case "${interval}" in ''|*[!0-9]*) interval=10 ;; esac
+
+now=$(date +%s)
+if [ "${1}" != "force" ]; then
+	last=0
+	[ -f "${ROTATE_LAST}" ] && last=$(cat "${ROTATE_LAST}" 2>/dev/null)
+	case "${last}" in ''|*[!0-9]*) last=0 ;; esac
+	# интервал минус запас, чтобы срабатывать на нужном тике cron.5mins
+	[ "$(( now - last ))" -lt "$(( interval * 60 - 20 ))" ] && exit 0
+fi
+
+# активный AmneziaWG-интерфейс (opkgtunNN)
+iface=$("${AWG_BIN}" show interfaces 2>/dev/null | tr ' \t' '\n' | grep -m1 '^opkgtun')
+[ -n "${iface}" ] || exit 0
+
+# случайный порт 20000..59999
+rnd=$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' ')
+case "${rnd}" in ''|*[!0-9]*) rnd=$$ ;; esac
+port=$(( 20000 + rnd % 40000 ))
+
+"${AWG_BIN}" set "${iface}" listen-port "${port}" 2>/dev/null || exit 1
+# подтолкнуть хэндшейк с нового порта, чтобы сервер быстро узнал endpoint
+ping -I "${iface}" -c 1 -W 2 1.1.1.1 >/dev/null 2>&1
+
+echo "${now}" > "${ROTATE_LAST}" 2>/dev/null
+exit 0

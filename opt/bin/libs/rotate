@@ -1,0 +1,76 @@
+#!/bin/sh
+#------------------------------------------------------------------------------
+#
+#	ПАКЕТ KVASEC
+#
+#------------------------------------------------------------------------------
+#
+#	Ротация listen-port AmneziaWG для обхода ТСПУ-"заморозки по fingerprint".
+#	Периодическая смена порта уводит flow, не давая поведенческому детектору DPI
+#	накопить вердикт (тихий blackhole данных при живом хэндшейке).
+#
+#	kvas rotate on [минуты]  — включить (по умолчанию каждые 10 мин)
+#	kvas rotate off          — выключить
+#	kvas rotate              — статус
+#
+#	Реализация: флаг /opt/etc/kvas-rotate-enabled (хранит интервал) + cron-dropin
+#	в cron.5mins, вызывающий исполнитель main/awg-rotate. Сама ротация на флеш не
+#	пишет (чистый `awg set`); состояние последней ротации — в RAM (/tmp).
+#
+# ------------------------------------------------------------------------------
+
+ROTATE_FLAG=/opt/etc/kvas-rotate-enabled
+ROTATE_CRON=/opt/etc/cron.5mins/kvas-awg-rotate
+ROTATE_LAST=/tmp/kvas-rotate.last
+ROTATE_EXEC=/opt/apps/kvas/bin/main/awg-rotate
+ROTATE_AWG=/opt/sbin/awg
+
+rotate_iface() {
+	"${ROTATE_AWG}" show interfaces 2>/dev/null | tr ' \t' '\n' | grep -m1 '^opkgtun'
+}
+
+cmd_rotate_on() {
+	interval="${1:-10}"
+	case "${interval}" in
+		''|*[!0-9]*) error "Интервал должен быть числом минут (напр. kvas rotate on 10)."; return 1 ;;
+	esac
+	[ "${interval}" -ge 1 ] 2>/dev/null || { error "Интервал должен быть не меньше 1 минуты."; return 1; }
+
+	ready "Ротация порта AWG каждые ${interval} мин"
+	{
+		mkdir -p /opt/etc/cron.5mins
+		echo "${interval}" > "${ROTATE_FLAG}"
+		printf '#!/bin/sh\n# KVASEC: ротация listen-port AWG (обход DPI-заморозки). kvas rotate on|off\n%s\n' \
+			"${ROTATE_EXEC}" > "${ROTATE_CRON}"
+		chmod 755 "${ROTATE_CRON}"
+		rm -f "${ROTATE_LAST}"
+		# немедленная первая ротация (не валим статус, если туннель ещё не поднят)
+		"${ROTATE_EXEC}" force || true
+	} 1> /dev/null 2> "${ERROR_LOG_FILE}"
+	ready_status "${?}" "Не удалось включить ротацию порта." "ВКЛЮЧЕНО"
+}
+
+cmd_rotate_off() {
+	ready "Ротация порта AWG"
+	{
+		rm -f "${ROTATE_FLAG}" "${ROTATE_CRON}" "${ROTATE_LAST}"
+	} 1> /dev/null 2> "${ERROR_LOG_FILE}"
+	ready_status "${?}" "Не удалось выключить ротацию порта." "ОТКЛЮЧЕНО"
+}
+
+cmd_rotate_status() {
+	ready "Ротация порта AWG"
+	if [ -f "${ROTATE_FLAG}" ]; then
+		interval=$(cat "${ROTATE_FLAG}" 2>/dev/null)
+		when_ok "ВКЛЮЧЕНА (каждые ${interval:-10} мин)"
+	else
+		when_bad "ОТКЛЮЧЕНА"
+	fi
+	iface=$(rotate_iface)
+	if [ -n "${iface}" ]; then
+		port=$("${ROTATE_AWG}" show "${iface}" 2>/dev/null | sed -n 's/.*listening port: //p')
+		printf "  интерфейс: %s, текущий listen-port: %s\n" "${iface}" "${port:-?}"
+	else
+		printf "  AmneziaWG-интерфейс не найден (туннель не поднят?)\n"
+	fi
+}

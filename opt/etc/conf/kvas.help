@@ -47,6 +47,9 @@ kvas vpn net|guest           - правила для гостевой/VPN сет
 kvas vpn net|guest add       - подключить гостевую сеть к VPN
 kvas vpn net|guest del       - отключить гостевую сеть от VPN
 kvas vpn gateway <IP>        - VPN через устройство в локальной сети
+kvas rotate                  - статус ротации listen-port AWG (обход DPI-заморозки)
+kvas rotate on [минуты]      - включить ротацию порта (по умолчанию каждые 10 мин)
+kvas rotate off              - выключить ротацию порта
 
 
 == DNS ==
