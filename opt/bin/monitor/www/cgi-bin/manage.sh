@@ -865,6 +865,38 @@ main() {
 			/opt/etc/init.d/S56dnsmasq restart >/dev/null 2>&1
 			echo '{"ok":true,"msg":"Adblock выключен"}'
 			;;
+		rotate_status)
+			check_token "$token"
+			if [ -f /opt/etc/kvas-rotate-enabled ]; then
+				rint=$(cat /opt/etc/kvas-rotate-enabled 2>/dev/null)
+				case "$rint" in ''|*[!0-9]*) rint=10 ;; esac
+				rstate=on
+			else
+				rint=10; rstate=off
+			fi
+			rif=$(/opt/sbin/awg show interfaces 2>/dev/null | tr ' \t' '\n' | grep -m1 '^opkgtun')
+			rport=$(/opt/sbin/awg show "$rif" 2>/dev/null | sed -n 's/.*listening port: //p' | tr -dc '0-9')
+			printf '{"ok":true,"rotate":"%s","interval":%s,"port":"%s"}\n' "$rstate" "$rint" "$rport"
+			;;
+		rotate_on)
+			check_token "$token"
+			rint=$(query_param interval)
+			case "$rint" in ''|*[!0-9]*) rint=10 ;; esac
+			[ "$rint" -ge 1 ] 2>/dev/null || rint=10
+			if "$KVAS_BIN" rotate on "$rint" >/dev/null 2>&1; then
+				printf '{"ok":true,"msg":"Ротация включена (каждые %s мин)"}\n' "$rint"
+			else
+				json_error "не удалось включить ротацию"
+			fi
+			;;
+		rotate_off)
+			check_token "$token"
+			if "$KVAS_BIN" rotate off >/dev/null 2>&1; then
+				echo '{"ok":true,"msg":"Ротация выключена"}'
+			else
+				json_error "не удалось выключить ротацию"
+			fi
+			;;
 		route_status)
 			check_token "$token"
 			route_full=$(grep "^route_full_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2 | tr '+' ' ')

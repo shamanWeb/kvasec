@@ -153,6 +153,23 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <div class="legend" style="margin-top:10px;"><span><span class="sw" style="background:#58a6ff"></span>% битых пакетов</span></div>
     <canvas id="chart-dpi-loss" style="width:100%;height:110px;display:block;"></canvas>
   </div>
+
+  <div class="card">
+    <h3>Ротация порта туннеля <span style="font-size:12px;color:#8b949e;">(обход DPI-заморозки)</span></h3>
+    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Периодически меняет локальный порт AmneziaWG — для ТСПУ это новый поток, что сбрасывает поведенческую «заморозку» (туннель «поднят», но данные молча не идут). Цена — короткий разрыв ~1–2 с при каждой смене. По умолчанию каждые 10 минут.</p>
+    <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;">
+      <label>Статус:</label>
+      <span class="value" id="rotateStatus" style="color:#8b949e;">-</span>
+      <input type="number" id="rotateInterval" min="1" value="10" style="width:64px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;" title="интервал ротации, минут">
+      <span style="font-size:12px;color:#8b949e;">мин</span>
+      <button class="btn btn-sm success" onclick="rotateOn(this)">Включить</button>
+      <button class="btn btn-sm danger" onclick="rotateOff(this)">Выключить</button>
+    </div>
+    <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;">
+      <label>Текущий порт:</label><span class="value" id="rotatePort">-</span>
+    </div>
+    <div id="rotateMsg" class="msg"></div>
+  </div>
 </div>
 
 <!-- ========== TAB: Управление ========== -->
@@ -585,13 +602,44 @@ function showMain() {
 
 var dashboardTimer = null, dashboardHistTimer = null;
 function startDashboard() {
-  dpiPoll(); loadDpiHistory();
+  dpiPoll(); loadDpiHistory(); loadRotateStatus();
   if (!dashboardTimer) dashboardTimer = setInterval(dpiPoll, 3000);
   if (!dashboardHistTimer) dashboardHistTimer = setInterval(loadDpiHistory, 60000);
 }
 function stopDashboard() {
   if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
   if (dashboardHistTimer) { clearInterval(dashboardHistTimer); dashboardHistTimer = null; }
+}
+
+function loadRotateStatus() {
+  api('/cgi-bin/manage.sh?action=rotate_status', function(d){
+    var el = document.getElementById('rotateStatus');
+    if (!el) return;
+    var on = d && d.rotate === 'on';
+    el.textContent = on ? ('включена (каждые ' + (d.interval || 10) + ' мин)') : 'выключена';
+    el.style.color = on ? '#3fb950' : '#8b949e';
+    if (on && d.interval) document.getElementById('rotateInterval').value = d.interval;
+    var p = document.getElementById('rotatePort');
+    if (p) p.textContent = (d && d.port) ? d.port : '-';
+  });
+}
+
+function rotateOn(btn) {
+  var iv = parseInt(document.getElementById('rotateInterval').value, 10) || 10;
+  if (iv < 1) iv = 10;
+  apiBtn('/cgi-bin/manage.sh?action=rotate_on&interval=' + iv, btn, function(d){
+    var el = document.getElementById('rotateMsg');
+    if (el) { el.className = d.ok ? 'msg ok' : 'msg err'; el.textContent = d.ok ? (d.msg || 'Включено') : (d.error || 'Ошибка'); }
+    loadRotateStatus();
+  });
+}
+
+function rotateOff(btn) {
+  apiBtn('/cgi-bin/manage.sh?action=rotate_off', btn, function(d){
+    var el = document.getElementById('rotateMsg');
+    if (el) { el.className = d.ok ? 'msg ok' : 'msg err'; el.textContent = d.ok ? (d.msg || 'Выключено') : (d.error || 'Ошибка'); }
+    loadRotateStatus();
+  });
 }
 
 function changePassword() {

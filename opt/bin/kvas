@@ -7,6 +7,7 @@
 . /opt/apps/kvas/bin/libs/update
 . /opt/apps/kvas/bin/libs/vpn
 . /opt/apps/kvas/bin/libs/monitor
+. /opt/apps/kvas/bin/libs/rotate
 . /opt/apps/kvas/bin/main/setup
 
 #------------------------------------------------------------------------------
@@ -291,6 +292,14 @@ case "${1}" in
 			del)                cmd_route_del "${3}" "${4}" ;;
 			list)               cmd_route_list ;;
 			*)                  cmd_route         ;;
+		esac
+		;;
+
+	rotate | awgrotate)
+		case "${2}" in
+			on)                 cmd_rotate_on "${3}" ;;
+			off)                cmd_rotate_off ;;
+			*)                  cmd_rotate_status ;;
 		esac
 		;;
 

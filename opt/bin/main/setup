@@ -386,6 +386,8 @@ rm_package_files() {
 		rm_file /opt/etc/ndm/ifstatechanged.d/100-kvas-vpn
 		rm_file /opt/etc/ndm/fs.d/15-kvas-start.sh
 		rm_file /opt/etc/cron.5mins/check_vpn
+		rm_file /opt/etc/cron.5mins/kvas-awg-rotate
+		rm_file /opt/etc/kvas-rotate-enabled
 		rm_file /opt/etc/dnsmasq.d/kvas.dnsmasq
 		rm_dir /opt/etc/adblock
 		rm_dir /opt/tmp/adblock
