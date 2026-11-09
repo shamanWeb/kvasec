@@ -24,3 +24,25 @@ printf '%s|%s|%s|%s\\n' \\
     echo "unexpected SemVer parser result: $result" >&2
     exit 1
 }
+
+# verify_package must reject an HTTP error page saved as .ipk (GitHub 504 once
+# made upgrade uninstall the working package) and a checksum mismatch, and
+# accept a real ipk-shaped archive with a matching sha256.
+VERIFY=$(sed -n '/^verify_package(){/,/^}/p' "$UPGRADE")
+VT=$(mktemp -d); trap 'rm -rf "$VT"' EXIT
+printf '<html><body><h1>504 Gateway Time-out</h1></body></html>\n' >"$VT/bad.ipk"
+mkdir "$VT/pkg"; echo 2.0 >"$VT/pkg/debian-binary"
+tar -czf "$VT/pkg/data.tar.gz" -C "$VT/pkg" debian-binary
+tar -czf "$VT/good.ipk" -C "$VT/pkg" ./debian-binary ./data.tar.gz
+GOOD_SUM=$(sha256sum "$VT/good.ipk" | cut -d' ' -f1)
+run_verify() {  # $1 = ipk, $2 = checksum served by the "release" ('' = no .sha256 asset)
+    SUM="$2" sh -c "package_url=x
+gh_download(){ [ -n \"\$SUM\" ] && echo \"\$SUM  f\" >\"\$2\"; }
+$VERIFY
+verify_package \"\$1\"" _ "$1"
+}
+run_verify "$VT/bad.ipk" '' && exit 1
+run_verify "$VT/good.ipk" deadbeef && exit 1
+run_verify "$VT/good.ipk" "$GOOD_SUM"
+run_verify "$VT/good.ipk" ''
+exit 0
