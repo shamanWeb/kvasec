@@ -356,3 +356,20 @@ conntrack) выключены по умолчанию — гейт `[ -f /opt/et
 
 ## Формат ipk
 gzip(tar( debian-binary + control.tar.gz + data.tar.gz )), строки с LF.
+
+## Сторож S99kvas-awg-route: утечки мимо туннеля (2026-11-09)
+
+**Симптом**: PhpStorm периодически «License required … export control regulations» — запрос
+к JetBrains ушёл с российского IP, хотя все домены лицензирования в KVAS_LIST.
+**Причины** (все в стороже `opt/etc/init.d/S99kvas-awg-route`):
+1. KeeneticOS периодически стирает KVAS_MARK (в логе `KVAS_MARK восстановлен`, несколько раз
+   в сутки). Соединение, открытое в это окно, получает connmark 0, а цепочка делает
+   `restore-mark` → `! NEW → RETURN` — оно идёт мимо туннеля **до закрытия** (keep-alive).
+   **Фикс**: `purge_unmarked_conns` после восстановления — `conntrack -D -m 0 -s <lan> -d <ip>`
+   для адресатов из KVAS_LIST (собственные IP роутера пропускаются).
+2. Туннель лёг → default в table 1001 исчезает → помеченный трафик проваливается в main → WAN.
+   **Фикс**: fail-closed `unreachable default metric 4000` в table 1001 (ndm
+   `ip4__route__add_table` смотрит только на `^default … dev`, не мешает).
+3. Два сторожа одновременно (два параллельных `restart`) → гонка check-then-add в ndm →
+   дубли `PREROUTING -j KVAS_MARK`. **Фикс**: mkdir-лок + `kill_others` в stop + `dedupe_rules`
+   (PREROUTING-прыжки, DoT 853) и дедуп ip rule.

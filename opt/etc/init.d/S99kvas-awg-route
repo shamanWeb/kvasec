@@ -13,6 +13,12 @@
 #      через штатный хук 100-vpn-mark (ip4_firewall_set_all_rules).
 #      NDM при reload делает iptables -F (flush rules, не -X delete chain),
 #      поэтому chain существует, но пустая — детектируем по числу правил.
+#      После восстановления рвёт соединения, открытые без метки за время
+#      пропажи цепочки (иначе они так и идут мимо туннеля, с IP провайдера);
+#   4) fail-closed: unreachable default в table 1001 — при падении туннеля
+#      помеченный трафик обрывается, а не утекает в WAN.
+#
+# Ровно один экземпляр: mkdir-лок + stop добивает все прочие копии.
 #
 # Метка kvas 1.1.x = 0xd1000 -> table 1001. Для НЕ-opkgtun интерфейсов демон
 # сразу выходит (штатный NDM-механизм kvas работает сам).
@@ -21,6 +27,7 @@ LOG=/opt/tmp/kvas-awg-route.log
 CONF=/opt/etc/kvas.conf
 IFEQ=/opt/etc/inface_equals
 PIDF=/opt/tmp/kvas-awg-route.pid
+LOCK=/opt/tmp/kvas-awg-route.lock
 
 MARK=0xd1000
 RTABLE=1001
@@ -30,12 +37,55 @@ RPRIO=99
 NFHOOK_APP=/opt/apps/kvas/etc/ndm/netfilter.d/100-vpn-mark
 NFHOOK_ETC=/opt/etc/ndm/netfilter.d/100-vpn-mark
 
+# Соединение, открытое пока KVAS_MARK не было, остаётся без метки навсегда
+# (CONNMARK --restore-mark → '! NEW → RETURN') и ходит мимо туннеля — с IP
+# провайдера (JetBrains: «export control regulations»). Рвём LAN-соединения
+# с mark=0 к адресам из KVAS_LIST — клиент переоткроет их уже с меткой.
+purge_unmarked_conns() {
+  command -v conntrack >/dev/null 2>&1 || { echo "$(date) skip: нет conntrack, немаркированные соединения не сброшены" >>"$LOG"; return; }
+  _self=$(ip -o -4 addr show 2>/dev/null | awk '{sub(/\/.*/, "", $4); printf "%s ", $4}')
+  _n=$(conntrack -L -m 0 2>/dev/null | awk -v self="$_self" '
+      BEGIN { n = split(self, a, " "); for (i = 1; i <= n; i++) me[a[i]] = 1 }
+      { s = d = ""
+        for (i = 1; i <= NF; i++) {
+          if (s == "" && $i ~ /^src=/) s = substr($i, 5)
+          else if (d == "" && $i ~ /^dst=/) d = substr($i, 5)
+        }
+        if (s != "" && d != "" && !(s in me) && !seen[d " " s]++) print d, s }' \
+    | sort | {
+      _last=''; _hit=1
+      while read -r _d _s; do
+        if [ "$_d" != "$_last" ]; then _last=$_d; ipset test KVAS_LIST "$_d" >/dev/null 2>&1; _hit=$?; fi
+        [ "$_hit" -eq 0 ] && conntrack -D -m 0 -s "$_s" -d "$_d" >/dev/null 2>&1 && echo x
+      done; } | grep -c x)
+  [ "${_n:-0}" -gt 0 ] && echo "$(date) fix: сброшено немаркированных соединений к KVAS_LIST: $_n" >>"$LOG"
+}
+
+# Убрать дубли правил в цепочке (оставить по одной копии), $3 — фильтр grep -F.
+dedupe_rules() {
+  iptables -t "$1" -S "$2" 2>/dev/null | grep -F -- "$3" | sort | uniq -d | while read -r _rule; do
+    while [ "$(iptables -t "$1" -S "$2" 2>/dev/null | grep -cFx -- "$_rule")" -gt 1 ]; do
+      # shellcheck disable=SC2086  # намеренно: правило разбивается на аргументы
+      iptables -t "$1" -D ${_rule#-A } 2>/dev/null || break
+      echo "$(date) fix: дубль удалён: -t $1 $_rule" >>"$LOG"
+    done
+  done
+}
+
 watcher() {
   IFACE=$(sed -n 's/^INFACE_ENT=//p' "$CONF" | tr -d ' \r')
   case "$IFACE" in opkgtun*) : ;; *) echo "$(date) INFACE_ENT=$IFACE не opkgtun — выход" >>"$LOG"; return ;; esac
   grep -q "$IFACE" "$IFEQ" 2>/dev/null || echo "$IFACE|$IFACE|AmneziaWG-3.1" >>"$IFEQ"
   echo "$(date) watcher start ($IFACE)" >>"$LOG"
   while : ; do
+    # 0) fail-closed: без default-маршрута помеченный трафик проваливается по ip rule
+    #    дальше, в main → WAN. unreachable с большой метрикой не мешает рабочему
+    #    default (метрика 0) и остаётся, когда интерфейс туннеля пропадает.
+    if ! ip route show table "$RTABLE" 2>/dev/null | grep -q '^unreachable default'; then
+      ip route add table "$RTABLE" unreachable default metric 4000 2>/dev/null \
+        && echo "$(date) fix: table $RTABLE unreachable default (fail-closed)" >>"$LOG"
+    fi
+
     IPGW=$(ip a 2>/dev/null | grep global | grep "$IFACE" | sed 's|.*inet \(.*\)/.* scope.*|\1|' | cut -d' ' -f1)
     if [ -n "$IPGW" ]; then
       # 1) default в VPN-redirect таблицах -> opkgtunNN
@@ -50,9 +100,12 @@ watcher() {
       done
 
       # 2) ip rule fwmark 0xd1000 -> table 1001 (priority 99)
-      if ! ip rule 2>/dev/null | grep -q "fwmark ${MARK}.*lookup ${RTABLE}"; then
+      _nr=$(ip rule 2>/dev/null | grep -c "fwmark ${MARK}.*lookup ${RTABLE}")
+      if [ "$_nr" -ne 1 ]; then
+        # 0 — добавить; >1 — дубли (возможно с разными priority): снести все, оставить одно
+        while ip rule del fwmark ${MARK}/${MARK} lookup ${RTABLE} 2>/dev/null; do :; done
         ip rule add fwmark ${MARK}/${MARK} lookup ${RTABLE} priority ${RPRIO} 2>/dev/null
-        echo "$(date) fix: ip rule fwmark ${MARK} -> table ${RTABLE} (prio ${RPRIO})" >>"$LOG"
+        echo "$(date) fix: ip rule fwmark ${MARK} -> table ${RTABLE} (prio ${RPRIO}, было ${_nr})" >>"$LOG"
       fi
 
       # 3) цепочка KVAS_MARK в mangle — при пропаже ИЛИ пустой цепочке пересоздать.
@@ -66,7 +119,9 @@ watcher() {
         elif [ -x "$NFHOOK_ETC" ]; then type=iptables table=mangle "$NFHOOK_ETC" >/dev/null 2>&1
         fi
         echo "$(date) fix: KVAS_MARK восстановлен (rules=${_km_rules}, jumps=${_km_jump})" >>"$LOG"
+        purge_unmarked_conns
       fi
+      dedupe_rules mangle PREROUTING "-j KVAS_MARK"
 
       # 4) DoT-блок (DNS-over-TLS, порт 853) для LAN — форсируем DNS через роутер,
       #    чтобы браузеры не обходили dnsmasq. DoH-хостнеймы глушит dnsmasq-сниппет.
@@ -76,6 +131,7 @@ watcher() {
           echo "$(date) fix: DoT-блок ${P}/853 добавлен в FORWARD" >>"$LOG"
         fi
       done
+      dedupe_rules filter FORWARD "--dport 853 -j REJECT"
 
       # 5) Do not interfere with QUIC globally.  A router-wide REJECT of UDP/443
       #    looks like a changed network to Chromium on some clients and breaks
@@ -106,6 +162,35 @@ watcher() {
     sleep 10
   done
 }
-start() { if [ -f "$PIDF" ] && kill -0 "$(cat $PIDF 2>/dev/null)" 2>/dev/null; then exit 0; fi; watcher & echo $! > "$PIDF"; }
-stop()  { [ -f "$PIDF" ] && kill "$(cat $PIDF 2>/dev/null)" 2>/dev/null; rm -f "$PIDF"; }
+
+# Все прочие экземпляры этого скрипта (start/restart), кроме текущего процесса.
+# Нужен, т.к. до лока два параллельных restart (postinst + веб-UI) поднимали два
+# watcher'а, и они наперегонки дублировали правила (check-then-add в ndm).
+kill_others() {
+  for _p in /proc/[0-9]*; do
+    _pid=${_p#/proc/}
+    [ "$_pid" = "$$" ] && continue
+    case "$(tr '\0' ' ' <"$_p/cmdline" 2>/dev/null)" in
+      *S99kvas-awg-route\ start\ |*S99kvas-awg-route\ restart\ ) kill "$_pid" 2>/dev/null ;;
+    esac
+  done
+}
+
+start() {
+  # watcher старой версии (без лока) уже жив — второй не нужен
+  kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null && exit 0
+  # mkdir атомарен — в отличие от «проверить pidfile → запустить»
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    _pid=$(cat "$PIDF" 2>/dev/null)
+    [ -z "$_pid" ] && { sleep 1; _pid=$(cat "$PIDF" 2>/dev/null); }  # параллельный start пишет pid
+    [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null && exit 0
+    rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null || exit 0               # протухший лок
+  fi
+  watcher & echo $! > "$PIDF"
+}
+stop() {
+  [ -f "$PIDF" ] && kill "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null
+  kill_others
+  rm -f "$PIDF"; rmdir "$LOCK" 2>/dev/null
+}
 case "$1" in start) start ;; stop) stop ;; restart) stop; sleep 1; start ;; *) echo "usage: $0 {start|stop|restart}";; esac
