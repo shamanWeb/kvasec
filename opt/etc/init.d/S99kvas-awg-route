@@ -177,8 +177,10 @@ kill_others() {
 }
 
 start() {
-  # watcher старой версии (без лока) уже жив — второй не нужен
-  kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null && exit 0
+  # watcher старой версии (без лока) уже жив — второй не нужен.
+  # Пустой pid проверять обязательно: busybox `kill -0 ""` возвращает 0.
+  _pid=$(cat "$PIDF" 2>/dev/null)
+  [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null && exit 0
   # mkdir атомарен — в отличие от «проверить pidfile → запустить»
   if ! mkdir "$LOCK" 2>/dev/null; then
     _pid=$(cat "$PIDF" 2>/dev/null)

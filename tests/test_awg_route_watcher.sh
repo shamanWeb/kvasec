@@ -59,3 +59,7 @@ sed -n '/^purge_unmarked_conns()/,/^}/p' "$WATCHER" >"$TMP/fn.sh"
 CT_LOG="$TMP/ct.log" LOG="$TMP/w.log" PATH="$TMP:$PATH" sh -c '. "$1"; purge_unmarked_conns' _ "$TMP/fn.sh"
 [ "$(cat "$TMP/ct.log")" = "-D -m 0 -s 192.168.1.74 -d 52.1.1.1" ]
 grep -F 'немаркированных соединений к KVAS_LIST: 1' "$TMP/w.log" >/dev/null
+
+# busybox `kill -0 ""` succeeds, so an unguarded pidfile check made start()
+# exit immediately and the watcher never ran after install.
+! grep -E 'kill -0 "\$\(cat' "$WATCHER" >/dev/null
