@@ -122,20 +122,20 @@ build.sh кладёт туда `100-dns-local` + `100-vpn-mark` (иначе KVAS
   1. Добавили `iptables -t nat PREROUTING REDIRECT 443→37297` + `netfilter-persistent save` на сервере.
   2. Обновили `awg10.json endpoint → :443`, перезапустили awg-manager → туннель поднялся через :443.
   3. Пользователь отдельно сменил порт в приложении Амнезия → оно пересоздало Docker-контейнер
-     с новыми ключами (server pubkey `B7VFaNZP...` вместо `I4kIaXpZ...`), биндинг стал `443:443`.
+     с новыми ключами (server pubkey `<SERVER_PUBKEY>` вместо `<OLD_SERVER_PUBKEY>`), биндинг стал `443:443`.
   4. REDIRECT стал мешать (443→37297, но контейнер теперь на 443) → **удалили REDIRECT**.
      Сервер теперь нативно слушает UDP/443 (через Docker binding `443:443`).
   5. Амнезия записала конфиг как `awg20.json` с `backend: nativewg` → создался `nwg0` вместо
      `opkgtun10` → kvas сломался. Исправили: скопировали в `awg10.json` с `backend: kernel` +
      `activeWAN: eth3` + удалили зависший `nwg0` интерфейс вручную → `opkgtun10` поднялся.
-  **Итоговое состояние `awg10.json`:** `endpoint: 217.156.64.103:443`, `backend: kernel`,
+  **Итоговое состояние `awg10.json`:** `endpoint: <SERVER_IP>:443`, `backend: kernel`,
   `address: 10.8.1.3/32`, `pingCheck target: 1.1.1.1`, `failThreshold: 6`.
   ⚠️ **При следующем изменении в Амнезии:** она создаст `awgXX.json` с `nativewg` — нужно
   скопировать в `awg10.json` с `backend: kernel`, `activeWAN: eth3`, удалить старый `nwgX`
   интерфейс и перезапустить awg-manager.
   6. **(2026-09-21)** Ещё один побочный эффект тех же правок в Амнезии: она создала
      NDM-нативный WireGuard-интерфейс `Wireguard0` (описание `amnezia_for_awg_3_1`, тот же
-     pubkey роутера `7PqEYy7l...`). NDM-нативный WG не умеет AmneziaWG 3.1 → device не создаётся
+     pubkey роутера `<ROUTER_PUBKEY>`). NDM-нативный WG не умеет AmneziaWG 3.1 → device не создаётся
      (`no such device (19)`, `state: error`) → NDM каждые 2-3 сек спамил в лог `system failed
      [0xcffd...]`. Осиротевший дубль (реально работает `opkgtun10`). **Фикс:**
      `ndmc -c "no interface Wireguard0"` + `ndmc -c "system configuration save"`.
