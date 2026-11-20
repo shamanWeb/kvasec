@@ -28,6 +28,12 @@ ADGUARD_WEB_PID=/tmp/kvas-adguard-web.pid
 ADGUARD_WEB_LOG=/tmp/kvas-adguard-web.log
 ADGUARD_WEB_BACKUP=/opt/kvas_backup/web-adguard-dns
 
+# JSON-экранирование строки внутри awk: посимвольно, т.к. экранирование в замене gsub
+# у busybox awk и mawk разное (прежний gsub в busybox оставлял кавычку неэкранированной).
+# Управляющие символы → пробел.
+AWK_JESC='function jesc(s,  o, i, c) { o = ""; for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); if (c == "\\" || c == "\"") o = o "\\" c; else if (c < " ") o = o " "; else o = o c } return o }
+'
+
 json_str() { printf '%s' "$1" | jq -Rs '.' 2>/dev/null || printf '"%s"' "$1" | sed 's/"/\\"/g'; }
 json_error() { printf '{"error":%s}\n' "$(json_str "$1")"; exit 0; }
 json_ok()    { printf '{"ok":true,"msg":%s}\n' "$(json_str "$1")"; exit 0; }
@@ -1050,7 +1056,7 @@ main() {
 			unset _priv_re
 			# Вывод с дедупликацией (оставляем первую запись — у DHCP приоритет)
 			printf '{"ok":true,"devices":['
-			awk -F'|' '!seen[$1]++{if(f++) printf ","; printf "{\"ip\":\"%s\",\"name\":\"%s\"}", $1, $2}' "$_tmpdev" 2>/dev/null
+			awk -F'|' "$AWK_JESC"'!seen[$1]++{if(f++) printf ","; printf "{\"ip\":\"%s\",\"name\":\"%s\"}", jesc($1), jesc($2)}' "$_tmpdev" 2>/dev/null
 			rm -f "$_tmpdev"
 			echo ']}'
 			;;
@@ -1100,7 +1106,7 @@ main() {
 			printf '{"ok":true,"devices":['
 			KVAS_FULL="$(echo "$route_full" | tr '+' ' ')" KVAS_EXCL="$(echo "$route_exclude" | tr '+' ' ')" \
 			KVAS_IFADDR="$if_addr" KVAS_LOCKED="$(iot_locked_macs | tr '\n' ' ')" \
-			awk -F'|' '
+			awk -F'|' "$AWK_JESC"'
 				function ip2int(s,  p) { split(s, p, "."); return p[1]*16777216 + p[2]*65536 + p[3]*256 + p[4] }
 				function in_lan(s,  di, i) {
 					if (nlan == 0) return 1;              # нет данных об интерфейсах — не фильтруем
@@ -1135,7 +1141,7 @@ main() {
 					# настроенные (full/exclude) показываем всегда; остальные — только on-link
 					if (!($1 in full) && !($1 in excl) && !in_lan($1)) next;
 					ip=$1; name=$2; mac=$3; access=$4;
-					gsub(/\\/, "\\\\", name); gsub(/"/, "\\\"", name);
+					name = jesc(name);
 					if (access == "deny") mode = "blocked";
 					else if (ip in full) mode = "full";
 					else if (ip in excl) mode = "exclude";

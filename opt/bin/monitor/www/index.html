@@ -491,6 +491,14 @@ function loadingBtn(btn, loading) {
   else { btn.disabled = false; btn.textContent = btn._text || btn.textContent; }
 }
 
+// HTML-экранирование: всё, что пришло с роутера (DHCP-имена, DNS-лог, ошибки),
+// в innerHTML только через esc() — иначе XSS с кражей токена из sessionStorage.
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
 function showProgress(pct, text) {
   var el = document.getElementById('hostProgress');
   var fill = document.getElementById('hostProgressFill');
@@ -498,7 +506,7 @@ function showProgress(pct, text) {
   if (pct < 0) { el.style.display = 'none'; return; }
   el.style.display = 'block';
   fill.style.width = pct + '%';
-  txt.innerHTML = (pct > 0 ? pct + '% ' : '') + '<span class="spinner"></span> ' + text;
+  txt.innerHTML = (pct > 0 ? pct + '% ' : '') + '<span class="spinner"></span> ' + esc(text);
 }
 
 function hideProgress() { showProgress(-1); }
@@ -677,7 +685,7 @@ function loadTags() {
   if (!el) return;
   el.innerHTML = '<div style="color:#8b949e;font-size:11px;padding:4px 0;"><span class="spinner"></span> Загрузка заквасок...</div>';
   api('/cgi-bin/manage.sh?action=tags_list', function(d){
-    if (!d.ok) { el.innerHTML = '<div class="status status-err">' + (d.error||'error') + '</div>'; return; }
+    if (!d.ok) { el.innerHTML = '<div class="status status-err">' + esc(d.error||'error') + '</div>'; return; }
     if (!d.tags || !d.tags.length) { el.innerHTML = '<div class="status" style="color:#8b949e;">Заквасок нет</div>'; return; }
     renderTags(d.tags);
   });
@@ -702,7 +710,7 @@ function renderTags(tags) {
     (tag.domains || []).forEach(function(dom){ if (dom.in_list === true || dom.in_list === 'true') inListCount++; });
     var allInList = tag.domains && tag.domains.length > 0 && inListCount === tag.domains.length;
     var badge = allInList ? '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px;">В ТОННЕЛЕ</span>' : '';
-    header.innerHTML = '<span style="color:#58a6ff;font-size:13px;">[' + (tag.name||'') + ']</span>' +
+    header.innerHTML = '<span style="color:#58a6ff;font-size:13px;">[' + esc(tag.name||'') + ']</span>' +
       '<span style="color:#8b949e;font-size:11px;">' + (tag.domains||[]).length + ' доменов, ' + inListCount + ' в списке</span>' + badge;
     var actions = document.createElement('div');
     actions.style.cssText = 'display:flex;gap:6px;margin-top:6px;';
@@ -738,7 +746,7 @@ function renderTags(tags) {
       var row = document.createElement('div');
       row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:2px 0;font-size:12px;';
       var checked = dom.in_list === true || dom.in_list === 'true';
-      row.innerHTML = '<span style="color:' + (checked ? '#3fb950' : '#c9d1d9') + ';">' + dom.name + '</span>' +
+      row.innerHTML = '<span style="color:' + (checked ? '#3fb950' : '#c9d1d9') + ';">' + esc(dom.name) + '</span>' +
         '<span style="color:#8b949e;font-size:11px;">' + (checked ? '✓ в списке' : '—') + '</span>';
       details.appendChild(row);
     });
@@ -926,7 +934,7 @@ function loadHosts() {
   showProgress(0, 'Загрузка списка доменов');
   api('/cgi-bin/manage.sh?action=hosts', function(d){
     hideProgress();
-    if (!d.ok) { el.innerHTML = '<div class="status status-err">' + (d.error||'error') + '</div>'; return; }
+    if (!d.ok) { el.innerHTML = '<div class="status status-err">' + esc(d.error||'error') + '</div>'; return; }
     if (!d.hosts || !d.hosts.length) { el.innerHTML = '<div class="status" style="color:#8b949e;">Список пуст</div>'; return; }
     el.innerHTML = '';
     allHosts = d.hosts;
@@ -935,9 +943,10 @@ function loadHosts() {
       var div = document.createElement('div');
       div.className = 'host-item';
       var badge = isWild ? '<span class="wc-badge" title="поддомены включены">*.sub</span>' : '';
-      div.innerHTML = '<span class="host-name">' + h + '</span>'
+      div.innerHTML = '<span class="host-name">' + esc(h) + '</span>'
         + badge
-        + '<span class="del" onclick="hostDel(\'' + h.replace(/'/g,"\\'") + '\')">✕</span>';
+        + '<span class="del">✕</span>';
+      div.querySelector('.del').onclick = function(){ hostDel(h); };
       el.appendChild(div);
     });
   });
@@ -1053,7 +1062,7 @@ function hostAdd() {
     domain = '*.' + domain.slice(1);
   }
   var btn = document.querySelector('#hostInput + .btn');
-  showProgress(0, 'Добавление <b>' + domain + '</b>');
+  showProgress(0, 'Добавление ' + domain);
   btn.disabled = true;
   api('/cgi-bin/manage.sh?action=host_add&domain=' + encodeURIComponent(domain), function(d){
     btn.disabled = false;
@@ -1066,7 +1075,7 @@ function hostAdd() {
 
 function hostDel(domain) {
   if (!confirm('Удалить ' + domain + '?')) return;
-  showProgress(0, 'Удаление <b>' + domain + '</b>');
+  showProgress(0, 'Удаление ' + domain);
   api('/cgi-bin/manage.sh?action=host_del&domain=' + encodeURIComponent(domain), function(d){
     var el = document.getElementById('hostMsg');
     hideProgress();
@@ -1475,8 +1484,8 @@ function fetchDevices() {
       el.className = 'device-item' + activeCls;
       el.dataset.ip = d.ip;
       el.innerHTML = '<input type="checkbox" class="cb"' + checked + '>' +
-        '<span class="ip">' + d.ip + '</span>' +
-        '<span class="name">' + (d.name || '-') + '</span>' +
+        '<span class="ip">' + esc(d.ip) + '</span>' +
+        '<span class="name">' + esc(d.name || '-') + '</span>' +
         statusBadge + activityBadge;
       el.onclick = function(e) { if (e.target.tagName === 'INPUT') return; var cb = el.querySelector('.cb'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); };
       el.querySelector('.cb').onchange = function() {
@@ -1490,7 +1499,7 @@ function fetchDevices() {
     container.className = 'device-list' + (devices.length > 20 ? ' col3' : '');
     devSel.value = curVal;
   }).catch(function(err){
-    document.getElementById('deviceList').innerHTML = '<div class="status" style="text-align:center;color:#f85149;">Ошибка: ' + err.message + '</div>';
+    document.getElementById('deviceList').innerHTML = '<div class="status" style="text-align:center;color:#f85149;">Ошибка: ' + esc(err.message) + '</div>';
   });
 }
 
@@ -1521,7 +1530,7 @@ function addManualIP() {
   el.className = 'device-item active';
   el.dataset.ip = ip;
   el.innerHTML = '<input type="checkbox" class="cb" checked>' +
-    '<span class="ip">' + ip + '</span>' +
+    '<span class="ip">' + esc(ip) + '</span>' +
     '<span class="name">вручную</span>' +
     '<span class="badge" style="color:#8b949e;">в сети</span>';
   el.onclick = function(e) { if (e.target.tagName === 'INPUT') return; };
@@ -1602,7 +1611,7 @@ function poll() {
   pollInFlight = true;
   fetch(url, {headers:{'X-KVAS-Token':AUTH_TOKEN}}).then(function(r){return r.json()}).then(function(data){
     pollErrors = 0;
-    if (data.error) { logMsg('log-error', '<span class="log-err">' + data.error + '</span>'); return; }
+    if (data.error) { logMsg('log-error', '<span class="log-err">' + esc(data.error) + '</span>'); return; }
     var count = 0;
     if (data.connections) data.connections.forEach(function(c){
       var key = [c.proto, c.src, c.sport, c.dst, c.dport].join('|');
@@ -1613,12 +1622,12 @@ function poll() {
       var cls = c.proto === 'tcp' ? 'log-tcp' : 'log-udp';
       var dstDisplay = c.dst + ':' + c.dport;
       if (c.dname && c.dname !== c.dst) dstDisplay = c.dname + ' (' + c.dst + ':' + c.dport + ')';
-      logMsg(cls, '<span class="log-ip">' + c.src + '</span> <span class="' + cls + '">' + c.proto.toUpperCase() + '</span> ' + c.src + ':' + c.sport + ' → ' + dstDisplay);
+      logMsg(cls, '<span class="log-ip">' + esc(c.src) + '</span> <span class="' + cls + '">' + esc(String(c.proto).toUpperCase()) + '</span> ' + esc(c.src + ':' + c.sport) + ' → ' + esc(dstDisplay));
     });
     if (data.dns) data.dns.forEach(function(d){
       var dnsKey = d.raw || d.domain; var dnsNow = Date.now(); var firstDns = !seenDnsAt.has(dnsKey);
       seenDnsAt.set(dnsKey, dnsNow);
-      if (firstDns) { count++; logMsg('log-dns', '<span class="log-ip">DNS</span> ' + d.domain); }
+      if (firstDns) { count++; logMsg('log-dns', '<span class="log-ip">DNS</span> ' + esc(d.domain)); }
     });
     var expireBefore = Date.now() - 30000;
     seenConnectionAt.forEach(function(value, key){ if (value < expireBefore) seenConnectionAt.delete(key); });
@@ -1627,7 +1636,7 @@ function poll() {
     if (count > 0) document.getElementById('pollCount').textContent = '+' + count + ' events';
   }).catch(function(err){
     pollErrors++;
-    if (pollErrors <= 3) logMsg('log-error', '<span class="log-err">Ошибка (' + pollErrors + '/' + MAX_POLL_ERRORS + '): ' + err.message + '</span>');
+    if (pollErrors <= 3) logMsg('log-error', '<span class="log-err">Ошибка (' + pollErrors + '/' + MAX_POLL_ERRORS + '): ' + esc(err.message) + '</span>');
     if (pollErrors >= MAX_POLL_ERRORS) {
       stopPolling(); monitoring = false;
       document.getElementById('btnStart').textContent = 'Запустить мониторинг';
@@ -1674,7 +1683,7 @@ function consoleLog(msg) {
   var el = document.getElementById('consoleOutput');
   if (!el) return;
   var ts = new Date().toLocaleTimeString();
-  el.innerHTML += '<div><span style="color:#484f58;">' + ts + '</span> ' + msg + '</div>';
+  el.innerHTML += '<div><span style="color:#484f58;">' + ts + '</span> ' + esc(msg) + '</div>';
   el.scrollTop = el.scrollHeight;
   while (el.children.length > 100) el.removeChild(el.firstChild);
 }
@@ -1761,7 +1770,7 @@ function adblockProgress(pct, text) {
   if (pct < 0) { el.style.display = 'none'; return; }
   el.style.display = 'block';
   fill.style.width = pct + '%';
-  txt.innerHTML = '<span class="spinner"></span> ' + text;
+  txt.innerHTML = '<span class="spinner"></span> ' + esc(text);
 }
 
 function adblockUpdate(btn) {
@@ -2013,7 +2022,7 @@ function loadRouteLists() {
     if (d.guest_nets) {
       var nets = d.guest_nets.split(',').map(function(s){return s.trim()}).filter(function(s){return s});
       if (nets.length) {
-        gl.innerHTML = nets.map(function(n){return '<div class="host-item">' + n + '</div>'}).join('');
+        gl.innerHTML = nets.map(function(n){return '<div class="host-item">' + esc(n) + '</div>'}).join('');
       } else {
         gl.innerHTML = '<div class="status" style="color:#8b949e;">Нет гостевых сетей</div>';
       }
@@ -2032,7 +2041,7 @@ function loadRouteLists() {
     d.devices.forEach(function(dev) {
       var div = document.createElement('div');
       div.className = 'host-item';
-      div.innerHTML = '<span style="color:#58a6ff;min-width:120px;">' + dev.ip + '</span> ' + dev.name;
+      div.innerHTML = '<span style="color:#58a6ff;min-width:120px;">' + esc(dev.ip) + '</span> ' + esc(dev.name);
       div.onclick = function() { document.getElementById('routeIp').value = dev.ip; };
       div.style.cursor = 'pointer';
       el.appendChild(div);

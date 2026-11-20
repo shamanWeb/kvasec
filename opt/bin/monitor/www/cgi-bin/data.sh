@@ -4,7 +4,8 @@
 # This script prints only the JSON body.
 
 json_escape() {
-	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\n/\\n/g'
+	# управляющие символы (в т.ч. \n — sed его не видит) → пробел, иначе невалидный JSON
+	printf '%s' "$1" | tr '\001-\037' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
 TOKEN_DIR=/tmp/kvas_web_tokens
