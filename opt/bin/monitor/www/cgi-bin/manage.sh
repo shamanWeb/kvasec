@@ -564,7 +564,9 @@ main() {
 			;;
 		host_import)
 			check_token "$token"
-			domains=$(cat 2>/dev/null)
+			# ровно Content-Length байт: `cat` ждал EOF, которого браузер не шлёт
+			domains=""
+			[ "${CONTENT_LENGTH:-0}" -gt 0 ] 2>/dev/null && domains=$(head -c "$CONTENT_LENGTH" 2>/dev/null)
 			if [ -z "$domains" ]; then
 				domains=$(echo "$QUERY_STRING" | sed 's/.*domains=//; s/&.*//' 2>/dev/null | sed 's/%0A/
 /g; s/+/ /g')
@@ -616,17 +618,6 @@ main() {
 				printf "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\n\r\nFile not found"
 			fi
 			return
-			;;
-		kvas_list_upload)
-			check_token "$token"
-			# Upload kvas.list — content is in POST body
-			# For now, just return current list
-			if [ -f "$KVAS_LIST" ]; then
-				local count=$(wc -l < "$KVAS_LIST" 2>/dev/null || echo 0)
-				json_ok "list has $count entries"
-			else
-				json_ok "list is empty"
-			fi
 			;;
 		update)
 			check_token "$token"

@@ -53,3 +53,20 @@ if command -v busybox >/dev/null 2>&1; then
     kill "$hpid" "$wpid" 2>/dev/null || true
     [ "$alive" -eq 0 ] || { echo 'header read timeout not applied' >&2; exit 1; }
 fi
+
+# POST-тело по Content-Length при НЕзакрытом соединении (как у браузера):
+# CGI получает CONTENT_LENGTH и читает ровно столько, обработчик не висит.
+printf '#!/bin/sh\nprintf "{\\"len\\":\\"%%s\\",\\"body\\":\\"%%s\\"}" "$CONTENT_LENGTH" "$(head -c "$CONTENT_LENGTH")"\n' > "$WORK/www/cgi-bin/manage.sh"
+mkfifo "$WORK/post"
+sh -c "$HANDLER" < "$WORK/post" > "$WORK/post.out" 2>/dev/null &
+hpid=$!
+(printf 'POST /cgi-bin/manage.sh?action=x HTTP/1.1\r\nContent-Length: 11\r\n\r\na.com\nb.com'; sleep 20) > "$WORK/post" &
+wpid=$!
+i=0
+while kill -0 "$hpid" 2>/dev/null && [ "$i" -lt 25 ]; do sleep 0.2; i=$((i + 1)); done
+alive=0; kill -0 "$hpid" 2>/dev/null && alive=1
+kill "$hpid" "$wpid" 2>/dev/null || true
+[ "$alive" -eq 0 ] || { echo 'POST handler hangs waiting for EOF' >&2; exit 1; }
+grep -F '"len":"11","body":"a.com' "$WORK/post.out" >/dev/null || { echo 'CGI did not get the body'; cat "$WORK/post.out"; exit 1; }
+request 'POST / HTTP/1.0\r\nContent-Length: 1x\r\n\r\n' | head -1 | tr -d '\r' | grep -Fx 'HTTP/1.0 400 Bad Request' >/dev/null
+request 'POST / HTTP/1.0\r\nContent-Length: 99999999\r\n\r\n' | head -1 | tr -d '\r' | grep -Fx 'HTTP/1.0 413 Payload Too Large' >/dev/null

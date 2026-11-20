@@ -47,3 +47,18 @@ test ! -e "$TEST_KVAS_ARGS"
 api 'action=restore&path=%2Fopt%2Fkvas_backup_20261120-101010' | grep -F '"ok":true' >/dev/null
 api 'action=restore' | grep -F '"ok":true' >/dev/null
 grep -Fx 'restore /opt/kvas_backup_20261120-101010' "$TEST_KVAS_ARGS" >/dev/null
+
+# host_import: тело — ровно CONTENT_LENGTH байт, stdin не закрыт (раньше `cat` ждал EOF вечно).
+sed -i "s|/tmp/kvas_import_|$WORK/kvas_import_|g" "$WORK/manage.sh"
+mkfifo "$WORK/body"
+QUERY_STRING="action=host_import&token=$token" REQUEST_METHOD=POST CONTENT_LENGTH=11 \
+    sh "$WORK/manage.sh" < "$WORK/body" > "$WORK/import.out" &
+mpid=$!
+(printf 'a.com\nb.com'; sleep 20) > "$WORK/body" &
+wpid=$!
+i=0
+while kill -0 "$mpid" 2>/dev/null && [ "$i" -lt 25 ]; do sleep 0.2; i=$((i + 1)); done
+alive=0; kill -0 "$mpid" 2>/dev/null && alive=1
+kill "$mpid" "$wpid" 2>/dev/null || true
+[ "$alive" -eq 0 ] || { echo 'FAIL: host_import висит в ожидании EOF'; exit 1; }
+grep -F '"total":2' "$WORK/import.out" >/dev/null || { echo "FAIL: host_import: $(cat "$WORK/import.out")"; exit 1; }
