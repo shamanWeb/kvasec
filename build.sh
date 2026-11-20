@@ -256,9 +256,10 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     # KVAS_MARK, таблицу 1001, ip rule (fwmark→1001) и наполняет ipset.
     # Запускается только если интерфейс уже настроен (INFACE_ENT задан);
     # на чистой установке маршрутизацию поднимет 'kvas setup'.
-    if grep -q '^INFACE_ENT=.\+' "\${kvas_conf}" 2>/dev/null; then
-        /opt/apps/kvas/bin/kvas init >/dev/null 2>&1 &
-    fi
+    # Сторож перезапускаем ПОСЛЕ init, одним фоновым заданием: параллельно они оба
+    # видели «KVAS_MARK неполна» и собирали её дважды (18 правил вместо 9).
+    _kvas_init=""
+    grep -q '^INFACE_ENT=.\+' "\${kvas_conf}" 2>/dev/null && _kvas_init=1
 
     # Watcher маршрутизации для НЕ-NDM AmneziaWG-туннеля (opkgtunNN).
     # Держит default/rule/KVAS_MARK при переподключении туннеля и сбросах NDM.
@@ -269,7 +270,10 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     for _old in /opt/etc/init.d/S99kvas-awg-route.*; do
         [ -f "\${_old}" ] && chmod -x "\${_old}"
     done
-    /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1 &
+    (
+        [ -n "\${_kvas_init}" ] && /opt/apps/kvas/bin/kvas init >/dev/null 2>&1
+        /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1
+    ) </dev/null >/dev/null 2>&1 &
 
     # Сборщик истории DPI-интерференции для дашборда веб-монитора (раз в минуту).
     # Пишет дропы туннеля opkgtunNN в кольцевой буфер 24ч. Идемпотентно.

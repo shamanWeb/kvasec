@@ -113,7 +113,8 @@ watcher() {
       _km_rules=$(iptables -t mangle -S KVAS_MARK 2>/dev/null | grep -c "^-A")
       _km_full=$(iptables -t mangle -S KVAS_MARK 2>/dev/null | grep -c -- "--save-mark")
       _km_jump=$(iptables -t mangle -S PREROUTING 2>/dev/null | grep -c "KVAS_MARK")
-      if [ "${_km_full}" -eq 0 ] || [ "${_km_jump}" -eq 0 ]; then
+      # ровно один --save-mark: 0 — пуста/неполна, >1 — задвоена гонкой; оба случая — пересборка
+      if [ "${_km_full}" -ne 1 ] || [ "${_km_jump}" -eq 0 ]; then
         if   [ -x "$NFHOOK_APP" ]; then type=iptables table=mangle "$NFHOOK_APP" >/dev/null 2>&1
         elif [ -x "$NFHOOK_ETC" ]; then type=iptables table=mangle "$NFHOOK_ETC" >/dev/null 2>&1
         fi
@@ -128,7 +129,7 @@ watcher() {
       # но прыжки kvas стоят до него.
       _kd_rules=$(iptables -t nat -S KVAS_DNS 2>/dev/null | grep -c "127.0.0.1:${DNS_PORT}")
       _kd_jump=$(iptables -t nat -S PREROUTING 2>/dev/null | grep -c -- "-j KVAS_DNS")
-      if [ "${_kd_rules}" -lt 2 ] || [ "${_kd_jump}" -eq 0 ]; then
+      if [ "${_kd_rules}" -ne 2 ] || [ "${_kd_jump}" -eq 0 ]; then
         [ -x "$NFHOOK_DNS" ] && type=iptables table=nat "$NFHOOK_DNS" >/dev/null 2>&1
         echo "$(date) fix: KVAS_DNS восстановлен (rules=${_kd_rules}, jumps=${_kd_jump})" >>"$LOG"
       fi

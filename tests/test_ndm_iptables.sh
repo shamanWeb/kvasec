@@ -82,7 +82,7 @@ log_warning() { :; }; error() { echo "ERR $*" >&2; }; get_local_inface() { echo 
 ip4__chain__exclude_source_by_config() { :; }; ip4__ipset__fill_destination_excluded() { :; }
 ip4__route__add_table() { :; }; ip4__rule__add_mark_to_table() { :; }; ip4__ipset__create() { :; }
 EOS
-} | sed "s|/opt/sbin/iptables-save|$WORK/bin/iptables-save|g; s|/opt/sbin/iptables|$WORK/bin/iptables|g" > "$WORK/lib.sh"
+} | sed "s|/opt/sbin/iptables-save|$WORK/bin/iptables-save|g; s|/opt/sbin/iptables|$WORK/bin/iptables|g; s|/tmp/kvas-ndm-chain.lock|$WORK/chain.lock|g" > "$WORK/lib.sh"
 
 run() { $RUN -c ". '$WORK/lib.sh'; $1"; }
 count() { grep -cF -- "$2" "$ST/$1" 2>/dev/null || true; }
@@ -129,3 +129,18 @@ out=$(run "IFS=' '; save_iptables -t mangle")
 printf '%s\n' "$out" | grep -qF -- '-j KVAS_MARK' || { echo 'FAIL 5: save_iptables пуст при IFS=пробел'; exit 1; }
 run "IFS=' '; ip4__chain__delete_jump mangle KVAS_MARK"
 [ "$(count mangle/PREROUTING '-j KVAS_MARK')" -eq 0 ] || { echo 'FAIL 5: прыжок не удалён при IFS=пробел'; exit 1; }
+
+# 6) KVAS_MARK задвоена (гонка хук/сторож/kvas init) → хук пересобирает до одного комплекта
+run 'ip4__mark__create_chain'
+n1=$(grep -c . "$ST/mangle/KVAS_MARK")
+cat "$ST/mangle/KVAS_MARK" "$ST/mangle/KVAS_MARK" > "$WORK/dup" && mv "$WORK/dup" "$ST/mangle/KVAS_MARK"
+run 'ip4__mark__create_chain'
+[ "$(grep -c . "$ST/mangle/KVAS_MARK")" -eq "$n1" ] || { echo 'FAIL 6: задвоенная KVAS_MARK не пересобрана'; exit 1; }
+# параллельные вызовы под локом не задваивают (только под busybox — его mkdir атомарен,
+# uutils mkdir этой машины — нет)
+if [ "$RUN" = "busybox sh" ]; then
+    : > "$ST/mangle/KVAS_MARK"
+    for _ in 1 2 3 4; do run 'ip4__mark__create_chain' & done; wait
+    [ "$(grep -c -- '--save-mark' "$ST/mangle/KVAS_MARK")" -eq 1 ] || { echo 'FAIL 6: параллельная сборка задвоила'; cat "$ST/mangle/KVAS_MARK"; exit 1; }
+    [ ! -d "$WORK/chain.lock" ] || { echo 'FAIL 6: лок не снят'; exit 1; }
+fi

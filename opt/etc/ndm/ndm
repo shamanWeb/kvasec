@@ -532,13 +532,39 @@ ip4__shadowsocks__create_chain() {
 	ip4__dnat_to_port__create_chain "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}" "${local_port}"
 }
 
+# Сборку KVAS_MARK/KVAS_DNS сериализуем: её одновременно запускают хук NDM, сторож и
+# kvas init — каждый видел «цепочка неполна» и дописывал свой комплект (после установки
+# пакета было 18 правил вместо 9). mkdir-лок; брошенный (процесс убит) — по возрасту
+# самого лока, снос атомарным mv. Внутри лока целостность проверяется заново.
+KVAS_CHAIN_LOCK=/tmp/kvas-ndm-chain.lock
+ndm_chain_lock() {
+	local born
+	while ! mkdir "${KVAS_CHAIN_LOCK}" 2>/dev/null; do
+		born=$(date -r "${KVAS_CHAIN_LOCK}" +%s 2>/dev/null) || continue
+		if [ $(( $(date +%s) - born )) -gt 60 ] &&
+			mv "${KVAS_CHAIN_LOCK}" "${KVAS_CHAIN_LOCK}.stale.$$" 2>/dev/null; then
+			rm -rf "${KVAS_CHAIN_LOCK}.stale.$$"
+			continue
+		fi
+		sleep 1
+	done
+}
+ndm_chain_unlock() { rmdir "${KVAS_CHAIN_LOCK}" 2>/dev/null; }
+
 ip4__mark__create_chain() {
+	ndm_chain_lock
+	_ip4__mark__create_chain
+	ndm_chain_unlock
+}
+
+_ip4__mark__create_chain() {
 	{
 		# Целая KVAS_MARK заканчивается CONNMARK --save-mark. Раньше достаточно было
 		# «цепочка существует» — а NDM при reload делает -F: пустая цепочка оставалась
 		# пустой (прыжок из PREROUTING в никуда → трафик KVAS_LIST мимо туннеля), и
 		# сторож, вызывая этот хук, ничего не мог восстановить.
-		if ipt_chain_rules "${TABLE_MARK}" "${CHAIN_MARK}" | grep -q -- '--save-mark' ; then
+		# ровно ОДИН --save-mark: задвоенную (гонка, см. ndm_chain_lock) тоже пересобираем
+		if [ "$(ipt_chain_rules "${TABLE_MARK}" "${CHAIN_MARK}" | grep -c -- '--save-mark')" -eq 1 ] ; then
 			return
 		fi
 		if ip4__chain__is_exist "${TABLE_MARK}" "${CHAIN_MARK}" ; then
@@ -643,7 +669,14 @@ ip4__mark__add_routing_for_home() {
 # пустую цепочку (DNS LAN не уходил на :9753).
 # Создаёт (если нет) цепочку для DNS редиректа
 ip4__dns__create_chain() {
-	if [ "$(ipt_chain_rules "${TABLE_DNS}" "${CHAIN_DNS}" | grep -cF -- "127.0.0.1:${DNS_PORT}")" -ge 2 ]; then
+	ndm_chain_lock
+	_ip4__dns__create_chain
+	ndm_chain_unlock
+}
+
+_ip4__dns__create_chain() {
+	# ровно два DNAT (udp+tcp); задвоенную тоже пересобираем
+	if [ "$(ipt_chain_rules "${TABLE_DNS}" "${CHAIN_DNS}" | grep -cF -- "127.0.0.1:${DNS_PORT}")" -eq 2 ]; then
 		return
 	fi
 
