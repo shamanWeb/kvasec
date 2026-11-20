@@ -115,6 +115,9 @@ Priority: optional
 Installed-Size: ${INSTALLED_SIZE}
 EOF
 
+# ВНИМАНИЕ: prerm/postrm нет — `opkg remove kvas` не останавливает сторож
+# S99kvas-awg-route (живёт до перезагрузки, держит ip rule/table 1001/DoT-REJECT) и
+# не убирает сниппеты dnsmasq.d и cron-строку dpi_history.sh.
 # 4. postinst
 #    - генерирует bin/libs/ndm из etc/ndm/ndm (несёт RULE_PRIORITY=99);
 #    - конфиги засеваются ТОЛЬКО при первой установке (upgrade не затирает).

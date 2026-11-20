@@ -29,6 +29,14 @@ PROGRESS_BAR_WIDTH=$((LENGTH-5))  # progress bar length in characters
 KVAS_BACKUP_PATH=/opt/etc/.kvas/backup
 IPSET_TABLE_NAME=KVAS_LIST
 
+# ВНИМАНИЕ: на Keenetic iptables-save (и `iptables -S` по ВСЕЙ таблице) обрывает вывод с
+# rc=1 на match'ах прошивки (connndmmark/ndmmark в INPUT): объявления цепочек (":KVAS_MARK")
+# в дампе есть, а правила после INPUT — нет (весь KVAS_MARK, nat PREROUTING → KVAS_DNS).
+# Поэтому `save_iptables | grep <правило>` для таких правил всегда «не найдено», а
+# `grep <имя цепочки>` находит и ПУСТУЮ цепочку. Для проверок правил использовать только
+# поцепочечный вывод `iptables -t T -S <chain>` или `iptables -t T -C <правило>`.
+# ИЗВЕСТНАЯ ПРОБЛЕМА: ndm (ip4__chain__is_exist, проверки прыжков PREROUTING) всё ещё
+# опирается на save_iptables — вероятная причина дублей прыжков, которые чистит сторож.
 save_iptables(){ /opt/sbin/iptables-save "$@"; }
 
 KVAS_CONF_FILE=/opt/etc/kvas.conf
@@ -278,6 +286,12 @@ get_iplist_from_domain(){
     local retry=${3:-3}
 
 	# Проверяем доступность DNS сервера
+	# ВНИМАНИЕ: «fasle» — опечатка, которая РАБОТАЕТ как «пропустить предпроверку DNS».
+	# Не исправлять на false одним словом: включится блок с is_dns_server_online, а она
+	# сломана (порт через ${1/#/:} — не работает в busybox ash; видит только ЛОКАЛЬНЫЙ
+	# listener через netstat) и при неуспехе ниже делается exit 1 — а эта функция sourced
+	# и вызывается из kvas add / check / hosts, т.е. exit убьёт всю команду. Чинить только
+	# комплексно: сперва is_dns_server_online, exit 1 → return 1, потом опечатку.
     if [ ${DNS_ENABLE} = fasle ]; then
 		if is_dns_server_online ${dns_server} ; then 
 			DNS_ENABLE=true

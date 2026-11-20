@@ -137,6 +137,13 @@ restore_backup(){
 
 
 
+# ИЗВЕСТНЫЕ ПРОБЛЕМЫ паузы (не исправлены — правка затрагивает маршрутизацию):
+#  - сторож S99kvas-awg-route не останавливается: он берёт 100-vpn-mark из
+#    /opt/apps/kvas/etc/ndm/ и за ≤10 с возвращает ip rule/default/KVAS_MARK — пауза
+#    фактически не работает; при uninstall сторож живёт до перезагрузки;
+#  - ниже проверяется один файл, а переносится другой (kvas-ips-reset / 100-kvas-vpn),
+#    в unpause одно и то же восстанавливается дважды; 100-proxy-redirect — остаток
+#    удалённого Shadowsocks.
 # Функция временной остановки работы пакета
 cmd_pause_kvas(){
 
@@ -289,6 +296,10 @@ restore_backups(){
 
 
 # Сохраняем все значимые файлы конфигурации пакета KVASEC
+# ВНИМАНИЕ: в бэкап НЕ входит /opt/etc/adblock/block.list (родительский контроль), а
+# rm_package_files удаляет весь /opt/etc/adblock — `kvas upgrade` (uninstall → install)
+# теряет block.list. exception.list бэкапится, но восстанавливается только интерактивным
+# `kvas setup`, который upgrade без TTY пропускает.
 save_backups(){
 	# Создаем директорию для бэкапа
 	local backup_dir="${KVAS_BACKUP_PATH}"
@@ -525,6 +536,10 @@ cmd_install(){
 	{
 		opkg update >/dev/null 2>&1
 		opkg list-installed | grep -q 'nano' && opkg remove nano >/dev/null 2>&1
+		# ВНИМАНИЕ: dnsmasq-full удаляется ДО скачивания нового, а результат opkg update
+		# не проверяется: если репозиторий Entware недоступен (DPI/сбой), LAN остаётся без
+		# DNS (br0:53 DNAT'ится на 127.0.0.1:9753, которого больше нет). Переустанавливать
+		# только если пакета нет/он не тот, либо скачать заранее и --force-reinstall.
 		opkg list-installed | grep -q 'dnsmasq-full' && opkg remove dnsmasq-full --force-depends >/dev/null 2>&1
 		opkg install dnsmasq-full --force-maintainer >/dev/null 2>&1
 		opkg install iptables nano-full >/dev/null 2>&1

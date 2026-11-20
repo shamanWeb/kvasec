@@ -41,6 +41,9 @@ NFHOOK_ETC=/opt/etc/ndm/netfilter.d/100-vpn-mark
 # (CONNMARK --restore-mark → '! NEW → RETURN') и ходит мимо туннеля — с IP
 # провайдера (JetBrains: «export control regulations»). Рвём LAN-соединения
 # с mark=0 к адресам из KVAS_LIST — клиент переоткроет их уже с меткой.
+# ВНИМАНИЕ: рвёт ВСЕ немаркированные соединения LAN → KVAS_LIST, в т.ч. устройств в
+# режиме «Напрямую» (route_excluded_ip), которые НАМЕРЕННО идут мимо туннеля, —
+# их стоит исключать. Сколько-нибудь частый вызов = обрывы у этих устройств.
 purge_unmarked_conns() {
   command -v conntrack >/dev/null 2>&1 || { echo "$(date) skip: нет conntrack, немаркированные соединения не сброшены" >>"$LOG"; return; }
   _self=$(ip -o -4 addr show 2>/dev/null | awk '{sub(/\/.*/, "", $4); printf "%s ", $4}')
@@ -92,6 +95,9 @@ watcher() {
       TABLES=$(ip rule 2>/dev/null | grep -iE 'fwmark (0xd1000|0xffffaaa)' | grep -oE 'lookup [0-9]+' | awk '{print $2}' | sort -u)
       [ -z "$TABLES" ] && TABLES="1001 4096"
       for T in $TABLES; do
+        # ВНИМАНИЕ: $5 — это имя интерфейса только для «default via X dev IF»; для
+        # «default dev IF scope link» (так строит ndm) $5 = "link" → каждый раз лишний
+        # replace + запись в лог. Надёжнее брать поле после "dev".
         cur=$(ip route show table "$T" 2>/dev/null | awk '/^default/{print $5; exit}')
         if [ "$cur" != "$IFACE" ]; then
           ip route replace table "$T" default via "$IPGW" dev "$IFACE"
@@ -100,6 +106,9 @@ watcher() {
       done
 
       # 2) ip rule fwmark 0xd1000 -> table 1001 (priority 99)
+      # ВНИМАНИЕ: проверяется только КОЛИЧЕСТВО правил, не priority: одно правило с
+      # чужим priority (напр. 1778 от старых сборок) останется, и system rule 104
+      # (lookup 4098) перехватит трафик раньше. Нужно проверять именно "^99:".
       _nr=$(ip rule 2>/dev/null | grep -c "fwmark ${MARK}.*lookup ${RTABLE}")
       if [ "$_nr" -ne 1 ]; then
         # 0 — добавить; >1 — дубли (возможно с разными priority): снести все, оставить одно

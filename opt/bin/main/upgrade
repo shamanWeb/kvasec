@@ -380,6 +380,11 @@ else
 		# shellcheck disable=SC2034
 		rel=$(grep "APP_RELEASE=" "${kvas_conf}" | cut -d'=' -f2)
 		#ready "Удаляем предыдущую версию пакета  [${ver} ${rel}]..."
+		# ИЗВЕСТНАЯ ПРОБЛЕМА: сначала полное удаление, потом установка. Если opkg install
+		# ниже упадёт (лок opkg, нет места, зависимость) — kvas на роутере не останется,
+		# отката нет; uninstall к тому же стирает /opt/etc/adblock (block.list) и при
+		# наличии dnsmasq.conf-opkg возвращает «чистый» dnsmasq.conf. Правильно — как
+		# в install.sh: `opkg install --force-reinstall` поверх (postinst готов к upgrade).
 		kvas uninstall "${remove_mode}" yes # && when_ok || when_err
 	fi
 fi

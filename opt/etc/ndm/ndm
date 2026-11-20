@@ -261,6 +261,9 @@ ip4__ipset__create() {
 	log_warning "Cоздание набора IP ${ipset_name}${submessage}"
 
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
+	# ВНИМАНИЕ: maxelem не задан → по умолчанию 65536. При переполнении (CDN + TTL 24 ч)
+	# dnsmasq молча не добавит новые IP — они пойдут мимо туннеля. Уже созданный набор
+	# maxelem не меняет — только пересоздание.
 	/opt/sbin/ipset create "${ipset_name}" hash:net family inet -exist$(echo "${subcomand}") \
 	 || {
 		error "[${FUNCNAME}] Ошибка при создании набора IP ${ipset_name}${submessage}"
@@ -347,6 +350,12 @@ ip4__ipset__destroy_destination_excluded() {
 #
 # ------------------------------------------------------------------------------------------
 
+# ИЗВЕСТНАЯ ПРОБЛЕМА: проверка «цепочка существует» по save_iptables | grep -F <имя>
+# истинна и для ПУСТОЙ цепочки (NDM при reload делает -F, а не -X) — тогда
+# ip4__mark__create_chain/ip4__dns__create_chain сразу выходят и ничего не строят, а
+# прыжок из PREROUTING ведёт в пустую цепочку (трафик идёт мимо туннеля). См. также
+# предупреждение у save_iptables в libs/main: дамп на Keenetic обрывается до правил.
+# Правильнее: `iptables -t T -S <chain>` (rc + число ^-A строк).
 ip4__chain__is_exist() {
 	if [ -z "${1}" ] ; then
 		error "[${FUNCNAME}] Не задан обязательный аргумент — таблица"
@@ -537,6 +546,9 @@ ip4__mark__create_chain() {
 			# На отдельных устройствах, к сожалению, не работает.
 			#/opt/sbin/iptables -w -t "${TABLE_MARK}" -A "${CHAIN_MARK}" -p tcp -m conntrack ! --ctstate NEW -j RETURN
 
+			# ВНИМАНИЕ: restore/save-mark без масок работают со всеми 32 битами и могут
+			# затирать connmark/fwmark самой NDM (политики, hotspot). Безопаснее
+			# --nfmask/--ctmask 0xd1000. Проверять на роутере.
 			/opt/sbin/iptables -w -t "${TABLE_MARK}" -A "${CHAIN_MARK}" -j CONNMARK --restore-mark
 			/opt/sbin/iptables -w -t "${TABLE_MARK}" -A "${CHAIN_MARK}" -m mark --mark ${MARK_NUM} -j RETURN
 
@@ -609,6 +621,9 @@ ip4__mark__add_routing_for_home() {
 #
 # ------------------------------------------------------------------------------------------
 
+# ИЗВЕСТНАЯ ПРОБЛЕМА: как и KVAS_MARK — «есть» и при пустой цепочке (после flush nat
+# хук вставит прыжок в пустую KVAS_DNS: DNS LAN не уйдёт на :9753). Сторож KVAS_DNS
+# не проверяет.
 # Создаёт (если нет) цепочку для DNS редиректа
 ip4__dns__create_chain() {
 	if save_iptables | grep -Fq "${CHAIN_DNS}"; then
@@ -800,6 +815,8 @@ ip4__add_routing_by_list_for_net() {
 	local iptables_filter
 	iptables_filter=$(iptables__get_subrule_for_net "${net_interface}")
 
+	# (Shadowsocks удалён из пакета; is_shadowsocks_enabled — заглушка `return 1` в libs/main.
+	#  Все такие ветки в этом файле мёртвые и подлежат удалению вместе с заглушкой.)
 	if is_shadowsocks_enabled ; then
 		ip4__add_routing "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
 	else
@@ -1140,6 +1157,12 @@ ip4__route__is_exist_table() {
 	[ "$(ip4__route__show_table "${table_id}" | head -c1 | wc -c)" -gt 0 ]
 }
 
+# ИЗВЕСТНАЯ ПРОБЛЕМА: при упавшем туннеле в table 1001 остаётся только сторожевой
+# fail-closed «unreachable default metric 4000» (S99kvas-awg-route). Проверка ниже
+# `grep '^default'` его не видит («unreachable default…» не начинается с default) →
+# flush таблицы → `ip route add default dev opkgtunNN` падает (интерфейса нет) → таблица
+# пуста, помеченный трафик уходит через main в WAN до следующего прохода сторожа (≤10 с).
+# Чинить: игнорировать строки unreachable и после flush возвращать fail-closed маршрут.
 ip4__route__add_table() {
 	local net_interface=$(get_config_value 'INFACE_ENT')
 	local is_need_flush=''

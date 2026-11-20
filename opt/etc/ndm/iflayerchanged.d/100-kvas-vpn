@@ -14,6 +14,10 @@
 
 cli_inface="$(inface_cli)"
 
+# ИЗВЕСТНАЯ ПРОБЛЕМА: для opkgtun-туннелей (AmneziaWG вне NDM) cli_inface пуст, и
+# `grep -q ""` совпадает с ЛЮБЫМ интерфейсом — ctrl-disabled гостевого Wi-Fi и т.п.
+# дёргает сброс маршрутизации kvas. Нужна точная проверка и выход при пустом cli_inface.
+# (build.sh этот хук не ставит; опасен, если остался на роутере от старой версии.)
 if [ "${1}" = "hook" ] && echo "${id}" | grep -q "${cli_inface}"; then
 
 	case "${layer}-${level}" in
