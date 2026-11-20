@@ -28,6 +28,9 @@ CONF=/opt/etc/kvas.conf
 IFEQ=/opt/etc/inface_equals
 PIDF=/opt/tmp/kvas-awg-route.pid
 LOCK=/opt/tmp/kvas-awg-route.lock
+# Флаг паузы (kvas pause): на флеше — переживает перезагрузку; с ним сторож не стартует,
+# иначе за ≤10 с вернул бы ip rule/default/KVAS_MARK, а после ребута — отменил паузу.
+PAUSED=/opt/etc/kvas.paused
 
 MARK=0xd1000
 RTABLE=1001
@@ -184,6 +187,10 @@ kill_others() {
 }
 
 start() {
+  if [ -f "$PAUSED" ]; then
+    echo "$(date) start пропущен: kvas на паузе ($PAUSED)" >>"$LOG"
+    exit 0
+  fi
   # watcher старой версии (без лока) уже жив — второй не нужен.
   # Пустой pid проверять обязательно: busybox `kill -0 ""` возвращает 0.
   _pid=$(cat "$PIDF" 2>/dev/null)
@@ -202,4 +209,16 @@ stop() {
   kill_others
   rm -f "$PIDF"; rmdir "$LOCK" 2>/dev/null
 }
-case "$1" in start) start ;; stop) stop ;; restart) stop; sleep 1; start ;; *) echo "usage: $0 {start|stop|restart}";; esac
+# stop — только остановить (restart/upgrade: маршрутизация остаётся как есть);
+# cleanup — остановить и убрать то, что держит сторож (kvas pause / uninstall full):
+# fail-closed маршрут, ip rule fwmark, DoT-блок.
+cleanup() {
+  stop
+  ip route del table "$RTABLE" unreachable default metric 4000 2>/dev/null
+  while ip rule del fwmark ${MARK}/${MARK} lookup ${RTABLE} 2>/dev/null; do :; done
+  for P in tcp udp; do
+    while iptables -D FORWARD -i br0 -p $P --dport 853 -j REJECT 2>/dev/null; do :; done
+  done
+  echo "$(date) cleanup: сторож остановлен, его правила убраны" >>"$LOG"
+}
+case "$1" in start) start ;; stop) stop ;; cleanup) cleanup ;; restart) stop; sleep 1; start ;; *) echo "usage: $0 {start|stop|restart|cleanup}";; esac

@@ -110,3 +110,22 @@ run 'ip4__mark__create_chain; ip4__add_routing_for_home mangle KVAS_MARK; ip4__d
 out=$(run 'save_iptables')
 for t in nat mangle filter; do printf '%s\n' "$out" | grep -qx "\*$t" || { echo "FAIL: save_iptables без $t"; exit 1; }; done
 printf '%s\n' "$out" | grep -qF -- '-A PREROUTING -i br0 -m set --match-set KVAS_LIST dst -j KVAS_MARK' || { echo 'FAIL: save_iptables без mangle-правил'; exit 1; }
+
+# 4) глобальный IFS испорчен (как после функций с IFS=$'\n') — удаление прыжков всё равно
+#    работает: раньше правило уходило в iptables -D одним аргументом, и kvas pause
+#    оставлял прыжок (-X → «Too many links»)
+run 'ip4__add_routing_for_home mangle KVAS_MARK'
+echo '-A PREROUTING -i xfrms+ -m set --match-set KVAS_LIST dst -j KVAS_MARK' >> "$ST/mangle/PREROUTING"
+[ "$(count mangle/PREROUTING '-j KVAS_MARK')" -eq 2 ] || { echo 'FAIL: подготовка'; exit 1; }
+run 'IFS="
+"; ip4__chain__delete_jump mangle KVAS_MARK; ip4__chain__delete mangle KVAS_MARK'
+[ "$(count mangle/PREROUTING '-j KVAS_MARK')" -eq 0 ] || { echo 'FAIL 4: прыжки остались при IFS=\n'; cat "$ST/mangle/PREROUTING"; exit 1; }
+[ ! -f "$ST/mangle/KVAS_MARK" ] || { echo 'FAIL 4: цепочка не удалена'; exit 1; }
+
+# 5) глобальный IFS=' ' (его оставляют другие функции) — эмуляция save_iptables всё равно
+#    видит правила: раньше список цепочек не делился, и вывод был пустым
+run 'ip4__add_routing_for_home mangle KVAS_MARK'
+out=$(run "IFS=' '; save_iptables -t mangle")
+printf '%s\n' "$out" | grep -qF -- '-j KVAS_MARK' || { echo 'FAIL 5: save_iptables пуст при IFS=пробел'; exit 1; }
+run "IFS=' '; ip4__chain__delete_jump mangle KVAS_MARK"
+[ "$(count mangle/PREROUTING '-j KVAS_MARK')" -eq 0 ] || { echo 'FAIL 5: прыжок не удалён при IFS=пробел'; exit 1; }

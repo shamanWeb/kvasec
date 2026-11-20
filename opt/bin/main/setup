@@ -137,36 +137,45 @@ restore_backup(){
 
 
 
-# ИЗВЕСТНЫЕ ПРОБЛЕМЫ паузы (не исправлены — правка затрагивает маршрутизацию):
-#  - сторож S99kvas-awg-route не останавливается: он берёт 100-vpn-mark из
-#    /opt/apps/kvas/etc/ndm/ и за ≤10 с возвращает ip rule/default/KVAS_MARK — пауза
-#    фактически не работает; при uninstall сторож живёт до перезагрузки;
-#  - ниже проверяется один файл, а переносится другой (kvas-ips-reset / 100-kvas-vpn),
-#    в unpause одно и то же восстанавливается дважды; 100-proxy-redirect — остаток
-#    удалённого Shadowsocks.
+# Пауза: маршрутизация kvas выключается целиком и не возвращается сама.
+#  - сторож S99kvas-awg-route останавливается (cleanup) и не стартует, пока есть флаг
+#    /opt/etc/kvas.paused (переживает перезагрузку) — раньше он за ≤10 с возвращал
+#    ip rule/default/KVAS_MARK, и пауза фактически не работала;
+#  - NDM-хуки маршрутизации уносятся в бэкап (иначе reload firewall вернёт KVAS_MARK).
+#    Перехват DNS (100-dns-local) остаётся: DNS продолжает идти через kvas-dnsmasq.
+KVAS_PAUSED_FLAG=/opt/etc/kvas.paused
+KVAS_WATCHER=/opt/etc/init.d/S99kvas-awg-route
+
+# пары «рабочий хук → имя в бэкапе» (раньше проверялся один файл, а переносился другой)
+_pause_hooks() {
+	echo "/opt/etc/ndm/iflayerchanged.d/100-kvas-vpn 100-kvas-vpn-layer"
+	echo "/opt/etc/ndm/iflayerchanged.d/kvas-ips-reset kvas-ips-reset-layer"
+	echo "/opt/etc/ndm/ifstatechanged.d/100-kvas-vpn 100-kvas-vpn-state"
+	echo "/opt/etc/ndm/netfilter.d/100-vpn-mark 100-vpn-mark"
+}
+
 # Функция временной остановки работы пакета
 cmd_pause_kvas(){
 
-		ready "Временно приостанавливаем работу KVASEC..."
+	ready "Временно приостанавливаем работу KVASEC..."
 	{
-		ip4__flush &> /dev/null
+		touch "${KVAS_PAUSED_FLAG}"
+		[ -x "${KVAS_WATCHER}" ] && "${KVAS_WATCHER}" cleanup
 
-		# Архивируем файлы механизма ndm
-		[ -f /opt/etc/ndm/iflayerchanged.d/100-kvas-vpn ] && {
-			mv /opt/etc/ndm/iflayerchanged.d/100-kvas-vpn ${KVAS_BACKUP_PATH}/100-kvas-vpn-layer
-		}
-		[ -f /opt/etc/ndm/iflayerchanged.d/kvas-ips-reset ] && {
-			mv /opt/etc/ndm/iflayerchanged.d/kvas-ips-reset ${KVAS_BACKUP_PATH}/kvas-ips-reset-layer
-		}
-		[ -f /opt/etc/ndm/ifstatechanged.d/kvas-ips-reset ] && {
-			mv /opt/etc/ndm/ifstatechanged.d/100-kvas-vpn ${KVAS_BACKUP_PATH}/100-kvas-vpn-state
-		}
-		[ -f /opt/etc/ndm/netfilter.d/100-proxy-redirect ] && {
-			mv /opt/etc/ndm/netfilter.d/100-proxy-redirect ${KVAS_BACKUP_PATH}/100-proxy-redirect 
-		}
-		[ -f /opt/etc/ndm/netfilter.d/100-vpn-mark ] && {
-			mv /opt/etc/ndm/netfilter.d/100-vpn-mark ${KVAS_BACKUP_PATH}/100-vpn-mark
-		}
+		# Хуки — ДО очистки: NDM перезапускает netfilter-хуки после изменений iptables,
+		# и 100-vpn-mark успевал вернуть прыжок в KVAS_MARK.
+		mkdir -p "${KVAS_BACKUP_PATH}"
+		_pause_hooks | while read -r hook name; do
+			[ -f "${hook}" ] && mv -f "${hook}" "${KVAS_BACKUP_PATH}/${name}"
+		done
+
+		# Снимаем только маршрутизацию в туннель. Перехват DNS (KVAS_DNS) и ipset не
+		# трогаем: раньше ip4__flush удалял и их — у LAN пропадал DNS (на :53 без
+		# kvas-dnsmasq ответа нет), пока хук 100-dns-local не вернёт перехват.
+		ip4__flush 'net ip table' &> /dev/null
+		ip4__chain__delete_jump "${TABLE_MARK}" "${CHAIN_MARK}" &> /dev/null
+		ip4__chain__delete      "${TABLE_MARK}" "${CHAIN_MARK}" &> /dev/null
+		true
 	} &> /dev/null && when_ok "УСПЕШНО" || when_bad "C ОШИБКАМИ"
 }
 
@@ -193,27 +202,17 @@ cmd_unpause_kvas(){
 	ready "Восстанавливаем работу KVASEC после паузы..."
 	{
 		#  Восстанавливаем из архива файлы механизма ndm
-		[ -f ${KVAS_BACKUP_PATH}/100-kvas-vpn-layer ] && {
-			mv ${KVAS_BACKUP_PATH}/100-kvas-vpn-layer /opt/etc/ndm/iflayerchanged.d/100-kvas-vpn 
-		}
-		[ -f ${KVAS_BACKUP_PATH}/100-kvas-vpn-layer ] && {
-			mv ${KVAS_BACKUP_PATH}/100-kvas-vpn-layer /opt/etc/ndm/iflayerchanged.d/100-kvas-vpn 
-		}
-		[ -f ${KVAS_BACKUP_PATH}/100-kvas-vpn-state ] && {
-			mv ${KVAS_BACKUP_PATH}/100-kvas-vpn-state /opt/etc/ndm/ifstatechanged.d/100-kvas-vpn
-		}
-		[ -f ${KVAS_BACKUP_PATH}/100-proxy-redirect ] && {
-			mv ${KVAS_BACKUP_PATH}/100-proxy-redirect /opt/etc/ndm/netfilter.d/100-proxy-redirect  
-		}
-		[ -f ${KVAS_BACKUP_PATH}/100-vpn-mark ] && {
-			mv ${KVAS_BACKUP_PATH}/100-vpn-mark /opt/etc/ndm/netfilter.d/100-vpn-mark 
-		}	
+		_pause_hooks | while read -r hook name; do
+			[ -f "${KVAS_BACKUP_PATH}/${name}" ] && mv -f "${KVAS_BACKUP_PATH}/${name}" "${hook}"
+		done
+		rm -f "${KVAS_PAUSED_FLAG}"
 
 		cmd_kvas_init
 		restart_all_services
-
+		[ -x "${KVAS_WATCHER}" ] && "${KVAS_WATCHER}" start
+		true
 	} &> /dev/null && when_ok "УСПЕШНО" || when_bad "C ОШИБКАМИ"
-	
+
 }
 
 
@@ -826,6 +825,15 @@ cmd_uninstall() {
 		# 1. Останавливаем все сервисы
 		ready 'Останавливаем все сервисы'
 		{
+			# сторож маршрутизации: иначе живёт до перезагрузки (держит ip rule/table 1001/
+			# DoT-REJECT). При обычном uninstall (в т.ч. из kvas upgrade) — только stop:
+			# правила остаются, новый пакет перезапустит сторож; при full — cleanup.
+			if [ -x /opt/etc/init.d/S99kvas-awg-route ]; then
+				if [ "${rm_type}" = full ]; then /opt/etc/init.d/S99kvas-awg-route cleanup
+				else /opt/etc/init.d/S99kvas-awg-route stop; fi
+			fi 2>/dev/null
+			# флаг паузы снимаем только при full: upgrade во время паузы её сохраняет
+			[ "${rm_type}" = full ] && rm -f /opt/etc/kvas.paused
 			[ -f /opt/etc/init.d/S99adguardhome ] && /opt/etc/init.d/S99adguardhome stop 2>/dev/null
 		} 2>/dev/null
 		when_ok 'УСПЕШНО' || when_bad 'ОШИБКА'

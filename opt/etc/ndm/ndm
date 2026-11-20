@@ -172,7 +172,14 @@ ip4__get_subrule_for_ip() {
 }
 
 # удаляет правило, полученное из iptables-save
+# ВНИМАНИЕ: IFS. Библиотеки kvas переключают ГЛОБАЛЬНЫЙ IFS ($'\n' для циклов, ' ' —
+# в других местах), и итог зависит от того, какая функция отработала последней. Функции,
+# которые режут правило на аргументы через $(echo "${…}") без кавычек, объявляют
+# `local IFS=' '`: иначе после IFS=$'\n' правило уходило в iptables ОДНИМ аргументом и
+# -D молча падал (kvas pause оставлял прыжок в KVAS_MARK → -X «Too many links»).
+# Все вызовы iptables — с -w (ждать xtables-лок, а не падать при параллельной работе NDM).
 iptables__delete_rule() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	if [ -z "${1}" ] ; then
 		error "[${FUNCNAME}] Не задан обязательный аргумент — таблица"
 		return
@@ -190,7 +197,7 @@ iptables__delete_rule() {
 	fi
 
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
-	/opt/sbin/iptables -t "${table}" -D $(echo "${rule:3}")
+	/opt/sbin/iptables -w -t "${table}" -D $(echo "${rule:3}")
 }
 
 # удаляет правила, получаемые по критерию
@@ -238,6 +245,7 @@ ip4__ipset__is_exist() {
 }
 
 ip4__ipset__create() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	if [ -z "${1}" ] ; then
 		error "[${FUNCNAME}] Не задан обязательный аргумент — имя"
 		return
@@ -282,6 +290,7 @@ ip4set_create_table() {
 
 # Для постоянного списка исключаемых сетей
 ip4__ipset__fill_destination_excluded() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	if ip4__ipset__is_exist "${IPSET_DESTINATION_EXCLUDED}"; then
 		return
 	fi
@@ -453,8 +462,8 @@ ip4__chain__delete() {
 
 	log_warning "Удаление цепочки ${chain_name} в ${table}"
 
-	/opt/sbin/iptables -F "${chain_name}" -t "${table}"
-	/opt/sbin/iptables -X "${chain_name}" -t "${table}"
+	/opt/sbin/iptables -w -F "${chain_name}" -t "${table}"
+	/opt/sbin/iptables -w -X "${chain_name}" -t "${table}"
 }
 
 # удаляем входы в цепочку
@@ -651,8 +660,7 @@ ip4__dns__create_chain() {
 
 	IFS=' '
 	for protocol in udp tcp ; do
-		# не будет ли задвоения без -w?
-		/opt/sbin/iptables -A "${CHAIN_DNS}" -t "${TABLE_DNS}" -p "${protocol}" --dport 53 -j DNAT --to-destination 127.0.0.1:"${DNS_PORT}"
+		/opt/sbin/iptables -w -A "${CHAIN_DNS}" -t "${TABLE_DNS}" -p "${protocol}" --dport 53 -j DNAT --to-destination 127.0.0.1:"${DNS_PORT}"
 	done
 }
 
@@ -699,6 +707,7 @@ ip4__dns__get_rulenum() {
 #Example input param:-s 192.168.3.0/24 -i eth3
 #Example input param:-i sstp+
 ip4__dns__add_routing() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	local iptables_filter
 	local submessage
 	if [ -n "${1}" ]; then
@@ -730,6 +739,7 @@ ip4__dns__add_routing() {
 #Example input param:-s 192.168.3.0/24 -i eth3
 #Example input param:-i sstp+
 ip4__dns__delete_routing() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	local iptables_filter
 	local submessage
 	if [ -n "${1}" ]; then
@@ -749,7 +759,7 @@ ip4__dns__delete_routing() {
 
 	# без echo дублирование пробелов (что даёт warning и проблему наличия)
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
-	/opt/sbin/iptables -D PREROUTING -t "${TABLE_DNS}"$(echo "${iptables_filter}") -j "${CHAIN_DNS}"
+	/opt/sbin/iptables -w -D PREROUTING -t "${TABLE_DNS}"$(echo "${iptables_filter}") -j "${CHAIN_DNS}"
 }
 
 
@@ -773,6 +783,7 @@ get_ikev2_net_pool() {
 }
 
 ip4__add_routing() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	if [ -z "${3}" ] ; then
 		error "[${FUNCNAME}] Не передан обязательный параметр — критерий"
 		return
@@ -836,6 +847,7 @@ ip4__add_routing_by_list_for_net() {
 }
 
 ip4__delete_routing() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	if [ -z "${3}" ] ; then
 		error "[${FUNCNAME}] Не передан обязательный параметр — критерий"
 		return
@@ -873,7 +885,7 @@ ip4__delete_routing() {
 	log_warning "Отключение перехвата трафика по${submessage}"
 
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
-	/opt/sbin/iptables -D PREROUTING -t "${table}" $(echo "${iptables_filter}") -j "${chain_name}"
+	/opt/sbin/iptables -w -D PREROUTING -t "${table}" $(echo "${iptables_filter}") -j "${chain_name}"
 }
 
 ip4__delete_routing_by_list_for_net() {
@@ -1180,6 +1192,7 @@ ip4__route__ensure_failclosed() {
 # grep '^default' → flush таблицы → при упавшем туннеле `ip route add default dev …`
 # падал, таблица оставалась ПУСТОЙ, и помеченный трафик уходил в WAN до прохода сторожа.
 ip4__route__add_table() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	local net_interface=$(get_config_value 'INFACE_ENT')
 	local is_need_flush=''
 
@@ -1291,6 +1304,7 @@ ip4__rule__get_submessage() {
 }
 
 ip4__rule__add_mark_to_table() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	local subrule="$(ip4__rule__get_sub)"
 	if /opt/sbin/ip rule show | grep -Fq "${subrule}" ; then
 		return
@@ -1307,6 +1321,7 @@ ip4__rule__add_mark_to_table() {
 }
 
 ip4__rule__delete_mark_to_table() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	local subrule="$(ip4__rule__get_sub)"
 	if ! /opt/sbin/ip rule show | grep -Fq "${subrule}" ; then
 		return
