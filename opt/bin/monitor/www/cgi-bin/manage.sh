@@ -693,7 +693,7 @@ main() {
 			clear_stale_block_watch || json_error "watcher already running"
 			if ! mkdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; then json_error "watcher already running"; fi
 			if [ ! -x "$BLOCK_WATCH_BIN" ]; then rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; json_error "block watcher is not installed"; fi
-			BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 &
+			BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" BLOCK_WATCH_LOCK_HELD=1 "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 &
 			printf '%s\n' "$!" > "$BLOCK_WATCH_PID"
 			json_ok "block watcher started"
 			;;

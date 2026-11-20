@@ -15,7 +15,13 @@ ROUTER_IP=${BLOCK_WATCH_ROUTER_IP:-$(ip -4 addr show br0 2>/dev/null | awk '/ine
 # shellcheck source=adguard_querylog.sh
 . "$(dirname "$0")/adguard_querylog.sh"
 umask 077
-if [ ! -d "$LOCK_DIR" ] && ! mkdir "$LOCK_DIR" 2>/dev/null; then
+# Один экземпляр. manage.sh берёт лок сам (чтобы ответить UI «уже запущен») и
+# передаёт его явно через BLOCK_WATCH_LOCK_HELD=1. Раньше «каталог уже есть»
+# считалось разрешением → второй запуск тоже проходил, и cleanup одного
+# снимал DNS-захват другого.
+if [ "${BLOCK_WATCH_LOCK_HELD:-0}" = 1 ]; then
+    [ -d "$LOCK_DIR" ] || exit 1
+elif ! mkdir "$LOCK_DIR" 2>/dev/null; then
     exit 1
 fi
 

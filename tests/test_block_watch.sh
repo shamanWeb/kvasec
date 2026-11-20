@@ -26,7 +26,7 @@ grep -F 'clear_stale_bypass_check()' "$MANAGE" >/dev/null
 grep -F 'BYPASS_PID_FILE="$BYPASS_CHECK_PID"' "$MANAGE" >/dev/null
 grep -F 'clear_stale_block_watch()' "$MANAGE" >/dev/null
 grep -F 'stop_block_watch()' "$MANAGE" >/dev/null
-grep -F 'BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR"' "$MANAGE" >/dev/null
+grep -F 'BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" BLOCK_WATCH_LOCK_HELD=1' "$MANAGE" >/dev/null
 
 # conntrack -L has TCP in $1, unlike /proc/net/nf_conntrack where it is $3.
 # Exercise a real watcher iteration so that a format regression cannot silently
@@ -53,6 +53,15 @@ wait "$watch_pid" 2>/dev/null || true
 test ! -e "$WORK/pid"
 test ! -e "$WORK/lock"
 test ! -e "$WORK/dns.dnsmasq"
+
+# Второй экземпляр при занятом локе не стартует (без явной передачи лока).
+mkdir "$WORK/lock2"
+BLOCK_WATCH_LOCK_DIR="$WORK/lock2" BLOCK_WATCH_PID="$WORK/pid2" BLOCK_WATCH_EVENTS="$WORK/ev2" \
+    BLOCK_WATCH_DNS_CONF="$WORK/dns2" BLOCK_WATCH_DNS_LOG="$WORK/dnslog2" BLOCK_WATCH_DNS_RESTART_BIN=/bin/true \
+    PATH="$WORK/bin:$PATH" sh "$WATCH" >/dev/null 2>&1 && { echo 'second watcher started'; exit 1; }
+test ! -e "$WORK/pid2"
+test -d "$WORK/lock2"     # чужой лок не снят
+rmdir "$WORK/lock2"
 
 # AdGuard's response is binary base64 in querylog.json.  It must still provide
 # a destination-IP → requested-domain mapping for the watcher.
