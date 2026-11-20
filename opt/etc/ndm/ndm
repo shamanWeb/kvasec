@@ -269,9 +269,10 @@ ip4__ipset__create() {
 	log_warning "Cоздание набора IP ${ipset_name}${submessage}"
 
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
-	# ВНИМАНИЕ: maxelem не задан → по умолчанию 65536. При переполнении (CDN + TTL 24 ч)
-	# dnsmasq молча не добавит новые IP — они пойдут мимо туннеля. Уже созданный набор
-	# maxelem не меняет — только пересоздание.
+	# maxelem не задан → 65536. При переполнении dnsmasq молча не добавит новые IP — они
+	# пойдут мимо туннеля (maxelem уже созданного набора не меняется — только пересоздание).
+	# На роутере (2026-11-20) набор создан БЕЗ timeout (записи не истекают, набор
+	# пересоздаётся при kvas init/перезагрузке), заполнен на ~9% (5.9k) — запас есть.
 	/opt/sbin/ipset create "${ipset_name}" hash:net family inet -exist$(echo "${subcomand}") \
 	 || {
 		error "[${FUNCNAME}] Ошибка при создании набора IP ${ipset_name}${submessage}"
@@ -558,9 +559,11 @@ ip4__mark__create_chain() {
 			# На отдельных устройствах, к сожалению, не работает.
 			#/opt/sbin/iptables -w -t "${TABLE_MARK}" -A "${CHAIN_MARK}" -p tcp -m conntrack ! --ctstate NEW -j RETURN
 
-			# ВНИМАНИЕ: restore/save-mark без масок работают со всеми 32 битами и могут
-			# затирать connmark/fwmark самой NDM (политики, hotspot). Безопаснее
-			# --nfmask/--ctmask 0xd1000. Проверять на роутере.
+			# restore/save-mark без масок работают со всеми 32 битами. Проверено на роутере
+			# (2026-11-20): кроме kvas, fwmark/connmark никто не ставит (у NDM — только
+			# проверка --mark 0x0; её NDMMARK — отдельный механизм), в conntrack метки
+			# только 0 и 0xd1000 — конфликта нет. Если появится второй пользователь меток —
+			# перейти на --nfmask/--ctmask 0xd1000 и --set-xmark 0xd1000/0xd1000.
 			/opt/sbin/iptables -w -t "${TABLE_MARK}" -A "${CHAIN_MARK}" -j CONNMARK --restore-mark
 			/opt/sbin/iptables -w -t "${TABLE_MARK}" -A "${CHAIN_MARK}" -m mark --mark ${MARK_NUM} -j RETURN
 
