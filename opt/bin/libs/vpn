@@ -37,6 +37,9 @@ update_iptables(){
 
 	ready "${prefix}Создаем iptables правила."
 	ip4_firewall_set_all_rules &> /dev/null && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
+
+	# соединения, открытые за время пересборки, остались без метки — мимо туннеля
+	/opt/apps/kvas/bin/main/purge_unmarked &> /dev/null
 }
 
 # ------------------------------------------------------------------------------------------

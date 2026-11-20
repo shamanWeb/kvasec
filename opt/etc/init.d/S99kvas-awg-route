@@ -37,31 +37,15 @@ RPRIO=99
 NFHOOK_APP=/opt/apps/kvas/etc/ndm/netfilter.d/100-vpn-mark
 NFHOOK_ETC=/opt/etc/ndm/netfilter.d/100-vpn-mark
 
-# Соединение, открытое пока KVAS_MARK не было, остаётся без метки навсегда
-# (CONNMARK --restore-mark → '! NEW → RETURN') и ходит мимо туннеля — с IP
-# провайдера (JetBrains: «export control regulations»). Рвём LAN-соединения
-# с mark=0 к адресам из KVAS_LIST — клиент переоткроет их уже с меткой.
-# ВНИМАНИЕ: рвёт ВСЕ немаркированные соединения LAN → KVAS_LIST, в т.ч. устройств в
-# режиме «Напрямую» (route_excluded_ip), которые НАМЕРЕННО идут мимо туннеля, —
-# их стоит исключать. Сколько-нибудь частый вызов = обрывы у этих устройств.
+# Соединение, открытое пока KVAS_MARK не было, остаётся без метки навсегда и ходит
+# мимо туннеля (JetBrains: «export control regulations»). Сброс — общий скрипт
+# main/purge_unmarked (его же зовут route refresh и update_iptables); устройства в
+# режиме «Напрямую» (route_excluded_ip) и адреса роутера он не трогает.
+PURGE=/opt/apps/kvas/bin/main/purge_unmarked
 purge_unmarked_conns() {
-  command -v conntrack >/dev/null 2>&1 || { echo "$(date) skip: нет conntrack, немаркированные соединения не сброшены" >>"$LOG"; return; }
-  _self=$(ip -o -4 addr show 2>/dev/null | awk '{sub(/\/.*/, "", $4); printf "%s ", $4}')
-  _n=$(conntrack -L -m 0 2>/dev/null | awk -v self="$_self" '
-      BEGIN { n = split(self, a, " "); for (i = 1; i <= n; i++) me[a[i]] = 1 }
-      { s = d = ""
-        for (i = 1; i <= NF; i++) {
-          if (s == "" && $i ~ /^src=/) s = substr($i, 5)
-          else if (d == "" && $i ~ /^dst=/) d = substr($i, 5)
-        }
-        if (s != "" && d != "" && !(s in me) && !seen[d " " s]++) print d, s }' \
-    | sort | {
-      _last=''; _hit=1
-      while read -r _d _s; do
-        if [ "$_d" != "$_last" ]; then _last=$_d; ipset test KVAS_LIST "$_d" >/dev/null 2>&1; _hit=$?; fi
-        [ "$_hit" -eq 0 ] && conntrack -D -m 0 -s "$_s" -d "$_d" >/dev/null 2>&1 && echo x
-      done; } | grep -c x)
-  [ "${_n:-0}" -gt 0 ] && echo "$(date) fix: сброшено немаркированных соединений к KVAS_LIST: $_n" >>"$LOG"
+  [ -x "$PURGE" ] || { echo "$(date) skip: нет $PURGE" >>"$LOG"; return; }
+  _n=$("$PURGE" 2>/dev/null)
+  [ "${_n:-0}" -gt 0 ] 2>/dev/null && echo "$(date) fix: сброшено немаркированных соединений к KVAS_LIST: $_n" >>"$LOG"
 }
 
 # Убрать дубли правил в цепочке (оставить по одной копии), $3 — фильтр grep -F.

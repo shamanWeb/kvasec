@@ -1,0 +1,40 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# Сброс немаркированных соединений LAN → KVAS_LIST.
+#
+# Соединение, открытое, пока KVAS_MARK пуста/пересобирается (reload NDM-firewall,
+# kvas route refresh, update_iptables), получает connmark 0, а KVAS_MARK пропускает
+# не-NEW пакеты по restore-mark ('! NEW → RETURN') — такое соединение до закрытия
+# ходит МИМО туннеля, с IP провайдера (keep-alive живут часами). Рвём их — клиент
+# переоткроет соединение уже с меткой.
+#
+# Не трогаем: адреса самого роутера; устройства в режиме «Напрямую»
+# (route_excluded_ip в kvas.conf) — они идут мимо туннеля НАМЕРЕННО.
+# Вывод: число сброшенных соединений. Используют сторож S99kvas-awg-route,
+# kvas route refresh, update_iptables.
+# ---------------------------------------------------------------------------
+# conntrack/ipset — в /opt/sbin; из CGI и cron PATH может быть урезан
+export PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
+CONF=${KVAS_CONF_FILE:-/opt/etc/kvas.conf}
+SET=${IPSET_TABLE_NAME:-KVAS_LIST}
+
+command -v conntrack >/dev/null 2>&1 || { echo 0; exit 0; }
+
+skip=$(ip -o -4 addr show 2>/dev/null | awk '{ sub(/\/.*/, "", $4); printf "%s ", $4 }')
+skip="$skip $(grep '^route_excluded_ip=' "$CONF" 2>/dev/null | cut -d= -f2 | tr '+' ' ')"
+
+conntrack -L -m 0 2>/dev/null | awk -v skip="$skip" '
+    BEGIN { n = split(skip, a, " "); for (i = 1; i <= n; i++) { sub(/\/32$/, "", a[i]); no[a[i]] = 1 } }
+    { s = d = ""
+      for (i = 1; i <= NF; i++) {
+          if (s == "" && $i ~ /^src=/) s = substr($i, 5)
+          else if (d == "" && $i ~ /^dst=/) d = substr($i, 5)
+      }
+      if (s != "" && d != "" && !(s in no) && !seen[d " " s]++) print d, s }' \
+| sort | {
+    last=''; hit=1
+    while read -r d s; do
+        if [ "$d" != "$last" ]; then last=$d; ipset test "$SET" "$d" >/dev/null 2>&1; hit=$?; fi
+        [ "$hit" -eq 0 ] && conntrack -D -m 0 -s "$s" -d "$d" >/dev/null 2>&1 && echo x
+    done
+} | grep -c x || true

@@ -252,6 +252,11 @@ cmd_route_refresh() {
 		[ -n "$ip" ] && conntrack -D -s "$ip" 2>/dev/null || true
 	done
 	echo 'сделано.'
+
+	# Соединения, открытые за время пересборки (KVAS_MARK была удалена), остались
+	# без метки и до закрытия шли бы мимо туннеля — сбрасываем.
+	echo -n 'Сброс соединений, открытых без метки...'
+	echo "сброшено $(/opt/apps/kvas/bin/main/purge_unmarked 2>/dev/null || echo 0)."
 }
 
 route__show_block() {
