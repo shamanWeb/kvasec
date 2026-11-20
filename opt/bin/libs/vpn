@@ -836,9 +836,16 @@ dns_server_install_remotely(){
 	[ -z "${_ip_port}" ] && exit 1
 	if [ "${_ip_port}" = q ] ; then exit_q; print_line; exit 1; fi
 
-	if echo "${_ip_port}" | grep -qE "${IP_PORT_FILTER}" ; then 
-		nslookup ya.ru ${_ip_port/#/:/} &> /dev/null
-		[ $? -eq 0 ] || { error "Введенный адрес ${_ip_port/#/:/} недоступен."; exit 1; }
+	# с якорями (раньше [1-9] в последнем октете отвергал .10/.100/.250)
+	if echo "${_ip_port}" | grep -qxE "${IP_PORT_FILTER}" ; then
+		local _dns_ip="${_ip_port%[:#]*}" _dns_port="${_ip_port##*[:#]}"
+		# busybox nslookup не умеет порт — проверяем dig'ом, если он есть
+		if command -v dig >/dev/null 2>&1; then
+			dig +short +time=3 +tries=1 -p "${_dns_port}" ya.ru @"${_dns_ip}" 2>/dev/null | grep -q .
+		else
+			nslookup ya.ru "${_dns_ip}" &> /dev/null
+		fi
+		[ $? -eq 0 ] || { error "DNS сервер ${_dns_ip}:${_dns_port} недоступен."; exit 1; }
 		ready "Подключаем DNS сервер на удаленном устройстве..."
 		{
 			cmd_dns_crypt_off
