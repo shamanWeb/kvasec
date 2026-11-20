@@ -341,6 +341,10 @@ case "$action" in
 		port=$(echo "&$QUERY_STRING" | sed -n 's/.*[?&]port=\([^&]*\).*/\1/p' 2>/dev/null)
 		conntrack=$(echo "&$QUERY_STRING" | sed -n 's/.*[?&]conntrack=\([^&]*\).*/\1/p' 2>/dev/null)
 		[ -z "$conntrack" ] && conntrack="1"
+		# идут в grep -E / аргументы conntrack — только ожидаемые символы
+		case "$ips" in *[!0-9.,]*) json_error "invalid ips" ;; esac
+		case "$port" in *[!0-9]*) json_error "invalid port" ;; esac
+		case "$proto" in ''|tcp|udp) ;; *) json_error "invalid proto" ;; esac
 		if [ -z "$ips" ]; then
 			echo '{"error":"no ips specified","connections":[],"dns":[]}'
 		else

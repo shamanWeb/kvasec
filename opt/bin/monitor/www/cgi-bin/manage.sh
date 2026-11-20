@@ -238,9 +238,26 @@ clear_stale_block_watch() {
 # Query values are URL-encoded by the WebUI.  Decode only after selecting a
 # field, so an encoded ampersand cannot change the query structure.
 url_decode() {
-	local encoded
-	encoded=$(printf '%s' "$1" | sed 's/+/ /g; s/%/\\x/g')
-	printf '%b' "$encoded"
+	# awk, а не printf %b: в dash %b не знает \x, а \c обрывает вывод.
+	# %00 и управляющие символы (кроме \t \n \r) выбрасываются; битый % остаётся как есть.
+	printf '%s' "$1" | LC_ALL=C awk '
+		BEGIN { for (i = 0; i < 256; i++) hex[sprintf("%02x", i)] = i }
+		{
+			if (NR > 1) printf "\n"
+			s = $0; gsub(/\+/, " ", s); out = ""
+			while ((p = index(s, "%")) > 0) {
+				out = out substr(s, 1, p - 1)
+				h = tolower(substr(s, p + 1, 2))
+				if (h in hex) {
+					n = hex[h]
+					if (n >= 32 || n == 9 || n == 10 || n == 13) out = out sprintf("%c", n)
+					s = substr(s, p + 3)
+				} else {
+					out = out "%"; s = substr(s, p + 1)
+				}
+			}
+			printf "%s", out s
+		}'
 }
 
 query_param() {
@@ -810,8 +827,13 @@ main() {
 			;;
 		restore)
 			check_token "$token"
-			path=$(echo "$QUERY_STRING" | sed 's/.*path=//; s/&.*//' 2>/dev/null)
-			[ "$path" = "$QUERY_STRING" ] && path=""
+			path=$(query_param path)
+			# restore перезаписывает kvas.conf/dnsmasq.conf и пароль панели — только
+			# каталоги, созданные `kvas backup` (UI путь не передаёт: берётся последний)
+			if [ -n "$path" ]; then
+				echo "$path" | grep -Eqx '/opt/kvas_backup_[0-9]{8}-[0-9]{6}' && [ "$(printf '%s' "$path" | wc -l)" -eq 0 ] \
+					|| json_error "invalid backup path"
+			fi
 			out=$($KVAS_BIN restore "$path" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "restore failed: $out"
