@@ -363,8 +363,22 @@ check_updates() {
 	fi
 }
 
+# Имя закваски из URL: идёт в awk/sed/grep-регэкспы libs/tags и в CLI kvas,
+# поэтому строгий whitelist (все штатные имена tags.list ему соответствуют).
+valid_tag_name() {
+	[ -n "$1" ] && [ ${#1} -le 32 ] || return 1
+	case "$1" in -*|*[!A-Za-z0-9_-]*) return 1 ;; esac
+	return 0
+}
+
+# Строки секции [$2] — точное сравнение заголовка, без подстановки в код awk
 get_tag_domain_list_from_file() {
-	awk -v section="$2" '/\['"$2"'\]/{flag=1; next} /\[.*\]/{flag=0} flag' "$1"
+	awk -v s="[$2]" '{ l = $0; sub(/^[ \t]+/, "", l); sub(/[ \t\r]+$/, "", l) }
+		l == s { flag = 1; next } /\[.*\]/ { flag = 0 } flag' "$1"
+}
+
+tag_exists() {
+	awk -v s="[$1]" '{ sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, "") } $0 == s { f = 1; exit } END { exit !f }' "$TAGS_FILE" 2>/dev/null
 }
 
 
@@ -1378,10 +1392,10 @@ main() {
 			;;
 		tags_status)
 			check_token "$token"
-			tag=$(echo "$QUERY_STRING" | sed 's/.*tag=//; s/&.*//' 2>/dev/null)
-			[ "$tag" = "$QUERY_STRING" ] && tag=""
+			tag=$(query_param tag)
 			[ -z "$tag" ] && json_error "tag required"
-			grep -q "\[$tag\]" "$TAGS_FILE" 2>/dev/null || json_error "tag not found"
+			valid_tag_name "$tag" || json_error "invalid tag"
+			tag_exists "$tag" || json_error "tag not found"
 			domains=$(get_tag_domain_list_from_file "$TAGS_FILE" "$tag")
 			printf '{"ok":true,"tag":%s,"domains":[' "$(json_str "$tag")"
 			first=1
@@ -1396,10 +1410,10 @@ main() {
 			;;
 		tags_add)
 			check_token "$token"
-			tag=$(echo "$QUERY_STRING" | sed 's/.*tag=//; s/&.*//' 2>/dev/null)
-			[ "$tag" = "$QUERY_STRING" ] && tag=""
+			tag=$(query_param tag)
 			[ -z "$tag" ] && json_error "tag required"
-			grep -q "\[$tag\]" "$TAGS_FILE" 2>/dev/null || json_error "tag not found"
+			valid_tag_name "$tag" || json_error "invalid tag"
+			tag_exists "$tag" || json_error "tag not found"
 			out=$($KVAS_BIN tags add-protect "$tag" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "add failed: $out"
@@ -1408,14 +1422,13 @@ main() {
 			;;
 		tags_create)
 			check_token "$token"
-			name=$(echo "$QUERY_STRING" | sed 's/.*name=//; s/&.*//' 2>/dev/null)
+			name=$(query_param name)
 			raw_domains=$(echo "$QUERY_STRING" | sed 's/.*domains=//; s/&.*//' 2>/dev/null)
 			raw_domains=$(printf '%s' "$raw_domains" | sed 's/%0D%0A/ /g; s/%0A/ /g; s/%0D/ /g; s/%20/ /g; s/+/ /g')
 			domains=$(echo "$raw_domains" | sed 's/  */ /g; s/^ //; s/ $//')
-			[ "$name" = "$QUERY_STRING" ] && name=""
 			[ -z "$name" ] && json_error "name required"
 			[ -z "$domains" ] && json_error "domains required"
-			case "$name" in -*) json_error "invalid name" ;; esac
+			valid_tag_name "$name" || json_error "invalid name"
 			# $domains идёт в kvas БЕЗ кавычек (word-split) → валидируем каждый токен:
 			# запрещаем ведущий '-' (option injection) и спецсимволы
 			for _d in $domains; do
@@ -1428,10 +1441,10 @@ main() {
 			;;
 		tags_del)
 			check_token "$token"
-			tag=$(echo "$QUERY_STRING" | sed 's/.*tag=//; s/&.*//' 2>/dev/null)
-			[ "$tag" = "$QUERY_STRING" ] && tag=""
+			tag=$(query_param tag)
 			[ -z "$tag" ] && json_error "tag required"
-			grep -q "\[$tag\]" "$TAGS_FILE" 2>/dev/null || json_error "tag not found"
+			valid_tag_name "$tag" || json_error "invalid tag"
+			tag_exists "$tag" || json_error "tag not found"
 			out=$($KVAS_BIN tags del-protect "$tag" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "del failed: $out"
@@ -1440,10 +1453,10 @@ main() {
 			;;
 		tags_delete)
 			check_token "$token"
-			tag=$(echo "$QUERY_STRING" | sed 's/.*tag=//; s/&.*//' 2>/dev/null)
-			[ "$tag" = "$QUERY_STRING" ] && tag=""
+			tag=$(query_param tag)
 			[ -z "$tag" ] && json_error "tag required"
-			grep -q "\[$tag\]" "$TAGS_FILE" 2>/dev/null || json_error "tag not found"
+			valid_tag_name "$tag" || json_error "invalid tag"
+			tag_exists "$tag" || json_error "tag not found"
 			out=$($KVAS_BIN tags delete "$tag" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "delete failed: $out"
@@ -1452,10 +1465,10 @@ main() {
 			;;
 		tags_edit_save)
 			check_token "$token"
-			tag=$(echo "$QUERY_STRING" | sed 's/.*tag=//; s/&.*//' 2>/dev/null)
-			[ "$tag" = "$QUERY_STRING" ] && tag=""
+			tag=$(query_param tag)
 			[ -z "$tag" ] && json_error "tag required"
-			grep -q "\[$tag\]" "$TAGS_FILE" 2>/dev/null || json_error "tag not found"
+			valid_tag_name "$tag" || json_error "invalid tag"
+			tag_exists "$tag" || json_error "tag not found"
 			raw_domains=$(echo "$QUERY_STRING" | sed 's/.*domains=//; s/&.*//' 2>/dev/null)
 			raw_domains=$(printf '%s' "$raw_domains" | sed 's/%0D%0A/ /g; s/%0A/ /g; s/%0D/ /g; s/%20/ /g; s/+/ /g')
 			domains=$(echo "$raw_domains" | sed 's/  */ /g; s/^ //; s/ $//')
