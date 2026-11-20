@@ -9,7 +9,9 @@ trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 cp -a "$ROOT/." "$WORK/repo"
 cd "$WORK/repo"
 
-./build.sh 1.2.42 >/dev/null
+# Неотслеживаемый мусор в opt/ не попадает в пакет; права не зависят от umask.
+echo junk > opt/bin/zz-untracked.bak
+( umask 077; ./build.sh 1.2.42 >/dev/null )
 IPK=kvasec_1.2.42.ipk
 
 test -f "$IPK"
@@ -45,3 +47,9 @@ if ./build.sh 1.2 >/dev/null 2>&1; then
     echo 'build.sh accepted an invalid SemVer version' >&2
     exit 1
 fi
+
+# 8.2: только файлы под git, фиксированные права
+! tar -tzf "$UNPACKED/data.tar.gz" | grep -F 'zz-untracked.bak' >/dev/null
+tar -tvzf "$UNPACKED/data.tar.gz" | awk '$1 ~ /^d/ && $1 != "drwxr-xr-x" { bad = 1 } END { exit bad }'
+tar -tvzf "$UNPACKED/data.tar.gz" ./opt/apps/kvas/bin/kvas | grep -q '^-rwxr-xr-x'
+tar -tvzf "$UNPACKED/data.tar.gz" ./opt/apps/kvas/etc/conf/kvas.help | grep -q '^-rw-r--r--'

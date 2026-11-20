@@ -51,29 +51,44 @@ mkdir -p \
 	"${DATA}/opt/etc/ndm/netfilter.d" \
 	"${CTRL}"
 
-# 1. Всё дерево пакета → /opt/apps/kvas/
-cp -a "${REPO_DIR}/opt/." "${DATA}/opt/apps/kvas/"
+# 1. Дерево пакета → /opt/apps/kvas/
+#    Только файлы под git (как есть в рабочей копии — локальная сборка видит
+#    незакоммиченные правки), без мусора: раньше cp -a забирал всё подряд
+#    (бэкапы редактора, тестовые артефакты). Вне git-репозитория — весь opt/.
+SRC="${BUILD}/src"
+mkdir -p "${SRC}"
+if command -v git >/dev/null 2>&1 && git -C "${REPO_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	( cd "${REPO_DIR}" && git ls-files -z -- opt | xargs -0 tar -cf - ) | tar -xf - -C "${SRC}"
+else
+	cp -a "${REPO_DIR}/opt" "${SRC}/"
+fi
+cp -a "${SRC}/opt/." "${DATA}/opt/apps/kvas/"
 
 # 2. Системные точки входа, которые читает сама прошивка (init.d/ndm),
 #    дублируются в /opt/etc/ (как в отгружаемом релизе)
-cp -a "${REPO_DIR}/opt/etc/init.d/S96kvas"                    "${DATA}/opt/etc/init.d/"
-cp -a "${REPO_DIR}/opt/etc/init.d/S99kvas-awg-route"          "${DATA}/opt/etc/init.d/"
-cp -a "${REPO_DIR}/opt/etc/ndm/fs.d/15-kvas-start.sh"         "${DATA}/opt/etc/ndm/fs.d/"
-cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/100-dns-local"     "${DATA}/opt/etc/ndm/netfilter.d/"
+cp -a "${SRC}/opt/etc/init.d/S96kvas"                    "${DATA}/opt/etc/init.d/"
+cp -a "${SRC}/opt/etc/init.d/S99kvas-awg-route"          "${DATA}/opt/etc/init.d/"
+cp -a "${SRC}/opt/etc/ndm/fs.d/15-kvas-start.sh"         "${DATA}/opt/etc/ndm/fs.d/"
+cp -a "${SRC}/opt/etc/ndm/netfilter.d/100-dns-local"     "${DATA}/opt/etc/ndm/netfilter.d/"
 # 100-vpn-mark регистрируем в /opt/etc/ndm/ рядом с 100-dns-local, чтобы NDM
 # пересоздавал маркировку KVAS_MARK на netfilter-сбросах (иначе выживал только
 # DNS-редирект, а маркировка слетала — корень хрупкости KVAS_MARK).
-cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/100-vpn-mark"      "${DATA}/opt/etc/ndm/netfilter.d/"
+cp -a "${SRC}/opt/etc/ndm/netfilter.d/100-vpn-mark"      "${DATA}/opt/etc/ndm/netfilter.d/"
 # 090-iot-lockdown: изоляция недоверенных устройств от портов управления роутера
 # (по MAC из /opt/etc/kvas-iot-lockdown.list, которым управляет веб-UI). Как и
 # прочие хуки — в активный /opt/etc/ndm/netfilter.d/, иначе NDM его не запустит.
-cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/090-iot-lockdown"  "${DATA}/opt/etc/ndm/netfilter.d/"
+cp -a "${SRC}/opt/etc/ndm/netfilter.d/090-iot-lockdown"  "${DATA}/opt/etc/ndm/netfilter.d/"
+
+# Права: фиксированные, не зависят от umask/прав в рабочей копии сборщика
+# (с umask 077 каталоги в пакете получили бы 700).
+find "${DATA}" -type d -exec chmod 755 {} +
+find "${DATA}" -type f -exec chmod 644 {} +
 
 # Права на исполнение
-chmod -R +x "${DATA}/opt/apps/kvas/bin"          2>/dev/null || true
-chmod -R +x "${DATA}/opt/apps/kvas/etc/init.d"   2>/dev/null || true
-chmod -R +x "${DATA}/opt/apps/kvas/etc/ndm"      2>/dev/null || true
-chmod +x    "${DATA}/opt/etc/init.d/S96kvas" \
+chmod -R a+x "${DATA}/opt/apps/kvas/bin"          2>/dev/null || true
+chmod -R a+x "${DATA}/opt/apps/kvas/etc/init.d"   2>/dev/null || true
+chmod -R a+x "${DATA}/opt/apps/kvas/etc/ndm"      2>/dev/null || true
+chmod a+x   "${DATA}/opt/etc/init.d/S96kvas" \
             "${DATA}/opt/etc/init.d/S99kvas-awg-route" \
             "${DATA}/opt/etc/ndm/fs.d/15-kvas-start.sh" \
             "${DATA}/opt/etc/ndm/netfilter.d/100-dns-local" \
