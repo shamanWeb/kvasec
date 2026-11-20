@@ -627,7 +627,8 @@ main() {
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
 			# Package postinst restarts this WebUI. Return before starting the
 			# updater, otherwise the browser loses its request with the old listener.
-			( sleep 1; "$KVAS_BIN" upgrade > "$UPGRADE_LOG" 2>&1 ) &
+			# код выхода — в конец лога (kvas upgrade теперь возвращает честный код)
+			( sleep 1; "$KVAS_BIN" upgrade > "$UPGRADE_LOG" 2>&1; echo ">>>EXIT:$?" >> "$UPGRADE_LOG" ) &
 			json_ok "upgrade started; WebUI will restart shortly"
 			;;
 		check_update)

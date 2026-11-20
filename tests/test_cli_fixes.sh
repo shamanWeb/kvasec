@@ -50,3 +50,7 @@ printf '%s\n' 'ipset=/flix.com/KVAS_LIST' 'ipset=/:.*w.org:/KVAS_LIST' | cmp - "
 # 7.9 Ожидание первичной настройки AdGuard: выход при смерти процесса/таймауте + возврат DNS
 grep -F 'if ! kill -0 "${ag_pid}" 2>/dev/null || [ "${ag_wait}" -ge 1800 ]; then' "$ROOT/opt/bin/libs/vpn" >/dev/null
 grep -F '/opt/etc/init.d/S56dnsmasq start' "$ROOT/opt/bin/libs/vpn" >/dev/null
+
+# 3.5 kvas upgrade/rollback возвращают код upgrade-скрипта, а не всегда 0
+grep -F 'sh /opt/apps/kvas/bin/main/upgrade "${2}" "${3}"; exit $?' "$ROOT/opt/bin/kvas" >/dev/null
+grep -F 'sh /opt/apps/kvas/bin/main/upgrade rollback "${2}"; exit $?' "$ROOT/opt/bin/kvas" >/dev/null
