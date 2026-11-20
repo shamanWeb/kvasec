@@ -42,7 +42,9 @@ cmd_show_kvas_list(){
 	fi
 }
 
-if  echo "${1}" | grep -qvEi 'uninstall|vpn|route|ver|help' && [ -z "$(get_config_value "SETUP_FINISHED")" ]; then
+# [ -n "$1" ]: без аргументов (`kvas`, в т.ч. проба из скриптов) grep -v по пустой
+# строке был истинным → при незавершённой настройке запускалась полная установка.
+if [ -n "${1}" ] && echo "${1}" | grep -qvEi 'uninstall|vpn|route|ver|help' && [ -z "$(get_config_value "SETUP_FINISHED")" ]; then
 	print_line
 	echo "${2}" | grep -qE 'upgrade|true' && warning "Запускаем настройку пакета" || {
 		error "Настройка пакета не завершена, запускаем настройку пакета" "1"
