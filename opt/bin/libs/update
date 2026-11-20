@@ -31,16 +31,28 @@ cmd_adguard_update(){
 				warning "Найдено обновление пакета ${full_adguard_name} версии ${latest_version}"
 				print_line
 				ready "${BLUE}Обновляем пакет ${full_adguard_name}...${NOCL}"
+				# Без -k (TLS проверяется) и с проверкой sha256 по checksums.txt релиза;
+				# шаги цепочкой: при любой ошибке рабочий бинарник не трогаем
+				# (раньше curl -k без проверки, а mv выполнялся даже при сбое tar).
+				local tgz="/tmp/${full_adguard_name}.tar.gz" sums="/tmp/${full_adguard_name}.checksums" want got
 				{
-					curl -kfsSL "${url_update}" -o "/tmp/${full_adguard_name}.tar.gz"
-		#			Делаем копию предыдущей версии пакета
-
-					cp -f "${bin_path}/${full_adguard_name}" "${copy_name}"
-					tar x -zf /tmp/${full_adguard_name}.tar.gz -C /tmp
-					mv -f /tmp/${full_adguard_name}/${full_adguard_name} ${bin_path}/${full_adguard_name}
-					chmod +x ${bin_path}/${full_adguard_name}
-					/opt/etc/init.d/S99adguardhome restart &>/dev/null
+					rm -rf "${tgz}" "${sums}" "/tmp/${full_adguard_name}" \
+					&& curl -fsSL --connect-timeout 10 --max-time 600 "${url_update}" -o "${tgz}" \
+					&& curl -fsSL --connect-timeout 10 --max-time 60 "${url_update%/*}/checksums.txt" -o "${sums}" \
+					&& want=$(awk -v f="${url_update##*/}" '$2 == f || $2 == "./" f || $2 == "*" f { print $1; exit }' "${sums}") \
+					&& got=$(sha256sum "${tgz}" | cut -d' ' -f1) \
+					&& [ -n "${want}" ] && [ "${want}" = "${got}" ] \
+					&& tar x -zf "${tgz}" -C /tmp \
+					&& [ -x "/tmp/${full_adguard_name}/${full_adguard_name}" ] \
+					&& cp -f "${bin_path}/${full_adguard_name}" "${copy_name}" \
+					&& mv -f "/tmp/${full_adguard_name}/${full_adguard_name}" "${bin_path}/${full_adguard_name}" \
+					&& chmod +x "${bin_path}/${full_adguard_name}" \
+					&& { /opt/etc/init.d/S99adguardhome restart &>/dev/null; true; }
 				} 2> "${ERROR_LOG_FILE}"
+				local rc=$?
+				rm -rf "${tgz}" "${sums}" "/tmp/${full_adguard_name}"
+				[ "${rc}" -eq 0 ] || echo "Обновление не применено (загрузка/проверка SHA-256/распаковка)" >> "${ERROR_LOG_FILE}"
+				(exit "${rc}")
 
 				ready_status "${?}" "Ошибка обновления ${full_adguard_name}"
 				echo "${mess_2}"

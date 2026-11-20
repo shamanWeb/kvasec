@@ -1478,7 +1478,7 @@ get_github_latest_update_url() {
 	elif [ "${arch}" = aarch64 ] ; then
 		arch=arm64
 	fi
-	curl -k -f -s -S "https://api.github.com/repos/${1}/${2}/releases/latest" 2>/dev/null \
+	curl -f -s -S --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${1}/${2}/releases/latest" 2>/dev/null \
 			| jq -r '.assets[] | select(.browser_download_url | contains("linux_'"${arch}"'")) | .browser_download_url'
 }
 

@@ -220,7 +220,9 @@ verify_package(){
 	# $1 = путь к .ipk
 	[ -s "$1" ] && gzip -t "$1" 2>/dev/null || return 1
 	tar -tzf "$1" 2>/dev/null | grep -q 'data.tar.gz' || return 1
-	# sha256 из релиза (есть у релизов, собранных CI; у старых — нет, тогда хватит gzip/tar)
+	# sha256 из релиза. У kvasec_X.Y.Z.ipk (их собирает CI) он ОБЯЗАТЕЛЕН: раньше при
+	# неудачном скачивании .sha256 проверка молча пропускалась. Старые kvas_*_all.ipk
+	# (откат) публиковались без него — для них хватает gzip/tar.
 	sum_file="/tmp/$(basename "$1").sha256"
 	rm -f "${sum_file}"
 	if gh_download "${package_url}.sha256" "${sum_file}" && [ -s "${sum_file}" ]; then
@@ -228,6 +230,11 @@ verify_package(){
 		got=$(sha256sum "$1" | cut -d' ' -f1)
 		rm -f "${sum_file}"
 		[ -n "${want}" ] && [ "${want}" = "${got}" ] || return 1
+	else
+		rm -f "${sum_file}"
+		case "$(basename "$1")" in
+			kvasec_*) print_error "Не удалось получить SHA-256 пакета — установка отменена."; return 1 ;;
+		esac
 	fi
 	return 0
 }
@@ -357,7 +364,9 @@ verify_package "/opt/packages/${package_name}" || {
 
 #--------------------------------------------------------------------------------------------------------------
 # если обнаружена предыдущая незавершенная установка пакета
-if [ -f /opt/bin/kvas ] && kvas | grep -q 'Настройка пакета не завершена' ; then
+# (читаем флаг из конфига: раньше проба `kvas | grep …` сама запускала kvas без
+#  аргументов, а он при незавершённой настройке стартовал полный setup)
+if [ -f /opt/bin/kvas ] && [ -f /opt/etc/kvas.conf ] && ! grep -qE '^SETUP_FINISHED=.+' /opt/etc/kvas.conf ; then
 	ready 'Удаляем незавершенную ранее установку пакета ...'
 	kvas uninstall "${remove_mode}" yes &>/dev/null && when_ok || when_err
 else

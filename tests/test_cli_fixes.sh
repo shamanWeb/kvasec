@@ -54,3 +54,13 @@ grep -F '/opt/etc/init.d/S56dnsmasq start' "$ROOT/opt/bin/libs/vpn" >/dev/null
 # 3.5 kvas upgrade/rollback возвращают код upgrade-скрипта, а не всегда 0
 grep -F 'sh /opt/apps/kvas/bin/main/upgrade "${2}" "${3}"; exit $?' "$ROOT/opt/bin/kvas" >/dev/null
 grep -F 'sh /opt/apps/kvas/bin/main/upgrade rollback "${2}"; exit $?' "$ROOT/opt/bin/kvas" >/dev/null
+
+# 3.4 Обновление AdGuardHome: без curl -k, sha256 по checksums.txt (формат релиза: "hash  ./file")
+! grep -hE 'curl -k|curl -[a-zA-Z]*k[a-zA-Z]* ' "$ROOT/opt/bin/libs/update" "$ROOT/opt/bin/libs/main" | grep -qv '^[[:space:]]*#' \
+    || { echo 'FAIL 3.4: curl -k'; exit 1; }
+printf '%s\n' 'aaa  ./AdGuardHome_linux_mips.tar.gz' 'f5c3  ./AdGuardHome_linux_arm64.tar.gz' > "$WORK/cs.txt"
+awkprog=$(grep -o "\$2 == f || [^']*" "$ROOT/opt/bin/libs/update")
+[ "$(awk -v f=AdGuardHome_linux_arm64.tar.gz "$awkprog" "$WORK/cs.txt")" = f5c3 ] || { echo 'FAIL 3.4: checksums parse'; exit 1; }
+# sha256 обязателен для kvasec_*.ipk (upgrade и install.sh)
+grep -F 'kvasec_*) print_error "Не удалось получить SHA-256' "$ROOT/opt/bin/main/upgrade" >/dev/null
+grep -F "fail 'cannot download SHA-256 file" "$ROOT/install.sh" >/dev/null
