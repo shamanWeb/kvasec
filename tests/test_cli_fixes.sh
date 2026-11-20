@@ -46,3 +46,7 @@ $RUNB -c ". '$WORK/ag.sh'; add_host_to_adguard flix.com flix.com; add_host_to_ad
 printf '%s\n' 'x.com' | cmp - "$WORK/kl" || { echo 'FAIL 7.8: kvas.list изменён'; exit 1; }
 printf '%s\n' 'netflix.com/KVAS_LIST' 'flix.com/KVAS_LIST' 'w.org/KVAS_LIST' | cmp - "$WORK/ag" || { echo 'FAIL 7.8: kvas.ipset'; cat "$WORK/ag"; exit 1; }
 printf '%s\n' 'ipset=/flix.com/KVAS_LIST' 'ipset=/:.*w.org:/KVAS_LIST' | cmp - "$WORK/dm" || { echo 'FAIL 7.8: dnsmasq ipset'; exit 1; }
+
+# 7.9 Ожидание первичной настройки AdGuard: выход при смерти процесса/таймауте + возврат DNS
+grep -F 'if ! kill -0 "${ag_pid}" 2>/dev/null || [ "${ag_wait}" -ge 1800 ]; then' "$ROOT/opt/bin/libs/vpn" >/dev/null
+grep -F '/opt/etc/init.d/S56dnsmasq start' "$ROOT/opt/bin/libs/vpn" >/dev/null

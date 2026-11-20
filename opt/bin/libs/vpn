@@ -763,9 +763,21 @@ adguardhome_check_config() {
 #			Запускаем новую чистую настройку AdGuardHome
 			[ -f /opt/bin/AdGuardHome ] || opkg install adguardhome-go &> /dev/null
 			/opt/bin/AdGuardHome -c "${tmp_conf}" -l "${log_file}" &
+			local ag_pid=$! ag_wait=0
 			sleep 2
 
 			while true; do
+				# AdGuardHome упал или настройку бросили (30 мин) — не висим вечно и
+				# возвращаем dnsmasq/dnscrypt, остановленные выше (иначе в LAN нет DNS)
+				if ! kill -0 "${ag_pid}" 2>/dev/null || [ "${ag_wait}" -ge 1800 ]; then
+					kill "${ag_pid}" 2>/dev/null
+					error "Настройка AdGuardHome не завершена (процесс завершился или истекло 30 мин)."
+					[ -f /opt/etc/init.d/S09dnscrypt-proxy2 ] && /opt/etc/init.d/S09dnscrypt-proxy2 start &> /dev/null
+					[ -f /opt/etc/init.d/S56dnsmasq ] && /opt/etc/init.d/S56dnsmasq start &> /dev/null
+					rm -f "${tmp_conf}"
+					exit 1
+				fi
+				ag_wait=$((ag_wait + 1))
 				if cat < "${log_file}" | grep 'go to http' | grep -qv ':3000' || cat < "${log_file}" | grep -q ' listen tcp 0.0.0.0:3000: bind: address already in use' ; then
 					mv "${tmp_conf}" "${ADGUARDHOME_CONFIG}"
 					killall AdGuardHome
