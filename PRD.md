@@ -65,7 +65,7 @@ postinst настраивает `/opt/etc/dnsmasq.conf` идемпотентно
 opt/
 ├── bin/
 │   ├── kvas                      # точка входа CLI
-│   ├── libs/{main,vpn,check,debug,route,tags,adblock,hosts,update,ndm_d,monitor,keen_api}
+│   ├── libs/{main,vpn,check,debug,route,adblock,hosts,update,ndm_d,monitor,keen_api}
 │   ├── main/{setup,upgrade,update,adblock,dnsmasq,ipset,ipset_domain,check_vpn,adguard}
 │   └── monitor/                  # Web UI (socat httpd + cgi-bin/manage.sh + www/index.html)
 ├── etc/

@@ -36,29 +36,22 @@ grep -F 'mkdir "$LOCK"' "$WATCHER" >/dev/null
 grep -F 'kill_others' "$WATCHER" >/dev/null
 grep -F 'dedupe_rules mangle PREROUTING' "$WATCHER" >/dev/null
 
-# purge_unmarked_conns: only LAN→KVAS_LIST pairs with mark=0, router's own
-# addresses skipped.  Run it against stubbed conntrack/ipset/ip.
+# purge_unmarked_conns: логика — в main/purge_unmarked (свой тест
+# test_purge_unmarked.sh); сторож вызывает скрипт и пишет число в лог.
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-cat >"$TMP/conntrack" <<'STUB'
-#!/bin/sh
-case "$1" in
-  -L) cat <<'OUT'
-tcp      6 431999 ESTABLISHED src=192.168.1.74 dst=52.1.1.1 sport=1 dport=443 src=52.1.1.1 dst=10.2.20.21 sport=443 dport=1 [ASSURED] mark=0 use=1
-tcp      6 431999 ESTABLISHED src=192.168.1.74 dst=52.1.1.1 sport=2 dport=443 src=52.1.1.1 dst=10.2.20.21 sport=443 dport=2 [ASSURED] mark=0 use=1
-tcp      6 431999 ESTABLISHED src=192.168.1.59 dst=93.158.177.1 sport=3 dport=443 src=93.158.177.1 dst=10.2.20.21 sport=443 dport=3 [ASSURED] mark=0 use=1
-tcp      6 10 TIME_WAIT src=10.2.20.21 dst=52.1.1.1 sport=4 dport=80 src=52.1.1.1 dst=10.2.20.21 sport=80 dport=4 [ASSURED] mark=0 use=1
-OUT
-  ;;
-  -D) echo "$*" >>"$CT_LOG" ;;
-esac
-STUB
-printf '#!/bin/sh\n[ "$3" = 52.1.1.1 ]\n' >"$TMP/ipset"
-printf '#!/bin/sh\necho "2: eth3    inet 10.2.20.21/24 brd 10.2.20.255 scope global eth3"\n' >"$TMP/ip"
-chmod +x "$TMP/conntrack" "$TMP/ipset" "$TMP/ip"
+printf '#!/bin/sh\necho 3\n' >"$TMP/purge"; chmod +x "$TMP/purge"
 sed -n '/^purge_unmarked_conns()/,/^}/p' "$WATCHER" >"$TMP/fn.sh"
-CT_LOG="$TMP/ct.log" LOG="$TMP/w.log" PATH="$TMP:$PATH" sh -c '. "$1"; purge_unmarked_conns' _ "$TMP/fn.sh"
-[ "$(cat "$TMP/ct.log")" = "-D -m 0 -s 192.168.1.74 -d 52.1.1.1" ]
-grep -F 'немаркированных соединений к KVAS_LIST: 1' "$TMP/w.log" >/dev/null
+PURGE="$TMP/purge" LOG="$TMP/w.log" sh -c '. "$1"; purge_unmarked_conns' _ "$TMP/fn.sh"
+grep -F 'немаркированных соединений к KVAS_LIST: 3' "$TMP/w.log" >/dev/null
+
+# Аудит 2.5: интерфейс default — поле после "dev"; ip rule — именно с priority 99;
+# KVAS_MARK целая по --save-mark; KVAS_DNS тоже проверяется и чинится хуком.
+printf '%s\n' 'default dev opkgtun10 scope link' >"$TMP/rt"
+awkdev=$(grep -o "awk '/^default/ { for[^']*'" "$WATCHER" | sed "s/^awk '//; s/'$//")
+[ "$(awk "$awkdev" "$TMP/rt")" = opkgtun10 ]
+grep -F 'grep -c "^${RPRIO}:.*fwmark ${MARK}.*lookup ${RTABLE}"' "$WATCHER" >/dev/null
+grep -F -- 'grep -c -- "--save-mark"' "$WATCHER" >/dev/null
+grep -F 'KVAS_DNS восстановлен' "$WATCHER" >/dev/null
 
 # busybox `kill -0 ""` succeeds, so an unguarded pidfile check made start()
 # exit immediately and the watcher never ran after install.

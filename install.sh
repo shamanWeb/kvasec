@@ -69,16 +69,14 @@ printf '%s\n' "Downloading ${IPK_URL##*/}…"
 download "$IPK_URL" "$TMP_IPK" || fail 'package download failed'
 [ -s "$TMP_IPK" ] || fail 'downloaded package is empty'
 
-# New releases publish a SHA-256 sidecar.  Old releases remain installable,
-# but are explicitly reported as unverified rather than silently trusted.
-if download "${IPK_URL}.sha256" "$TMP_SHA" 2>/dev/null && [ -s "$TMP_SHA" ] && command -v sha256sum >/dev/null 2>&1; then
-    expected=$(awk 'NR==1 {print $1}' "$TMP_SHA")
-    actual=$(sha256sum "$TMP_IPK" | awk '{print $1}')
-    [ -n "$expected" ] && [ "$expected" = "$actual" ] || fail 'SHA-256 mismatch; package was not installed'
-    printf '%s\n' 'SHA-256 verified.'
-else
-    printf '%s\n' 'Warning: release has no SHA-256 file; installing over HTTPS without checksum verification.' >&2
-fi
+# Every kvasec_*.ipk release published by CI has a SHA-256 sidecar, so it is
+# mandatory: a failed sidecar download must not silently skip verification.
+command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum not found; cannot verify the package'
+download "${IPK_URL}.sha256" "$TMP_SHA" 2>/dev/null && [ -s "$TMP_SHA" ] || fail 'cannot download SHA-256 file; package was not installed'
+expected=$(awk 'NR==1 {print $1}' "$TMP_SHA")
+actual=$(sha256sum "$TMP_IPK" | awk '{print $1}')
+[ -n "$expected" ] && [ "$expected" = "$actual" ] || fail 'SHA-256 mismatch; package was not installed'
+printf '%s\n' 'SHA-256 verified.'
 
 printf '%s\n' 'Updating Entware package lists…'
 opkg update || fail 'opkg update failed'

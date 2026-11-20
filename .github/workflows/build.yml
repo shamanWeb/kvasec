@@ -50,10 +50,14 @@ jobs:
             echo "$baseline" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
               echo "VERSION must contain MAJOR.MINOR.PATCH" >&2; exit 1;
             }
-            latest=$(curl -fsSL \
-              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/latest" \
-              2>/dev/null | jq -r '.tag_name // empty' | sed 's/^v//' || true)
-            echo "$latest" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || latest=''
+            # Номер — от максимального SemVer-тега репозитория (git, без REST API).
+            # Раньше брался releases/latest через неавторизованный API с `|| true`:
+            # при сбое/лимите — откат к VERSION, и CI ПЕРЕЗАПИСАЛ v1.4.0 и v1.4.1
+            # новым кодом (2026-11-10), а «Latest» оказался ниже уже выпущенных.
+            tags=$(git ls-remote --tags --refs origin 'v*') || {
+              echo "Не удалось получить теги из origin" >&2; exit 1;
+            }
+            latest=$(printf '%s\n' "$tags" | sed -n 's|.*refs/tags/v\([0-9]*\.[0-9]*\.[0-9]*\)$|\1|p' | sort -V | tail -1)
             if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "$baseline" "$latest" | sort -V | tail -1)" = "$latest" ]; then
               major=${latest%%.*}
               rest=${latest#*.}
@@ -93,6 +97,23 @@ jobs:
           export PATH="/tmp/shellcheck-${v}:$PATH"
           shellcheck --version
           make lint
+
+      # softprops при существующем релизе молча ПЕРЕЗАЛИВАЕТ ассеты — запрещаем:
+      # выпущенная версия неизменна, повторный номер = ошибка расчёта версии.
+      - name: Проверка, что релиз ещё не существует
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 404 — релиза нет (публикуем); 200 — есть (стоп); прочее (сеть/права) — тоже стоп,
+          # иначе при сбое API шаг публикации перезалил бы ассеты существующего релиза.
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${{ steps.rel.outputs.tag }}")
+          case "$code" in
+            404) echo "Релиз ${{ steps.rel.outputs.tag }} ещё не существует — публикуем" ;;
+            200) echo "Релиз ${{ steps.rel.outputs.tag }} уже существует — перезапись запрещена" >&2; exit 1 ;;
+            *)   echo "Не удалось проверить релиз (HTTP $code) — публикация отменена" >&2; exit 1 ;;
+          esac
 
       - name: Публикация релиза
         uses: softprops/action-gh-release@v2

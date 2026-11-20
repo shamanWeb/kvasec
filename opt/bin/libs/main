@@ -28,16 +28,58 @@ PROGRESS_BAR_WIDTH=$((LENGTH-5))  # progress bar length in characters
 
 KVAS_BACKUP_PATH=/opt/etc/.kvas/backup
 IPSET_TABLE_NAME=KVAS_LIST
-SSR_NAME=ss-redir
-SSR_CMD=/opt/bin/${SSR_NAME}
-# ssr_run()(/opt/bin/sslocal --protocol redir -c /opt/etc/shadowsocks.json ${@}) )
-ssr_run(){ /opt/bin/ss-redir -c /opt/etc/shadowsocks.json "$@" ;}
 
-save_iptables(){ /opt/sbin/iptables-save "$@"; }
+# ВНИМАНИЕ: на Keenetic /opt/sbin/iptables-save (и `iptables -S` по ВСЕЙ таблице) обрывает
+# вывод с rc=1 на match'ах прошивки (connndmmark/ndmmark/NDMMARK — их библиотек в Entware
+# нет). Порядок таблиц в /proc/net/ip_tables_names: nat, mangle, filter — полный дамп
+# обрывался ещё в nat, и mangle (KVAS_MARK) в него не попадал вовсе: проверки ndm «прыжок
+# уже есть?» всегда отвечали «нет» и добавляли дубль (сторож удалял ~470 дублей в сутки).
+# Надёжен только поцепочечный вывод: правила kvas стоят в начале цепочек, до правил NDM,
+# поэтому даже оборванный вывод цепочки их содержит (обрезаем неполную последнюю строку).
+
+# Правила (-A …) одной цепочки. $1 — таблица, $2 — цепочка.
+ipt_chain_rules() {
+	local out
+	if out=$(/opt/sbin/iptables -w -t "${1}" -S "${2}" 2>/dev/null); then
+		printf '%s\n' "${out}" | grep '^-A '
+	else
+		printf '%s\n' "${out}" | sed '$d' | grep '^-A '
+	fi
+}
+
+# Цепочка существует (в т.ч. пустая). $1 — таблица, $2 — цепочка.
+ipt_chain_exists() {
+	/opt/sbin/iptables -w -t "${1}" -S "${2}" 2>/dev/null | grep -q -- "^-[NP] ${2}\( \|$\)"
+}
+
+# Эмуляция iptables-save [-t таблица] в его формате (*таблица, :заголовки, -A, COMMIT),
+# собранная поцепочечно. Медленная (iptables на каждую цепочку) — для редких операций;
+# в частых проверках использовать ipt_chain_rules нужной цепочки.
+save_iptables() {
+	# IFS — стандартный (пробел, таб, перевод строки) независимо от глобального: библиотеки
+	# kvas оставляют то IFS=' ', то IFS=$'\n'; при IFS=' ' список цепочек не делился по
+	# строкам, и эмуляция возвращала ПУСТО (kvas pause не находил прыжок в KVAS_MARK).
+	local IFS=' 	
+' tables t chains c
+	if [ "${1:-}" = "-t" ] && [ -n "${2:-}" ]; then
+		tables="${2}"
+	else
+		tables=$(cat /proc/net/ip_tables_names 2>/dev/null) || tables="nat mangle filter"
+	fi
+	for t in ${tables}; do
+		# заголовки цепочек печатаются ДО первого правила — до места обрыва
+		chains=$(/opt/sbin/iptables-save -t "${t}" 2>/dev/null | grep '^:')
+		echo "*${t}"
+		printf '%s\n' "${chains}"
+		for c in $(printf '%s\n' "${chains}" | sed -n 's/^:\([^ ]*\) .*/\1/p'); do
+			ipt_chain_rules "${t}" "${c}"
+		done
+		echo "COMMIT"
+	done
+}
 
 KVAS_CONF_FILE=/opt/etc/kvas.conf
 KVAS_LIST_FILE=/opt/etc/kvas.list
-TAGS_LIST_FILE=/opt/etc/tags.list
 ADGUARDHOME_CONFIG=/opt/etc/AdGuardHome/AdGuardHome.yaml
 ADGUARD_IPSET_FILE=/opt/etc/AdGuardHome/kvas.ipset
 DNSMASQ_IPSET_HOSTS=/opt/etc/dnsmasq.d/kvas.dnsmasq
@@ -51,14 +93,13 @@ ADBLOCK_PARENTAL_DNS_FILE=/opt/etc/dnsmasq.d/kvas-parental.dnsmasq
 
 KVAS_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/kvas.conf
 KVAS_LIST_FILE_BACKUP=${KVAS_BACKUP_PATH}/kvas.list
-TAGS_LIST_FILE=/opt/etc/tags.list
-TAGS_LIST_BACKUP=${KVAS_BACKUP_PATH}/tags.list
 ADGUARDHOME_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/AdGuardHome.yaml
 ADGUARD_IPSET_FILE_BACKUP=${KVAS_BACKUP_PATH}/kvas.ipset
 DNSMASQ_IPSET_HOSTS_BACKUP=${KVAS_BACKUP_PATH}/kvas.dnsmasq
 DNSMASQ_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/dnsmasq.conf
 DNSCRYPT_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/dnscrypt-proxy.toml
 ADBLOCK_LIST_EXCEPTION_BACKUP=${KVAS_BACKUP_PATH}/exception.list
+ADBLOCK_BLOCK_FILE_BACKUP=${KVAS_BACKUP_PATH}/block.list
 ADBLOCK_HOSTS_FILE_BACKUP=${KVAS_BACKUP_PATH}/ads.kvas.list
 ADBLOCK_SOURCES_LIST_BACKUP=${KVAS_BACKUP_PATH}/sources.list
 
@@ -90,7 +131,7 @@ FILE_RESERVED=/opt/apps/kvas/etc/conf/reserved.ip
 
 IP_FILTER='[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
 IP_DEVICE_FILTER='[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[1-9]{1,3}' # на конце любая цифра, кроме 0
-IP_PORT_FILTER="[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[1-9]{1,3}[:#][0-9]{2,5}" # на конце любая цифра, кроме 0
+IP_PORT_FILTER="[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}[:#][0-9]{1,5}" # IP:PORT или IP#PORT
 NET_FILTER='[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,3}'
 
 get_regexp_ip_or_range() {
@@ -108,25 +149,8 @@ MAIN_DNS_PORT=9753
 LOCALHOST_IP=127.0.0.1
 INFACE_REQUEST="${LOCALHOST_IP}:79/rci/show/interface"
 INFACE_PART_REQUEST="${LOCALHOST_IP}:79/rci/interface"
-SSR_ENTWARE_TEMPL=ezcfg
 MINUS=9
 
-
-#-------------------------------------------------------------------------------
-# 
-#	Функция проверяет установку пакета libmbedtls
-# 
-#-------------------------------------------------------------------------------
-
-check_crypto_ssr_libs(){
-
-	[ -f /opt/lib/libmbedcrypto.so.16 ] || {
-		opkg install libmbedtls &> /dev/null
-		local libmbedcrypto=$(find /opt/lib/ -type f -name "libmbedcrypto.so*" | head -1)
-		[ -n "${libmbedcrypto}" ] && ln -sf "${libmbedcrypto}" /opt/lib/libmbedcrypto.so.16
-	}
-		
-}
 
 #	Функция производит действия над определенными службами в фоне (демонами)
 # 
@@ -138,8 +162,14 @@ service_action(){
 	
 	# если нет демона - выходим
 	[ -z "${_service}" ] && return 1
-	# если демон есть - выполняем действия
-	find /opt/etc/init.d/ -name "*${_service}*" -exec {} start \; &> /dev/null && return 0 || return 1
+	# Раньше: find -name "*имя*" -exec {} start — действие игнорировалось (stop/restart
+	# тоже запускали), под маску попадали K56dnsmasq и копии. Теперь — ровно S<NN><имя>.
+	local _script _rc=1
+	for _script in "${INITD_DIR:-/opt/etc/init.d}"/S[0-9][0-9]"${_service}"; do
+		[ -x "${_script}" ] || continue
+		"${_script}" "${_action}" >/dev/null 2>&1 && _rc=0
+	done
+	return "${_rc}"
 
 }
 
@@ -167,6 +197,60 @@ post_api_query(){
 #-------------------------------------------------------------------------------
 escape_sed() {
 	printf '%s' "$1" | sed -e 's/[][\/.^$*{}|]/\\&/g'
+}
+
+#-------------------------------------------------------------------------------
+#
+#	Точный поиск/удаление записи в списке (kvas.list, kvas.ipset AdGuard).
+#	Запись = первое поле строки; домен совпадает в формах "d" и "*.d"
+#	(и с суффиксом /<ipset> в файле AdGuard). Без регэкспов: раньше
+#	sed "/x.com/d" удалял и netflix.com, а "t.co" — microsoft.com.
+#	$1 - файл, $2 - домен / IP / CIDR (ведущие "*." или "." отбрасываются)
+#
+#-------------------------------------------------------------------------------
+_list_entry_awk='
+	{
+		f = $1; hit = 0
+		if (sfx != "" && length(f) > length(sfx) && substr(f, length(f) - length(sfx) + 1) == sfx)
+			f = substr(f, 1, length(f) - length(sfx))
+		if (f == e || f == "*." e || f == "." e) hit = 1
+	}
+	mode == "has" && hit { found = 1; exit }
+	mode == "del" { if (hit) found = 1; else print }
+	END { exit !found }'
+
+# Поле строки /opt/etc/inface_equals (cli|entware|описание) по ТОЧНОМУ имени
+# entware-интерфейса: grep "opkgtun1" находил и opkgtun10 (несколько строк в
+# INFACE_CLI), а пустое имя совпадало со всем файлом.
+# $1 - entware-имя, $2 - номер поля (1 cli, 2 entware, 3 описание)
+inface_field() {
+	[ -n "$1" ] || return 1
+	awk -F'|' -v e="$1" -v c="${2:-1}" '$2 == e { print $c; exit }' "${INFACE_NAMES_FILE}" 2>/dev/null
+}
+
+_list_entry_base() {
+	local e="${1#\*}"
+	printf '%s' "${e#.}"
+}
+
+list_has_entry() {
+	local file="$1" e
+	e=$(_list_entry_base "$2")
+	[ -f "$file" ] && [ -n "$e" ] || return 1
+	awk -v mode=has -v e="$e" -v sfx="/${IPSET_TABLE_NAME:-KVAS_LIST}" "$_list_entry_awk" "$file"
+}
+
+list_remove_entry() {
+	local file="$1" e tmp
+	e=$(_list_entry_base "$2")
+	[ -f "$file" ] && [ -n "$e" ] || return 1
+	tmp="${file}.tmp.$$"
+	if awk -v mode=del -v e="$e" -v sfx="/${IPSET_TABLE_NAME:-KVAS_LIST}" "$_list_entry_awk" "$file" > "$tmp"; then
+		mv -f "$tmp" "$file"
+		return 0
+	fi
+	rm -f "$tmp"
+	return 1
 }
 
 
@@ -242,6 +326,12 @@ get_iplist_from_domain(){
     local retry=${3:-3}
 
 	# Проверяем доступность DNS сервера
+	# ВНИМАНИЕ: «fasle» — опечатка, которая РАБОТАЕТ как «пропустить предпроверку DNS».
+	# Не исправлять на false одним словом: включится блок с is_dns_server_online, а она
+	# сломана (порт через ${1/#/:} — не работает в busybox ash; видит только ЛОКАЛЬНЫЙ
+	# listener через netstat) и при неуспехе ниже делается exit 1 — а эта функция sourced
+	# и вызывается из kvas add / check / hosts, т.е. exit убьёт всю команду. Чинить только
+	# комплексно: сперва is_dns_server_online, exit 1 → return 1, потом опечатку.
     if [ ${DNS_ENABLE} = fasle ]; then
 		if is_dns_server_online ${dns_server} ; then 
 			DNS_ENABLE=true
@@ -324,14 +414,9 @@ is_interface_online() {
 	fi
 	local keenetic_name="${1}"
 
-	if [ "${keenetic_name}" == 'shadowsocks' ]; then
-		# иногда ss запущен, но упал и ничего не слушает
-		netstat -tulpn 2>/dev/null | grep -F ":$(get_config_value SSR_DNS_PORT) " | grep -qF -- 'ss-redir'
-	else
-		keenetic_name=$(curl -s "${INFACE_REQUEST}/${keenetic_name}" \
-		  | jq -r 'select(.state=="up" and .link=="up" and .connected=="yes") | .id // empty')
-		[ -n "${keenetic_name}" ]
-	fi
+	keenetic_name=$(curl -s "${INFACE_REQUEST}/${keenetic_name}" \
+	  | jq -r 'select(.state=="up" and .link=="up" and .connected=="yes") | .id // empty')
+	[ -n "${keenetic_name}" ]
 }
 
 clean_escape(){
@@ -513,8 +598,6 @@ nets__set_common() {
 	fi
 }
 
-NETS_TUNNEL='ezcfg0|78.47.125.180|shadowsocks|"ShadowSocks"'$'\n'
-
 # замена Singleton, чтобы скан был лишь при первом вызове
 NETS_INCOMING=''
 
@@ -646,8 +729,6 @@ nets__get() {
 
 ## Compatibility guards for obsolete branches that remain in shared routing
 ## helpers. KVASEC no longer permits or starts these clients.
-has_ssr_enable() { return 1; }
-is_shadowsocks_enabled() { return 1; }
 
 has_adguard_enable() {
 	if [ -f "${ADGUARDHOME_DEMON}" ]; then  
@@ -1427,7 +1508,7 @@ get_github_latest_update_url() {
 	elif [ "${arch}" = aarch64 ] ; then
 		arch=arm64
 	fi
-	curl -k -f -s -S "https://api.github.com/repos/${1}/${2}/releases/latest" 2>/dev/null \
+	curl -f -s -S --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${1}/${2}/releases/latest" 2>/dev/null \
 			| jq -r '.assets[] | select(.browser_download_url | contains("linux_'"${arch}"'")) | .browser_download_url'
 }
 

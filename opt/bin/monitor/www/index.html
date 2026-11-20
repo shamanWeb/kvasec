@@ -128,7 +128,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 <div class="tabs">
   <div class="tab active" data-tab="dashboard" onclick="switchTab('dashboard')">Дашборд</div>
   <div class="tab" data-tab="manage" onclick="switchTab('manage')">Управление</div>
-  <div class="tab" data-tab="tags" onclick="switchTab('tags')">Закваски</div>
   <div class="tab" data-tab="route" onclick="switchTab('route')">Маршрутизация</div>
   <div class="tab" data-tab="devices" onclick="switchTab('devices')">Устройства</div>
   <div class="tab" data-tab="parental" onclick="switchTab('parental')">Родительский контроль</div>
@@ -225,37 +224,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
   </div>
 
 </div><!-- /tab-manage -->
-
-<!-- ========== TAB: Закваски ========== -->
-<div id="tab-tags" class="tab-content">
-
-  <div class="card">
-    <h3>Создать закваску</h3>
-    <div class="card-row" style="flex-wrap:wrap;gap:8px;">
-      <input type="text" id="tagName" placeholder="Имя закваски (например, social)" style="flex:1;min-width:180px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:12px;">
-      <button class="btn btn-sm success" onclick="tagCreate(this)">Создать</button>
-    </div>
-    <div class="card-row" style="margin-top:8px;">
-      <textarea id="tagDomains" placeholder="Список доменов (каждый с новой строки)&#10;example.com&#10;www.example.com" style="width:100%;min-height:120px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:12px;"></textarea>
-    </div>
-    <div id="tagsCreateMsg" class="msg" style="margin-top:8px;"></div>
-  </div>
-
-  <div class="card">
-    <h3>Закваски</h3>
-    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Группы доменов для добавления в защищённый список. Отмеченные домены уже добавлены.</p>
-    <div id="tagsList" class="host-list" style="max-height:500px;"><div class="status">Загрузка...</div></div>
-    <div class="card-row" style="flex-wrap:wrap;gap:8px;margin-top:8px;">
-      <button class="btn btn-sm success" onclick="downloadTags()">Скачать список заквасок</button>
-      <label class="btn btn-sm primary" style="cursor:pointer;">Загрузить список <input type="file" id="tagFileInput" accept=".list,.txt" style="display:none;" onchange="uploadTags(this)"></label>
-      <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#8b949e;cursor:pointer;">
-        <input type="checkbox" id="tagReplace" style="accent-color:#58a6ff;"> Заменить закваски
-      </label>
-    </div>
-    <div id="tagsMsg" class="msg" style="margin-top:8px;"></div>
-  </div>
-
-</div>
 
 <!-- ========== TAB: Маршрутизация ========== -->
 <div id="tab-route" class="tab-content">
@@ -491,6 +459,14 @@ function loadingBtn(btn, loading) {
   else { btn.disabled = false; btn.textContent = btn._text || btn.textContent; }
 }
 
+// HTML-экранирование: всё, что пришло с роутера (DHCP-имена, DNS-лог, ошибки),
+// в innerHTML только через esc() — иначе XSS с кражей токена из sessionStorage.
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
 function showProgress(pct, text) {
   var el = document.getElementById('hostProgress');
   var fill = document.getElementById('hostProgressFill');
@@ -498,7 +474,7 @@ function showProgress(pct, text) {
   if (pct < 0) { el.style.display = 'none'; return; }
   el.style.display = 'block';
   fill.style.width = pct + '%';
-  txt.innerHTML = (pct > 0 ? pct + '% ' : '') + '<span class="spinner"></span> ' + text;
+  txt.innerHTML = (pct > 0 ? pct + '% ' : '') + '<span class="spinner"></span> ' + esc(text);
 }
 
 function hideProgress() { showProgress(-1); }
@@ -593,7 +569,6 @@ function showMain() {
   loadParentalList();
   loadAdguardStatus();
   loadAdblockStatus();
-  loadTags();
   fetchDevices();
   blockWatchPoll();
   startDashboard();  // вкладка "Дашборд" открыта по умолчанию
@@ -671,226 +646,6 @@ function switchTab(name) {
   if (name === 'dashboard') startDashboard(); else stopDashboard();
 }
 
-/* ========== TAGS ========== */
-function loadTags() {
-  var el = document.getElementById('tagsList');
-  if (!el) return;
-  el.innerHTML = '<div style="color:#8b949e;font-size:11px;padding:4px 0;"><span class="spinner"></span> Загрузка заквасок...</div>';
-  api('/cgi-bin/manage.sh?action=tags_list', function(d){
-    if (!d.ok) { el.innerHTML = '<div class="status status-err">' + (d.error||'error') + '</div>'; return; }
-    if (!d.tags || !d.tags.length) { el.innerHTML = '<div class="status" style="color:#8b949e;">Заквасок нет</div>'; return; }
-    renderTags(d.tags);
-  });
-}
-
-function renderTags(tags) {
-  var el = document.getElementById('tagsList');
-  el.innerHTML = '';
-  tags = tags.slice().sort(function(a, b) {
-    var aIn = (a.domains || []).every(function(d){ return d.in_list === true || d.in_list === 'true'; });
-    var bIn = (b.domains || []).every(function(d){ return d.in_list === true || d.in_list === 'true'; });
-    if (aIn && !bIn) return -1;
-    if (!aIn && bIn) return 1;
-    return 0;
-  });
-  tags.forEach(function(tag){
-    var wrap = document.createElement('div');
-    wrap.style.cssText = 'border-bottom:1px solid #21262d;padding:8px 0;';
-    var header = document.createElement('div');
-    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;cursor:pointer;';
-    var inListCount = 0;
-    (tag.domains || []).forEach(function(dom){ if (dom.in_list === true || dom.in_list === 'true') inListCount++; });
-    var allInList = tag.domains && tag.domains.length > 0 && inListCount === tag.domains.length;
-    var badge = allInList ? '<span style="background:#1f6feb;color:#fff;font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px;">В ТОННЕЛЕ</span>' : '';
-    header.innerHTML = '<span style="color:#58a6ff;font-size:13px;">[' + (tag.name||'') + ']</span>' +
-      '<span style="color:#8b949e;font-size:11px;">' + (tag.domains||[]).length + ' доменов, ' + inListCount + ' в списке</span>' + badge;
-    var actions = document.createElement('div');
-    actions.style.cssText = 'display:flex;gap:6px;margin-top:6px;';
-    if (!allInList) {
-      var btnAdd = document.createElement('button');
-      btnAdd.className = 'btn btn-sm success';
-      btnAdd.textContent = 'Добавить в тоннель';
-      btnAdd.onclick = function(e){ e.stopPropagation(); tagsAdd(tag.name, this); };
-      actions.appendChild(btnAdd);
-    }
-    if (allInList || inListCount > 0) {
-      var btnDel = document.createElement('button');
-      btnDel.className = 'btn btn-sm primary';
-      btnDel.textContent = 'Удалить из тоннеля';
-      btnDel.onclick = function(e){ e.stopPropagation(); tagsDel(tag.name, this); };
-      actions.appendChild(btnDel);
-    }
-    var btnEdit = document.createElement('button');
-    btnEdit.className = 'btn btn-sm';
-    btnEdit.textContent = 'Редактировать';
-    btnEdit.style.cssText = 'background:#fff;color:#000;border-color:#ccc;';
-    btnEdit.onclick = function(e){ e.stopPropagation(); tagsEdit(tag.name, this); };
-    var btnDelTag = document.createElement('button');
-    btnDelTag.className = 'btn btn-sm';
-    btnDelTag.textContent = 'Удалить закваску';
-    btnDelTag.style.cssText = 'background:#da3633;color:#fff;border-color:#da3633;';
-    btnDelTag.onclick = function(e){ e.stopPropagation(); tagDelete(tag.name, this); };
-    actions.appendChild(btnEdit);
-    actions.appendChild(btnDelTag);
-    var details = document.createElement('div');
-    details.style.cssText = 'display:none;margin-top:6px;padding-left:12px;';
-    (tag.domains || []).forEach(function(dom){
-      var row = document.createElement('div');
-      row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:2px 0;font-size:12px;';
-      var checked = dom.in_list === true || dom.in_list === 'true';
-      row.innerHTML = '<span style="color:' + (checked ? '#3fb950' : '#c9d1d9') + ';">' + dom.name + '</span>' +
-        '<span style="color:#8b949e;font-size:11px;">' + (checked ? '✓ в списке' : '—') + '</span>';
-      details.appendChild(row);
-    });
-    header.onclick = function(){
-      var hidden = details.style.display === 'none';
-      details.style.display = hidden ? 'block' : 'none';
-    };
-    wrap.appendChild(header);
-    wrap.appendChild(actions);
-    wrap.appendChild(details);
-    el.appendChild(wrap);
-  });
-}
-
-function tagsAdd(tag, btn) {
-  if (btn) loadingBtn(btn, true);
-  api('/cgi-bin/manage.sh?action=tags_add&tag=' + encodeURIComponent(tag), function(d){
-    if (btn) loadingBtn(btn, false);
-    var el = document.getElementById('tagsMsg');
-    if (!el) return;
-    if (d.ok) { el.className = 'msg ok'; el.textContent = d.msg || 'Добавлено'; loadTags(); }
-    else { el.className = 'msg err'; el.textContent = d.error || 'Ошибка'; }
-  });
-}
-
-function tagsDel(tag, btn) {
-  if (btn) loadingBtn(btn, true);
-  api('/cgi-bin/manage.sh?action=tags_del&tag=' + encodeURIComponent(tag), function(d){
-    if (btn) loadingBtn(btn, false);
-    var el = document.getElementById('tagsMsg');
-    if (!el) return;
-    if (d.ok) { el.className = 'msg ok'; el.textContent = d.msg || 'Удалено'; loadTags(); }
-    else { el.className = 'msg err'; el.textContent = d.error || 'Ошибка'; }
-  });
-}
-
-function normalizeDomain(d) {
-  return d.replace(/^(https?:\/\/)?(www\.)?/, '').replace(/\/+$/, '').trim();
-}
-
-function tagCreate(btn) {
-  var name = (document.getElementById('tagName') || {}).value || '';
-  var raw = (document.getElementById('tagDomains') || {}).value || '';
-  name = name.trim();
-  var domains = raw.split('\n').map(normalizeDomain).filter(function(d){ return d; }).join(' ');
-  if (!name) { var el = document.getElementById('tagsCreateMsg'); if (el) { el.className = 'msg err'; el.textContent = 'Введите имя закваски'; } return; }
-  if (!domains) { var el = document.getElementById('tagsCreateMsg'); if (el) { el.className = 'msg err'; el.textContent = 'Введите домены'; } return; }
-  if (btn) loadingBtn(btn, true);
-  api('/cgi-bin/manage.sh?action=tags_create&name=' + encodeURIComponent(name) + '&domains=' + encodeURIComponent(domains), function(d){
-    if (btn) loadingBtn(btn, false);
-    var el = document.getElementById('tagsCreateMsg');
-    if (!el) return;
-    if (d.ok) { el.className = 'msg ok'; el.textContent = d.msg || 'Создано'; if (document.getElementById('tagName')) document.getElementById('tagName').value = ''; if (document.getElementById('tagDomains')) document.getElementById('tagDomains').value = ''; loadTags(); }
-    else { el.className = 'msg err'; el.textContent = d.error || 'Ошибка'; }
-  });
-}
-
-function tagDelete(tag, btn) {
-  if (!confirm('Удалить закваску "' + tag + '"?')) return;
-  if (btn) loadingBtn(btn, true);
-  api('/cgi-bin/manage.sh?action=tags_delete&tag=' + encodeURIComponent(tag), function(d){
-    if (btn) loadingBtn(btn, false);
-    var el = document.getElementById('tagsMsg');
-    if (!el) return;
-    if (d.ok) { el.className = 'msg ok'; el.textContent = d.msg || 'Удалено'; loadTags(); }
-    else { el.className = 'msg err'; el.textContent = d.error || 'Ошибка'; }
-  });
-}
-
-function tagsEdit(tag, btn) {
-  document.getElementById('editTagName').value = tag;
-  document.getElementById('editTagDomains').value = '';
-  var overlay = document.getElementById('editTagOverlay');
-  overlay.style.display = 'flex';
-  loadTagDomainsForEdit(tag);
-}
-
-function tagsEditClose() {
-  document.getElementById('editTagOverlay').style.display = 'none';
-}
-
-function tagsEditSave(btn) {
-  var tag = document.getElementById('editTagName').value;
-  var raw = document.getElementById('editTagDomains').value || '';
-  var domains = raw.split('\n').map(normalizeDomain).filter(function(d){ return d; }).join(' ');
-  if (!tag) return;
-  if (btn) loadingBtn(btn, true);
-  api('/cgi-bin/manage.sh?action=tags_edit_save&tag=' + encodeURIComponent(tag) + '&domains=' + encodeURIComponent(domains), function(d){
-    if (btn) loadingBtn(btn, false);
-    var el = document.getElementById('tagsMsg');
-    if (!el) return;
-    if (d.ok) { el.className = 'msg ok'; el.textContent = d.msg || 'Сохранено'; tagsEditClose(); loadTags(); }
-    else { el.className = 'msg err'; el.textContent = d.error || 'Ошибка'; }
-  });
-}
-
-function loadTagDomainsForEdit(tag) {
-  api('/cgi-bin/manage.sh?action=tags_status&tag=' + encodeURIComponent(tag), function(d){
-    if (d.ok && d.domains) {
-      var text = d.domains.map(function(x){ return x.name; }).join('\n');
-      document.getElementById('editTagDomains').value = text;
-    }
-  });
-}
-
-function downloadTags() {
-  var xhr = new XMLHttpRequest();
-  xhr.open('GET', '/cgi-bin/manage.sh?action=tags_download', true);
-  xhr.setRequestHeader('X-KVAS-Token', AUTH_TOKEN);
-  xhr.responseType = 'text';
-  xhr.onload = function() {
-    var blob = new Blob([xhr.responseText], {type: 'text/plain'});
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'tags.list';
-    document.body.appendChild(a);
-    a.click();
-    URL.revokeObjectURL(a.href);
-    document.body.removeChild(a);
-  };
-  xhr.send();
-}
-
-function uploadTags(input) {
-  var file = input.files[0];
-  if (!file) return;
-  var replace = document.getElementById('tagReplace') && document.getElementById('tagReplace').checked;
-  var reader = new FileReader();
-  reader.onload = function(e) {
-    var content = e.target.result;
-    var el = document.getElementById('tagsMsg');
-    if (!el) return;
-    showProgress(0, replace ? 'Замена заквасок...' : 'Добавление заквасок...');
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/cgi-bin/manage.sh?action=tags_upload&replace=' + (replace ? '1' : '0'), true);
-    xhr.setRequestHeader('X-KVAS-Token', AUTH_TOKEN);
-    xhr.setRequestHeader('Content-Type', 'text/plain');
-    xhr.onload = function() {
-      try {
-        var d = JSON.parse(xhr.responseText);
-        hideProgress();
-        if (d.ok) { el.className = 'msg ok'; el.textContent = d.msg || 'Готово'; loadTags(); }
-        else { el.className = 'msg err'; el.textContent = d.error || 'Ошибка'; }
-      } catch(e) { hideProgress(); if (el) { el.className = 'msg err'; el.textContent = 'Ошибка: ' + e.message; } }
-    };
-    xhr.onerror = function() { hideProgress(); if (el) { el.className = 'msg err'; el.textContent = 'Ошибка сети'; } };
-    xhr.send(content);
-  };
-  reader.readAsText(file);
-  input.value = '';
-}
-
 /* ========== SYSTEM ========== */
 function loadSystemStatus() {
   api('/cgi-bin/manage.sh?action=system_status', function(d){
@@ -926,7 +681,7 @@ function loadHosts() {
   showProgress(0, 'Загрузка списка доменов');
   api('/cgi-bin/manage.sh?action=hosts', function(d){
     hideProgress();
-    if (!d.ok) { el.innerHTML = '<div class="status status-err">' + (d.error||'error') + '</div>'; return; }
+    if (!d.ok) { el.innerHTML = '<div class="status status-err">' + esc(d.error||'error') + '</div>'; return; }
     if (!d.hosts || !d.hosts.length) { el.innerHTML = '<div class="status" style="color:#8b949e;">Список пуст</div>'; return; }
     el.innerHTML = '';
     allHosts = d.hosts;
@@ -935,9 +690,10 @@ function loadHosts() {
       var div = document.createElement('div');
       div.className = 'host-item';
       var badge = isWild ? '<span class="wc-badge" title="поддомены включены">*.sub</span>' : '';
-      div.innerHTML = '<span class="host-name">' + h + '</span>'
+      div.innerHTML = '<span class="host-name">' + esc(h) + '</span>'
         + badge
-        + '<span class="del" onclick="hostDel(\'' + h.replace(/'/g,"\\'") + '\')">✕</span>';
+        + '<span class="del">✕</span>';
+      div.querySelector('.del').onclick = function(){ hostDel(h); };
       el.appendChild(div);
     });
   });
@@ -1053,7 +809,7 @@ function hostAdd() {
     domain = '*.' + domain.slice(1);
   }
   var btn = document.querySelector('#hostInput + .btn');
-  showProgress(0, 'Добавление <b>' + domain + '</b>');
+  showProgress(0, 'Добавление ' + domain);
   btn.disabled = true;
   api('/cgi-bin/manage.sh?action=host_add&domain=' + encodeURIComponent(domain), function(d){
     btn.disabled = false;
@@ -1066,7 +822,7 @@ function hostAdd() {
 
 function hostDel(domain) {
   if (!confirm('Удалить ' + domain + '?')) return;
-  showProgress(0, 'Удаление <b>' + domain + '</b>');
+  showProgress(0, 'Удаление ' + domain);
   api('/cgi-bin/manage.sh?action=host_del&domain=' + encodeURIComponent(domain), function(d){
     var el = document.getElementById('hostMsg');
     hideProgress();
@@ -1475,8 +1231,8 @@ function fetchDevices() {
       el.className = 'device-item' + activeCls;
       el.dataset.ip = d.ip;
       el.innerHTML = '<input type="checkbox" class="cb"' + checked + '>' +
-        '<span class="ip">' + d.ip + '</span>' +
-        '<span class="name">' + (d.name || '-') + '</span>' +
+        '<span class="ip">' + esc(d.ip) + '</span>' +
+        '<span class="name">' + esc(d.name || '-') + '</span>' +
         statusBadge + activityBadge;
       el.onclick = function(e) { if (e.target.tagName === 'INPUT') return; var cb = el.querySelector('.cb'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); };
       el.querySelector('.cb').onchange = function() {
@@ -1490,7 +1246,7 @@ function fetchDevices() {
     container.className = 'device-list' + (devices.length > 20 ? ' col3' : '');
     devSel.value = curVal;
   }).catch(function(err){
-    document.getElementById('deviceList').innerHTML = '<div class="status" style="text-align:center;color:#f85149;">Ошибка: ' + err.message + '</div>';
+    document.getElementById('deviceList').innerHTML = '<div class="status" style="text-align:center;color:#f85149;">Ошибка: ' + esc(err.message) + '</div>';
   });
 }
 
@@ -1521,7 +1277,7 @@ function addManualIP() {
   el.className = 'device-item active';
   el.dataset.ip = ip;
   el.innerHTML = '<input type="checkbox" class="cb" checked>' +
-    '<span class="ip">' + ip + '</span>' +
+    '<span class="ip">' + esc(ip) + '</span>' +
     '<span class="name">вручную</span>' +
     '<span class="badge" style="color:#8b949e;">в сети</span>';
   el.onclick = function(e) { if (e.target.tagName === 'INPUT') return; };
@@ -1602,7 +1358,7 @@ function poll() {
   pollInFlight = true;
   fetch(url, {headers:{'X-KVAS-Token':AUTH_TOKEN}}).then(function(r){return r.json()}).then(function(data){
     pollErrors = 0;
-    if (data.error) { logMsg('log-error', '<span class="log-err">' + data.error + '</span>'); return; }
+    if (data.error) { logMsg('log-error', '<span class="log-err">' + esc(data.error) + '</span>'); return; }
     var count = 0;
     if (data.connections) data.connections.forEach(function(c){
       var key = [c.proto, c.src, c.sport, c.dst, c.dport].join('|');
@@ -1613,12 +1369,12 @@ function poll() {
       var cls = c.proto === 'tcp' ? 'log-tcp' : 'log-udp';
       var dstDisplay = c.dst + ':' + c.dport;
       if (c.dname && c.dname !== c.dst) dstDisplay = c.dname + ' (' + c.dst + ':' + c.dport + ')';
-      logMsg(cls, '<span class="log-ip">' + c.src + '</span> <span class="' + cls + '">' + c.proto.toUpperCase() + '</span> ' + c.src + ':' + c.sport + ' → ' + dstDisplay);
+      logMsg(cls, '<span class="log-ip">' + esc(c.src) + '</span> <span class="' + cls + '">' + esc(String(c.proto).toUpperCase()) + '</span> ' + esc(c.src + ':' + c.sport) + ' → ' + esc(dstDisplay));
     });
     if (data.dns) data.dns.forEach(function(d){
       var dnsKey = d.raw || d.domain; var dnsNow = Date.now(); var firstDns = !seenDnsAt.has(dnsKey);
       seenDnsAt.set(dnsKey, dnsNow);
-      if (firstDns) { count++; logMsg('log-dns', '<span class="log-ip">DNS</span> ' + d.domain); }
+      if (firstDns) { count++; logMsg('log-dns', '<span class="log-ip">DNS</span> ' + esc(d.domain)); }
     });
     var expireBefore = Date.now() - 30000;
     seenConnectionAt.forEach(function(value, key){ if (value < expireBefore) seenConnectionAt.delete(key); });
@@ -1627,7 +1383,7 @@ function poll() {
     if (count > 0) document.getElementById('pollCount').textContent = '+' + count + ' events';
   }).catch(function(err){
     pollErrors++;
-    if (pollErrors <= 3) logMsg('log-error', '<span class="log-err">Ошибка (' + pollErrors + '/' + MAX_POLL_ERRORS + '): ' + err.message + '</span>');
+    if (pollErrors <= 3) logMsg('log-error', '<span class="log-err">Ошибка (' + pollErrors + '/' + MAX_POLL_ERRORS + '): ' + esc(err.message) + '</span>');
     if (pollErrors >= MAX_POLL_ERRORS) {
       stopPolling(); monitoring = false;
       document.getElementById('btnStart').textContent = 'Запустить мониторинг';
@@ -1674,7 +1430,7 @@ function consoleLog(msg) {
   var el = document.getElementById('consoleOutput');
   if (!el) return;
   var ts = new Date().toLocaleTimeString();
-  el.innerHTML += '<div><span style="color:#484f58;">' + ts + '</span> ' + msg + '</div>';
+  el.innerHTML += '<div><span style="color:#484f58;">' + ts + '</span> ' + esc(msg) + '</div>';
   el.scrollTop = el.scrollHeight;
   while (el.children.length > 100) el.removeChild(el.firstChild);
 }
@@ -1761,7 +1517,7 @@ function adblockProgress(pct, text) {
   if (pct < 0) { el.style.display = 'none'; return; }
   el.style.display = 'block';
   fill.style.width = pct + '%';
-  txt.innerHTML = '<span class="spinner"></span> ' + text;
+  txt.innerHTML = '<span class="spinner"></span> ' + esc(text);
 }
 
 function adblockUpdate(btn) {
@@ -2013,7 +1769,7 @@ function loadRouteLists() {
     if (d.guest_nets) {
       var nets = d.guest_nets.split(',').map(function(s){return s.trim()}).filter(function(s){return s});
       if (nets.length) {
-        gl.innerHTML = nets.map(function(n){return '<div class="host-item">' + n + '</div>'}).join('');
+        gl.innerHTML = nets.map(function(n){return '<div class="host-item">' + esc(n) + '</div>'}).join('');
       } else {
         gl.innerHTML = '<div class="status" style="color:#8b949e;">Нет гостевых сетей</div>';
       }
@@ -2032,7 +1788,7 @@ function loadRouteLists() {
     d.devices.forEach(function(dev) {
       var div = document.createElement('div');
       div.className = 'host-item';
-      div.innerHTML = '<span style="color:#58a6ff;min-width:120px;">' + dev.ip + '</span> ' + dev.name;
+      div.innerHTML = '<span style="color:#58a6ff;min-width:120px;">' + esc(dev.ip) + '</span> ' + esc(dev.name);
       div.onclick = function() { document.getElementById('routeIp').value = dev.ip; };
       div.style.cursor = 'pointer';
       el.appendChild(div);
@@ -2122,19 +1878,6 @@ function routeGuestDel() {
 }
 
 </script>
-
-<!-- Modal: Edit Tag -->
-<div id="editTagOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:999;justify-content:center;align-items:center;">
-  <div style="background:#0d1117;color:#c9d1d9;border-radius:8px;padding:20px;width:90%;max-width:500px;max-height:80vh;display:flex;flex-direction:column;border:1px solid #30363d;">
-    <h3 style="margin:0 0 12px 0;font-size:16px;color:#e6edf3;">Редактировать закваску</h3>
-    <input type="text" id="editTagName" readonly style="width:100%;padding:6px;margin-bottom:8px;border:1px solid #30363d;border-radius:4px;background:#161b22;color:#c9d1d9;font-family:monospace;font-size:13px;">
-    <textarea id="editTagDomains" placeholder="Домены (каждый с новой строки)" style="flex:1;min-height:200px;padding:6px;border:1px solid #30363d;border-radius:4px;background:#0d1117;color:#c9d1d9;font-family:monospace;font-size:13px;resize:vertical;"></textarea>
-    <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end;">
-      <button class="btn btn-sm" onclick="tagsEditClose()" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;">Отмена</button>
-      <button class="btn btn-sm success" onclick="tagsEditSave(this)" style="background:#1f6feb;color:#fff;border:none;">Сохранить</button>
-    </div>
-  </div>
-</div>
 
 </body>
 </html>

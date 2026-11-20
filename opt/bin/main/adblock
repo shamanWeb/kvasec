@@ -20,10 +20,15 @@
 [ -z "${1}" ] && echo "Загрузка хостов для блокировки из источников..."
 logger -t "kvas" "Запущен файл ${0}"
 
+# Всё промежуточное — в /opt/tmp/adblock (на роутере /opt/tmp → /tmp, RAM: флеш не трогаем).
+# Список собирается С НУЛЯ в WORK и одним mv заменяет рабочий: раньше скачанное
+# дописывалось к старому ads.kvas.list, и убранные из источников/block.list домены
+# оставались в блокировке навсегда.
 tmp_path="/opt/tmp/adblock"
-TMP_FILE="/opt/tmp/hosts.tmp"
-TMP_ADS_FILE="/opt/tmp/hosts.ads"
-DNSMASQ_DEMON="/opt/etc/init.d/S56dnsmasq"
+TMP_FILE="${tmp_path}/hosts.tmp"
+TMP_ADS_FILE="${tmp_path}/hosts.ads"
+NEW_FILE="${tmp_path}/hosts.new"
+WORK_FILE="${tmp_path}/hosts.work"
 ERROR_SOURCE="/opt/tmp/kvas.err.log"
 ADS_SOURCES_FILE="/opt/etc/adblock/sources.list"
 ADBLOCK_LIST_EXCEPTION="/opt/etc/adblock/exception.list"
@@ -86,7 +91,8 @@ check_files_present(){
 #--------------------------------------------------------------
 load_adblock_hosts(){
 
-	score=0; hosts=0
+	score=0; hosts=0; ok_sources=0
+	: > "${NEW_FILE}"
 	total=$(cat < "${ADS_SOURCES_FILE}" | sed '/^$/d; /^#/d' | wc -l )
 	while read -r source || [ -n "${source}" ]; do
 
@@ -94,7 +100,10 @@ load_adblock_hosts(){
 		[ "${source::1}" = "#" ] && continue
 
 		score=$((score+1))
-		curl "${source}" -o "${TMP_FILE}" &>/dev/null
+		# -f: 404/5xx не выдаём за список; таймауты — иначе зависший (DPI) источник
+		# вешал загрузку роутера (S96kvas → kvas init → update_adblock)
+		rm -f "${TMP_FILE}"
+		curl -fsSL --connect-timeout 15 --max-time 180 "${source}" -o "${TMP_FILE}" &>/dev/null
 
 	#	пропускаем источники, которые не удалось скачать
 		if [ ! -s "${TMP_FILE}" ]; then
@@ -110,15 +119,15 @@ load_adblock_hosts(){
 			continue
 		fi
 
-		cat < "${TMP_FILE}" | grep -vE "${grepv}" >> "${ADBLOCK_HOSTS_FILE}"
+		cat < "${TMP_FILE}" | grep -vE "${grepv}" >> "${NEW_FILE}"
+		ok_sources=$((ok_sources + 1))
 		progress_bar "${score}" "${total}" ""
 
 	done < "${ADS_SOURCES_FILE}"
 	printf "\n"
 	print_line
 
-	cat "${TMP_ADS_FILE}" "${ADBLOCK_HOSTS_FILE}" > "${TMP_FILE}"
-	mv "${TMP_FILE}"  "${ADBLOCK_HOSTS_FILE}"
+	cat "${TMP_ADS_FILE}" "${NEW_FILE}" > "${WORK_FILE}"
 
 
 	if [ -f ${ERROR_SOURCE} ]; then
@@ -138,8 +147,8 @@ load_adblock_hosts(){
 #--------------------------------------------------------------
 remove_duplicates(){
 	ready "Сортировка и удаление дубликатов"
-	nlines_all=$(cat < "${ADBLOCK_HOSTS_FILE}" | wc -l)
-	cat < "${ADBLOCK_HOSTS_FILE}" | sort -u > ${TMP_FILE}
+	nlines_all=$(cat < "${WORK_FILE}" | wc -l)
+	sort -u "${WORK_FILE}" > "${TMP_FILE}"
 	nlines_sorted=$(cat < "${TMP_FILE}" | wc -l)
 	when_ok "ГОТОВО"
 }
@@ -152,7 +161,6 @@ remove_duplicates(){
 #--------------------------------------------------------------
 remove_white_hosts(){
 
-	nlines_amount=$(cat < "${ADBLOCK_HOSTS_FILE}" | wc -l)
 	if [ -f "${KVAS_LIST_FILE}" ] && [ "$(cat < "${KVAS_LIST_FILE}" | wc -l )" -ge 1 ]; then
 		ready "Удаляем хосты, находящиеся в защищенном списке"
 		awk '
@@ -165,13 +173,13 @@ remove_white_hosts(){
 				}
 				if (keep) print
 			}
-		' "${KVAS_LIST_FILE}" "${TMP_FILE}" > "${ADBLOCK_HOSTS_FILE}"
+		' "${KVAS_LIST_FILE}" "${TMP_FILE}" > "${WORK_FILE}"
 		when_ok "ГОТОВО"
-		nlines_excluded_wl=$(cat < "${ADBLOCK_HOSTS_FILE}" | wc -l)
-		rm "${TMP_FILE}"
+		nlines_excluded_wl=$(cat < "${WORK_FILE}" | wc -l)
+		rm -f "${TMP_FILE}"
 
 	else
-		mv "${TMP_FILE}" "${ADBLOCK_HOSTS_FILE}"
+		mv -f "${TMP_FILE}" "${WORK_FILE}"
 		nlines_excluded_wl="${nlines_sorted}"
 	fi
 }
@@ -184,16 +192,35 @@ remove_white_hosts(){
 #--------------------------------------------------------------
 remove_exception_hosts(){
 
-	nlines_amount=$(cat < "${ADBLOCK_HOSTS_FILE}" | wc -l)
+	nlines_amount=$(cat < "${WORK_FILE}" | wc -l)
 	if [ -f "${ADBLOCK_LIST_EXCEPTION}" ] && [ "$(cat < "${ADBLOCK_LIST_EXCEPTION}" | wc -l )" -ge 1 ]; then
 		ready "Удаляем хосты, находящиеся в списке исключений"
-		exclude_all="$(get_separated_host_list "${ADBLOCK_LIST_EXCEPTION}")"
-		sed -i "/${exclude_all}/d" "${ADBLOCK_HOSTS_FILE}"
+		ads_filter_exceptions "${ADBLOCK_LIST_EXCEPTION}" "${WORK_FILE}" > "${TMP_FILE}" \
+			&& mv -f "${TMP_FILE}" "${WORK_FILE}"
 		when_ok "ГОТОВО"
-		nlines_excluded_ex=$(cat < "${ADBLOCK_HOSTS_FILE}" | wc -l)
+		nlines_excluded_ex=$(cat < "${WORK_FILE}" | wc -l)
 	else
 		nlines_excluded_ex="${nlines_amount}"
 	fi
+}
+
+#--------------------------------------------------------------
+#
+# 	Заменяем рабочий список собранным (атомарно: копия рядом + mv,
+# 	dnsmasq не увидит полуфайл). Если не скачался ни один источник —
+# 	рабочий список не трогаем (сбой сети не должен выключать блокировку).
+#
+#--------------------------------------------------------------
+install_new_list(){
+	if [ "${ok_sources}" -eq 0 ]; then
+		error "Не удалось скачать ни один источник — текущий список блокировки оставлен без изменений."
+		logger "kvas adblock: источники недоступны, список не изменён"
+		return 1
+	fi
+	mkdir -p "$(dirname "${ADBLOCK_HOSTS_FILE}")"
+	cp -f "${WORK_FILE}" "${ADBLOCK_HOSTS_FILE}.new.$$" \
+		&& mv -f "${ADBLOCK_HOSTS_FILE}.new.$$" "${ADBLOCK_HOSTS_FILE}" \
+		|| { rm -f "${ADBLOCK_HOSTS_FILE}.new.$$"; error "Не удалось записать ${ADBLOCK_HOSTS_FILE}"; return 1; }
 }
 
 
@@ -205,10 +232,12 @@ remove_exception_hosts(){
 #
 #--------------------------------------------------------------
 dnsmasq_test(){
-	[ -f "${DNSMASQ_DEMON}" ] && {
-		if grep -q alive "${DNSMASQ_DEMON}"; then
-			ready "Проверяем на ошибки скаченные файлы"
-			/opt/sbin/dnsmasq --test --hostsdir="${tmp_path}"  &> /dev/null
+	# (раньше: grep alive по ТЕКСТУ init-скрипта — не совпадал никогда, и --test
+	#  по пустому hostsdir. Теперь — проверка конфигурации dnsmasq.)
+	[ -x /opt/sbin/dnsmasq ] && {
+		if true; then
+			ready "Проверяем конфигурацию dnsmasq"
+			/opt/sbin/dnsmasq --test &> /dev/null
 			if [ "$?" = 0 ]; then
 				when_ok "ГОТОВО"
 				logger "Рекламных хостов для блокировки добавлено $(dig_frm ${hosts}) шт."
@@ -270,11 +299,11 @@ result_show(){
 #
 #--------------------------------------------------------------
 restart_dnsmasq(){
-	[ -f "${DNSMASQ_DEMON}" ] && {
-        if grep -q alive "${DNSMASQ_DEMON}"; then
-                "${DNSMASQ_DEMON}" restart &> /dev/null
-        fi
-	} || exit 0
+	# Раньше grep alive по тексту init-скрипта не совпадал никогда — после «Обновить
+	# списки» dnsmasq не перечитывал новый список. SIGHUP для addn-hosts, рестарт —
+	# только если изменился kvas-parental.dnsmasq (см. restart_dns_service).
+	pidof dnsmasq >/dev/null 2>&1 || return 0
+	restart_dns_service "${parental_before}" >/dev/null
 }
 
 
@@ -283,11 +312,12 @@ restart_dnsmasq(){
 # 	Основной блок запуска
 #
 #--------------------------------------------------------------
+parental_before=$(parental_dns_sum)
+# Проверяем на наличие необходимые файлы (чистит tmp_path — до add_regular_ads)
+check_files_present
 # Включаем в список блокировки уже зарекомендовавшие себя 100% рекламные домены
 add_regular_ads
 [ -x /opt/apps/kvas/bin/main/parental_dns ] && /opt/apps/kvas/bin/main/parental_dns
-# Проверяем на наличие необходимые файлы
-check_files_present
 print_line
 # Загружаем из источников рекламные доменные имена
 load_adblock_hosts
@@ -297,10 +327,13 @@ remove_duplicates
 # и в списке исключений
 remove_white_hosts
 remove_exception_hosts
+install_new_list; list_rc=$?
 # Отображаем результаты произведенных манипуляций со списком блокировки
 result_show
 # Тестируем полученный список доменных имен блокировки рекламы на dnsmasq
 dnsmasq_test
 #print_line
-# Перезапускаем сервис dnsmasq
+# Применяем в dnsmasq (SIGHUP / рестарт)
 restart_dnsmasq
+rm -rf "${tmp_path}"
+exit "${list_rc}"

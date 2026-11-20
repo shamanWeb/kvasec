@@ -6,7 +6,6 @@
 #--------------------------------------------------------------------------------------------------------------
 
 # по умолчанию включаем режим обновления KVASECа
-UPDATE_MODE=true
 
 #--------------------------------------------------------------------------------------------------------------
 # Аргументы запуска данного файла
@@ -124,7 +123,8 @@ select_release_from_list(){
 #	Функция выводит на экран доступные в репозитории версии пакетов KVASEC
 # 	и позволяет выбрать один из них в случае использования режима "отката"
 
-	url_list=$(gh_api "${release_url}" | jq -r '.[] | .assets | .[] | .browser_download_url')
+	# только пакеты: рядом лежат .sha256, их в меню отката не показываем
+	url_list=$(gh_api "${release_url}" | jq -r '.[] | .assets[] | select(.name | endswith(".ipk")) | .browser_download_url')
 	rel_list=$(echo "${url_list}" | cut -d'/' -f8)
 	num=1; total=$(echo "${rel_list}" | wc -l)
 
@@ -151,17 +151,22 @@ select_release_from_list(){
 				[qQ])					# если выбрали выход
 					print_error "Прервано пользователем!"
 					exit 0 ;;
-				[1-["${total}"])		# если выбрали один из номеров из списка
-					print_line
-					eval "${1}=$(echo "${url_list}" | sed -n "${num_release}p")"
-					break ;;
 				'')						# если просто нажали Enter (выбираем 1 позицию - крайний релиз)
 					print_line
 					eval "${1}=$(echo "${url_list}" | sed -n '1p')"
 					break ;;
-				*)						# при прочих вариантах - выводим сообщение об ошибке
+				*[!0-9]*)				# не число
 					print_line
 					echo -e "${RED}Введите цифру от 1 до ${total}.${NOCL}" ;;
+				*)						# номер из списка (не шаблон [1-N]: при N≥10 он ломался)
+					if [ "${num_release}" -lt 1 ] || [ "${num_release}" -gt "${total}" ]; then
+						print_line
+						echo -e "${RED}Введите цифру от 1 до ${total}.${NOCL}"
+					else
+						print_line
+						eval "${1}=$(echo "${url_list}" | sed -n "${num_release}p")"
+						break
+					fi ;;
 				esac
 		done
 	fi
@@ -214,7 +219,9 @@ verify_package(){
 	# $1 = путь к .ipk
 	[ -s "$1" ] && gzip -t "$1" 2>/dev/null || return 1
 	tar -tzf "$1" 2>/dev/null | grep -q 'data.tar.gz' || return 1
-	# sha256 из релиза (есть у релизов, собранных CI; у старых — нет, тогда хватит gzip/tar)
+	# sha256 из релиза. Для версий ≥1.2.15 (у них есть .sha256) он ОБЯЗАТЕЛЕН: раньше
+	# при неудачном скачивании .sha256 проверка молча пропускалась. Более старые
+	# релизы (откат) публиковались без него — для них хватает gzip/tar.
 	sum_file="/tmp/$(basename "$1").sha256"
 	rm -f "${sum_file}"
 	if gh_download "${package_url}.sha256" "${sum_file}" && [ -s "${sum_file}" ]; then
@@ -222,6 +229,14 @@ verify_package(){
 		got=$(sha256sum "$1" | cut -d' ' -f1)
 		rm -f "${sum_file}"
 		[ -n "${want}" ] && [ "${want}" = "${got}" ] || return 1
+	else
+		rm -f "${sum_file}"
+		# .sha256 публикуется с v1.2.15 — для них обязателен, откат на более старые без него
+		_v=$(version_key "$(get_package_version "$(basename "$1")")")
+		if [ -n "${_v}" ] && [ "${_v}" -ge 1002015 ]; then
+			print_error "Не удалось получить SHA-256 пакета — установка отменена."
+			return 1
+		fi
 	fi
 	return 0
 }
@@ -263,7 +278,6 @@ has_no_internet_here && {
 # то не важно на каком он месте мы делаем полное удаление пакета
 if echo "${*}" | grep -q full ; then
 	remove_mode=full
-	UPDATE_MODE=false
 else
 	remove_mode=''
 fi
@@ -300,7 +314,7 @@ if echo "${*}" | grep -qv 'force' ; then
 	else
 	#	Если НЕ обнаружена предыдущая версия KVASECа
 	#	то это значит, что производим новую установку KVASECа
-		UPDATE_MODE=false
+		:
 	fi
 fi
 
@@ -350,38 +364,31 @@ verify_package "/opt/packages/${package_name}" || {
 }
 
 #--------------------------------------------------------------------------------------------------------------
-# если обнаружена предыдущая незавершенная установка пакета
-if [ -f /opt/bin/kvas ] && kvas | grep -q 'Настройка пакета не завершена' ; then
-	ready 'Удаляем незавершенную ранее установку пакета ...'
-	kvas uninstall "${remove_mode}" yes &>/dev/null && when_ok || when_err
-else
-#	если все хорошо и обнаружена предыдущая версия пакета, то удаляем ее
-	if [ -f /opt/bin/kvas ]; then
-		# shellcheck disable=SC2034  # ver/rel нужны закомментированному сообщению ниже
-		ver=$(grep "APP_VERSION=" "${kvas_conf}" | cut -d'=' -f2)
-		# shellcheck disable=SC2034
-		rel=$(grep "APP_RELEASE=" "${kvas_conf}" | cut -d'=' -f2)
-		#ready "Удаляем предыдущую версию пакета  [${ver} ${rel}]..."
-		kvas uninstall "${remove_mode}" yes # && when_ok || when_err
-	fi
+# Ставим ПОВЕРХ установленной версии, без предварительного `kvas uninstall`.
+# Раньше: uninstall → install. Если install падал (лок opkg, нет места, зависимость) —
+# kvas на роутере не оставалось; uninstall к тому же стирал /opt/etc/adblock (block.list
+# родительского контроля — так он потерялся 2026-11-09), а восстановление конфигов делал
+# только интерактивный `kvas setup`, который без TTY пропускается. postinst рассчитан на
+# обновление: конфиги не затирает, перегенерирует libs/ndm, делает kvas init и
+# перезапускает сторож. --force-downgrade — для отката на старую версию.
+# `kvas upgrade … full` — явный запрос «переустановка с удалением данных»: только тогда
+# сначала полностью удаляем (конфиги, списки) и после установки нужен `kvas setup`.
+if [ "${remove_mode}" = full ] && [ -f /opt/bin/kvas ]; then
+	ready 'Полностью удаляем установленную версию (режим full)...'
+	kvas uninstall full yes &>/dev/null && when_ok || when_err
 fi
 
-#--------------------------------------------------------------------------------------------------------------
 ready "Устанавливаем новую версию пакета [${version}]..."
-{
-	opkg update &> /dev/null
-	opkg install "/opt/packages/${package_name}"
+opkg update &> /dev/null
+if opkg install --force-reinstall --force-downgrade "/opt/packages/${package_name}" > /tmp/kvas-upgrade-opkg.log 2>&1; then
+	when_ok
+else
+	when_err
+	print_error "opkg не установил пакет — работает прежняя версия. Лог: /tmp/kvas-upgrade-opkg.log"
+	tail -5 /tmp/kvas-upgrade-opkg.log
+	exit 1
+fi
 
-} &>/dev/null && when_ok || when_err
-
-#--------------------------------------------------------------------------------------------------------------
-connect_home_nets(){
-	# подключаем одну гостевую сеть к KVASECу, если она имеется
-	/opt/sbin/ip a | grep global | grep -v br0 | grep -qE 'br[1-9]' &&  {
-		clear
-		kvas vpn net add
-	}
-}
 
 if ! [ -f /opt/bin/kvas ] ; then
 	print_line
@@ -401,26 +408,17 @@ else
 		echo "и выполнить команду 'kvas setup ${UPDATE_MODE}'"
 		rci_post '[{"opkg": {"dns-override": true}},{"system": {"configuration": {"save": true}}}]' &>/dev/null 
 	}
-		# 	если файл пакета найден после установки пакета,
-	# 	то запускаем установку и затем тестирование пакета.
-	# 	kvas setup интерактивен — запускаем ТОЛЬКО при наличии TTY, иначе
-	# 	зависнет на read (cron/скрипт/оборванный ssh). Базовую настройку
-	# 	(dnsmasq/routing/watcher) уже выполнил postinst.
-	if [ -t 0 ] ; then
-		kvas setup "${UPDATE_MODE}" && {
-			# подключаем гостевые сети, если они имется
-			connect_home_nets
-			print_line
-			echo 'Тестируем настройки...'
-#			В данном случае, чтобы не печатать линию после
-#			окончания тестирования дважды передаем параметр upgrade
-			kvas test upgrade
-		}
-	else
+	# Интерактивный `kvas setup` после обновления больше не нужен: пакет ставится поверх,
+	# конфиги на месте, базовую настройку сделал postinst. (setup к тому же удаляет и
+	# переустанавливает dnsmasq-full.) Если же первичная настройка не завершалась — просим.
+	if ! grep -qE '^SETUP_FINISHED=.+' /opt/etc/kvas.conf 2>/dev/null ; then
 		print_line
-		echo "Не-интерактивный режим: пропускаем интерактивный kvas setup."
-		echo "При необходимости запустите 'kvas setup' вручную в терминале."
+		echo "Первичная настройка пакета не завершена — запустите 'kvas setup' в терминале."
 		print_line
+	elif [ -t 0 ] ; then
+		print_line
+		echo 'Тестируем настройки...'
+		kvas test upgrade
 	fi
 fi
 

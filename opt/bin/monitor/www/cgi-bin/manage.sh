@@ -1,6 +1,6 @@
 #!/bin/sh
 # Management API for KVAS Web UI v2
-# Actions: auth, hosts, vpn, upgrade, backup, restore, update, kvas_list
+# Actions: auth, hosts, vpn, upgrade, backup, restore, update, …
 
 PASS_FILE=/opt/kvas_web_pass
 TOKEN_DIR=/tmp/kvas_web_tokens
@@ -18,14 +18,20 @@ BLOCK_WATCH_PID=/tmp/kvas-block-watch.pid
 BLOCK_WATCH_EVENTS=/tmp/kvas-block-watch.events
 BLOCK_WATCH_LOCK_DIR=/tmp/kvas-block-watch.lock.d
 KVAS_LIST=/opt/etc/kvas.list
-TAGS_FILE=/opt/etc/tags.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
+CONF_LOCK_DIR=/tmp/kvas_conf.lock
 IOT_LOCKDOWN_LIST=/opt/etc/kvas-iot-lockdown.list
 IOT_LOCKDOWN_HOOK=/opt/etc/ndm/netfilter.d/090-iot-lockdown
 PARENTAL_LIST=/opt/etc/adblock/block.list
 ADGUARD_WEB_PID=/tmp/kvas-adguard-web.pid
 ADGUARD_WEB_LOG=/tmp/kvas-adguard-web.log
 ADGUARD_WEB_BACKUP=/opt/kvas_backup/web-adguard-dns
+
+# JSON-экранирование строки внутри awk: посимвольно, т.к. экранирование в замене gsub
+# у busybox awk и mawk разное (прежний gsub в busybox оставлял кавычку неэкранированной).
+# Управляющие символы → пробел.
+AWK_JESC='function jesc(s,  o, i, c) { o = ""; for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); if (c == "\\" || c == "\"") o = o "\\" c; else if (c < " ") o = o " "; else o = o c } return o }
+'
 
 json_str() { printf '%s' "$1" | jq -Rs '.' 2>/dev/null || printf '"%s"' "$1" | sed 's/"/\\"/g'; }
 json_error() { printf '{"error":%s}\n' "$(json_str "$1")"; exit 0; }
@@ -125,6 +131,9 @@ valid_domain() {
 
 # MAC в нижнем регистре (нормализованный) либо пусто при некорректном вводе.
 normalize_mac() {
+	# многострочный ввод (%0A) — отказ: grep -Eo по строкам вернул бы два «валидных» MAC
+	case "$1" in *"
+"*) return 0 ;; esac
 	printf '%s' "$1" | tr 'A-F' 'a-f' | grep -Eo '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'
 }
 
@@ -231,9 +240,26 @@ clear_stale_block_watch() {
 # Query values are URL-encoded by the WebUI.  Decode only after selecting a
 # field, so an encoded ampersand cannot change the query structure.
 url_decode() {
-	local encoded
-	encoded=$(printf '%s' "$1" | sed 's/+/ /g; s/%/\\x/g')
-	printf '%b' "$encoded"
+	# awk, а не printf %b: в dash %b не знает \x, а \c обрывает вывод.
+	# %00 и управляющие символы (кроме \t \n \r) выбрасываются; битый % остаётся как есть.
+	printf '%s' "$1" | LC_ALL=C awk '
+		BEGIN { for (i = 0; i < 256; i++) hex[sprintf("%02x", i)] = i }
+		{
+			if (NR > 1) printf "\n"
+			s = $0; gsub(/\+/, " ", s); out = ""
+			while ((p = index(s, "%")) > 0) {
+				out = out substr(s, 1, p - 1)
+				h = tolower(substr(s, p + 1, 2))
+				if (h in hex) {
+					n = hex[h]
+					if (n >= 32 || n == 9 || n == 10 || n == 13) out = out sprintf("%c", n)
+					s = substr(s, p + 3)
+				} else {
+					out = out "%"; s = substr(s, p + 1)
+				}
+			}
+			printf "%s", out s
+		}'
 }
 
 query_param() {
@@ -272,45 +298,100 @@ verify_password() {
 	esac
 }
 
-# Brute-force protection (global)
+# Brute-force protection.
+# Счётчики: по адресу клиента (SOCAT_PEERADDR от socat) и общий. Раньше был только
+# общий — любой хост LAN 5 ошибками блокировал вход владельцу. Общий потолок выше,
+# чтобы перебор со сменой IP всё равно упирался в лимит.
+# Проверка → проверка пароля → запись ошибки идут под одним локом (auth_lock):
+# иначе параллельные запросы все читали счётчик < MAX_FAILS и лимита не было.
 FAIL_COUNT=/tmp/kvas_fail_count
 FAIL_TIME=/tmp/kvas_fail_time
+AUTH_LOCK_DIR=/tmp/kvas_auth.lock
 MAX_FAILS=5
+MAX_FAILS_TOTAL=30
 LOCKOUT=300
 
-check_bruteforce() {
-	[ ! -f "$FAIL_COUNT" ] && return 0
-	local fails=$(cat "$FAIL_COUNT" 2>/dev/null)
-	[ -z "$fails" ] && return 0
-	[ "$fails" -lt "$MAX_FAILS" ] 2>/dev/null && return 0
-	local last=$(cat "$FAIL_TIME" 2>/dev/null || echo 0)
-	local now=$(date +%s 2>/dev/null || echo 0)
-	local elapsed=$((now - last))
-	if [ "$elapsed" -lt "$LOCKOUT" ]; then
-		echo $((LOCKOUT - elapsed))
-		return 1
+peer_id() {
+	case "$SOCAT_PEERADDR" in
+		''|*[!0-9.]*) echo unknown ;;
+		*) echo "$SOCAT_PEERADDR" ;;
+	esac
+}
+
+# Блокировка по паре файлов счётчика: печатает остаток секунд и возвращает 1.
+# Ошибки старше LOCKOUT забываются (окно), а не копятся бесконечно.
+lockout_wait() {
+	local count_file="$1" time_file="$2" max="$3" fails last now elapsed
+	fails=$(cat "$count_file" 2>/dev/null)
+	[ -n "$fails" ] || return 0
+	last=$(cat "$time_file" 2>/dev/null || echo 0)
+	now=$(date +%s 2>/dev/null || echo 0)
+	elapsed=$((now - last))
+	if [ "$elapsed" -ge "$LOCKOUT" ]; then
+		rm -f "$count_file" "$time_file"
+		return 0
 	fi
-	rm -f "$FAIL_COUNT" "$FAIL_TIME"
-	return 0
+	[ "$fails" -lt "$max" ] 2>/dev/null && return 0
+	echo $((LOCKOUT - elapsed))
+	return 1
+}
+
+check_bruteforce() {
+	local peer
+	peer=$(peer_id)
+	lockout_wait "$FAIL_COUNT.$peer" "$FAIL_TIME.$peer" "$MAX_FAILS" || return 1
+	lockout_wait "$FAIL_COUNT" "$FAIL_TIME" "$MAX_FAILS_TOTAL"
+}
+
+bump_fail() {
+	local now fails
+	now=$(date +%s 2>/dev/null || echo 0)
+	fails=$(cat "$1" 2>/dev/null || echo 0)
+	echo $((fails + 1)) > "$1"
+	echo "$now" > "$2"
 }
 
 record_fail() {
-	local now=$(date +%s 2>/dev/null || echo 0)
-	local fails=$(cat "$FAIL_COUNT" 2>/dev/null || echo 0)
-	fails=$((fails + 1))
-	echo "$fails" > "$FAIL_COUNT"
-	echo "$now" > "$FAIL_TIME"
+	local peer
+	peer=$(peer_id)
+	bump_fail "$FAIL_COUNT.$peer" "$FAIL_TIME.$peer"
+	bump_fail "$FAIL_COUNT" "$FAIL_TIME"
 }
 
 reset_fails() {
-	rm -f "$FAIL_COUNT" "$FAIL_TIME"
+	local peer
+	peer=$(peer_id)
+	rm -f "$FAIL_COUNT.$peer" "$FAIL_TIME.$peer"
 }
+
+# Сериализация попыток входа (flock в busybox роутера нет — mkdir-лок).
+# Владелец держит лок ~1-2 с; брошенным (CGI убит) считаем лок старше 30 с — по
+# возрасту самого лока, а не по времени ожидания: иначе при очереди запросов
+# ждущие сносили бы живой лок. Снос — атомарным mv, его выполнит только один.
+auth_lock() {
+	local born
+	while ! mkdir "$AUTH_LOCK_DIR" 2>/dev/null; do
+		born=$(date -r "$AUTH_LOCK_DIR" +%s 2>/dev/null) || continue
+		if [ $(( $(date +%s) - born )) -gt 30 ] &&
+			mv "$AUTH_LOCK_DIR" "$AUTH_LOCK_DIR.stale.$$" 2>/dev/null; then
+			rm -rf "$AUTH_LOCK_DIR.stale.$$"
+			continue
+		fi
+		sleep 1
+	done
+	trap 'auth_unlock' EXIT HUP INT TERM
+}
+
+auth_unlock() { rmdir "$AUTH_LOCK_DIR" 2>/dev/null; trap - EXIT HUP INT TERM; }
 
 
 
 check_token() {
 	local t="$1"
 	[ -z "$t" ] && json_error "auth required"
+	# Только формат mk_token: иначе ../<файл со свежим epoch> проходил как токен
+	case "$t" in *[!0-9a-f]*) json_error "auth required" ;; esac
+	[ ${#t} -eq 32 ] || json_error "auth required"
 	[ ! -f "$TOKEN_DIR/$t" ] && json_error "invalid token"
 	local created=$(cat "$TOKEN_DIR/$t" 2>/dev/null)
 	[ -z "$created" ] && json_error "token expired"
@@ -360,10 +441,59 @@ check_updates() {
 	fi
 }
 
-get_tag_domain_list_from_file() {
-	awk -v section="$2" '/\['"$2"'\]/{flag=1; next} /\[.*\]/{flag=0} flag' "$1"
+# --- kvas.conf: списки IP/интерфейсов ---
+# Раньше: grep → sed -i "/^key=/d" → echo >> без лока. Два быстрых клика теряли
+# изменение, а параллельный `route refresh` мог увидеть файл без ключа.
+# Лок — mkdir (flock в busybox роутера нет); брошенный — по возрасту самого лока.
+conf_lock() {
+	local born
+	while ! mkdir "$CONF_LOCK_DIR" 2>/dev/null; do
+		born=$(date -r "$CONF_LOCK_DIR" +%s 2>/dev/null) || continue
+		if [ $(( $(date +%s) - born )) -gt 60 ] &&
+			mv "$CONF_LOCK_DIR" "$CONF_LOCK_DIR.stale.$$" 2>/dev/null; then
+			rm -rf "$CONF_LOCK_DIR.stale.$$"
+			continue
+		fi
+		sleep 1
+	done
 }
+conf_unlock() { rmdir "$CONF_LOCK_DIR" 2>/dev/null; }
 
+# $1 ключ, $2 разделитель, $3 add|del, $4 элемент (точное сравнение).
+# 0 — файл изменён, 1 — изменений не потребовалось, 2 — ошибка записи.
+conf_list_edit() {
+	local key="$1" sep="$2" op="$3" item="$4" tmp rc
+	conf_lock
+	[ -f "$KVAS_CONF_FILE" ] || : > "$KVAS_CONF_FILE"
+	tmp="${KVAS_CONF_FILE}.tmp.$$"
+	awk -v k="$key" -v s="$sep" -v op="$op" -v it="$item" '
+		index($0, k "=") == 1 {
+			if (found) { changed = 1; next }    # дубли ключа схлопываем
+			found = 1
+			n = split(substr($0, length(k) + 2), a, s); out = ""; has = 0
+			for (i = 1; i <= n; i++) {
+				if (a[i] == "") continue
+				if (a[i] == it) { has = 1; if (op == "del") { changed = 1; continue } }
+				out = out (out == "" ? "" : s) a[i]
+			}
+			if (op == "add" && !has) { out = out (out == "" ? "" : s) it; changed = 1 }
+			if (out != "") print k "=" out
+			next
+		}
+		{ print }
+		END {
+			if (!found && op == "add") { print k "=" it; changed = 1 }
+			exit (changed ? 0 : 1)
+		}' "$KVAS_CONF_FILE" > "$tmp"
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		mv -f "$tmp" "$KVAS_CONF_FILE" || rc=2
+	else
+		rm -f "$tmp"
+	fi
+	conf_unlock
+	return "$rc"
+}
 
 main() {
 	local action token pass hash stored kvaspkg kvaspkg_name kvaspkg_ver
@@ -392,16 +522,25 @@ main() {
 			json_ok "password set"
 			;;
 		auth)
-			wait=$(check_bruteforce); check_rc=$?
-			[ "$check_rc" -ne 0 ] && printf '{"error":"too many attempts","wait":%s}\n' "${wait:-300}" && return
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
 			pass=$(query_param pass); [ -z "$pass" ] && pass=$(url_decode "$HTTP_X_KVAS_PASS")
 			[ -z "$pass" ] && json_error "pass required"
+			auth_lock
+			wait=$(check_bruteforce); check_rc=$?
+			if [ "$check_rc" -ne 0 ]; then
+				auth_unlock
+				printf '{"error":"too many attempts","wait":%s}\n' "${wait:-300}"
+				return
+			fi
 			if ! verify_password "$pass"; then
 				record_fail
+				# пауза под локом: не больше ~1 попытки в секунду со всех адресов
+				sleep 1
+				auth_unlock
 				json_error "wrong password"
 			fi
 			reset_fails
+			auth_unlock
 			token=$(mk_token)
 			printf '{"ok":true,"token":"%s"}\n' "$token"
 			;;
@@ -466,11 +605,15 @@ main() {
 			;;
 		host_del)
 			check_token "$token"
-			domain=$(echo "$QUERY_STRING" | sed 's/.*domain=//; s/&.*//' 2>/dev/null)
-			[ "$domain" = "$QUERY_STRING" ] && domain=""
+			domain=$(query_param domain)
 			[ -z "$domain" ] && json_error "domain required"
 			# Strip wildcard prefix: *.example.com → example.com for kvas del
-			clean=$(echo "$domain" | sed 's/^\*\.*//')
+			clean=$(printf '%s' "$domain" | sed 's/^\*\.*//')
+			# Только набор символов: удаляем то, что реально лежит в kvas.list (там бывают
+			# *.ru, _dmarc.x, заглавные — строгий valid_domain их отвергал). kvas del
+			# сравнивает точно, инъекции нет; ведущий '-' — запрет option injection.
+			case "$clean" in ''|-*|*[!A-Za-z0-9._/*-]*) json_error "invalid domain" ;; esac
+			case "$clean" in *[A-Za-z0-9]*) ;; *) json_error "invalid domain" ;; esac
 			out=$($KVAS_BIN del "$clean" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "del failed: $out"
@@ -480,7 +623,9 @@ main() {
 			;;
 		host_import)
 			check_token "$token"
-			domains=$(cat 2>/dev/null)
+			# ровно Content-Length байт: `cat` ждал EOF, которого браузер не шлёт
+			domains=""
+			[ "${CONTENT_LENGTH:-0}" -gt 0 ] 2>/dev/null && domains=$(head -c "$CONTENT_LENGTH" 2>/dev/null)
 			if [ -z "$domains" ]; then
 				domains=$(echo "$QUERY_STRING" | sed 's/.*domains=//; s/&.*//' 2>/dev/null | sed 's/%0A/
 /g; s/+/ /g')
@@ -522,28 +667,6 @@ main() {
 			out=$($KVAS_BIN init 2>&1)
 			json_ok "list cleared"
 			;;
-		kvas_list)
-			check_token "$token"
-			# Download kvas.list
-			if [ -f "$KVAS_LIST" ]; then
-				printf "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=\"kvas.list\"\r\n\r\n"
-				cat "$KVAS_LIST"
-			else
-				printf "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\n\r\nFile not found"
-			fi
-			return
-			;;
-		kvas_list_upload)
-			check_token "$token"
-			# Upload kvas.list — content is in POST body
-			# For now, just return current list
-			if [ -f "$KVAS_LIST" ]; then
-				local count=$(wc -l < "$KVAS_LIST" 2>/dev/null || echo 0)
-				json_ok "list has $count entries"
-			else
-				json_ok "list is empty"
-			fi
-			;;
 		update)
 			check_token "$token"
 			out=$($KVAS_BIN update 2>&1; $KVAS_BIN init 2>&1)
@@ -563,7 +686,8 @@ main() {
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
 			# Package postinst restarts this WebUI. Return before starting the
 			# updater, otherwise the browser loses its request with the old listener.
-			( sleep 1; "$KVAS_BIN" upgrade > "$UPGRADE_LOG" 2>&1 ) &
+			# код выхода — в конец лога (kvas upgrade теперь возвращает честный код)
+			( sleep 1; "$KVAS_BIN" upgrade > "$UPGRADE_LOG" 2>&1; echo ">>>EXIT:$?" >> "$UPGRADE_LOG" ) &
 			json_ok "upgrade started; WebUI will restart shortly"
 			;;
 		check_update)
@@ -629,7 +753,7 @@ main() {
 			clear_stale_block_watch || json_error "watcher already running"
 			if ! mkdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; then json_error "watcher already running"; fi
 			if [ ! -x "$BLOCK_WATCH_BIN" ]; then rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; json_error "block watcher is not installed"; fi
-			BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 &
+			BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" BLOCK_WATCH_LOCK_HELD=1 "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 &
 			printf '%s\n' "$!" > "$BLOCK_WATCH_PID"
 			json_ok "block watcher started"
 			;;
@@ -722,8 +846,13 @@ main() {
 			;;
 		restore)
 			check_token "$token"
-			path=$(echo "$QUERY_STRING" | sed 's/.*path=//; s/&.*//' 2>/dev/null)
-			[ "$path" = "$QUERY_STRING" ] && path=""
+			path=$(query_param path)
+			# restore перезаписывает kvas.conf/dnsmasq.conf и пароль панели — только
+			# каталоги, созданные `kvas backup` (UI путь не передаёт: берётся последний)
+			if [ -n "$path" ]; then
+				echo "$path" | grep -Eqx '/opt/kvas_backup_[0-9]{8}-[0-9]{6}' && [ "$(printf '%s' "$path" | wc -l)" -eq 0 ] \
+					|| json_error "invalid backup path"
+			fi
 			out=$($KVAS_BIN restore "$path" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "restore failed: $out"
@@ -958,13 +1087,12 @@ main() {
 				exclude) key="route_excluded_ip" ;;
 				*) json_error "type must be full, list, or exclude" ;;
 			esac
-			current=$(grep "^${key}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-			if echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
+			conf_list_edit "$key" + add "$ip"; rc=$?
+			if [ "$rc" -eq 1 ]; then
 				json_ok "already exists"
+			elif [ "$rc" -ne 0 ]; then
+				json_error "cannot write kvas.conf"
 			else
-				[ -n "$current" ] && current="${current}+${ip}" || current="$ip"
-				sed -i "/^${key}=/d" "$KVAS_CONF_FILE" 2>/dev/null
-				echo "${key}=${current}" >> "$KVAS_CONF_FILE"
 				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
 					json_ok "added $ip to $type"
 				else
@@ -984,13 +1112,12 @@ main() {
 				exclude) key="route_excluded_ip" ;;
 				*) json_error "type must be full, list, or exclude" ;;
 			esac
-			current=$(grep "^${key}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-			if ! echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
+			conf_list_edit "$key" + del "$ip"; rc=$?
+			if [ "$rc" -eq 1 ]; then
 				json_ok "not found"
+			elif [ "$rc" -ne 0 ]; then
+				json_error "cannot write kvas.conf"
 			else
-				new_list=$(echo "$current" | tr '+' '\n' | grep -v "^${ip}$" | tr '\n' '+' | sed 's/+$//')
-				sed -i "/^${key}=/d" "$KVAS_CONF_FILE" 2>/dev/null
-				[ -n "$new_list" ] && echo "${key}=${new_list}" >> "$KVAS_CONF_FILE"
 				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
 					json_ok "removed $ip from $type"
 				else
@@ -1029,7 +1156,7 @@ main() {
 			unset _priv_re
 			# Вывод с дедупликацией (оставляем первую запись — у DHCP приоритет)
 			printf '{"ok":true,"devices":['
-			awk -F'|' '!seen[$1]++{if(f++) printf ","; printf "{\"ip\":\"%s\",\"name\":\"%s\"}", $1, $2}' "$_tmpdev" 2>/dev/null
+			awk -F'|' "$AWK_JESC"'!seen[$1]++{if(f++) printf ","; printf "{\"ip\":\"%s\",\"name\":\"%s\"}", jesc($1), jesc($2)}' "$_tmpdev" 2>/dev/null
 			rm -f "$_tmpdev"
 			echo ']}'
 			;;
@@ -1079,7 +1206,7 @@ main() {
 			printf '{"ok":true,"devices":['
 			KVAS_FULL="$(echo "$route_full" | tr '+' ' ')" KVAS_EXCL="$(echo "$route_exclude" | tr '+' ' ')" \
 			KVAS_IFADDR="$if_addr" KVAS_LOCKED="$(iot_locked_macs | tr '\n' ' ')" \
-			awk -F'|' '
+			awk -F'|' "$AWK_JESC"'
 				function ip2int(s,  p) { split(s, p, "."); return p[1]*16777216 + p[2]*65536 + p[3]*256 + p[4] }
 				function in_lan(s,  di, i) {
 					if (nlan == 0) return 1;              # нет данных об интерфейсах — не фильтруем
@@ -1114,7 +1241,7 @@ main() {
 					# настроенные (full/exclude) показываем всегда; остальные — только on-link
 					if (!($1 in full) && !($1 in excl) && !in_lan($1)) next;
 					ip=$1; name=$2; mac=$3; access=$4;
-					gsub(/\\/, "\\\\", name); gsub(/"/, "\\\"", name);
+					name = jesc(name);
 					if (access == "deny") mode = "blocked";
 					else if (ip in full) mode = "full";
 					else if (ip in excl) mode = "exclude";
@@ -1168,26 +1295,18 @@ main() {
 			# из вкладки «Маршрутизация», иначе остался бы невидимый дубль)
 			changed=0
 			for key in route_full_ip route_excluded_ip route_by_list_ip; do
-				current=$(grep "^${key}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-				if echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
-					new_list=$(echo "$current" | tr '+' '\n' | grep -Fxv "$ip" | tr '\n' '+' | sed 's/+$//')
-					sed -i "/^${key}=/d" "$KVAS_CONF_FILE" 2>/dev/null
-					[ -n "$new_list" ] && echo "${key}=${new_list}" >> "$KVAS_CONF_FILE"
-					changed=1
-				fi
+				conf_list_edit "$key" + del "$ip"; rc=$?
+				[ "$rc" -eq 2 ] && json_error "cannot write kvas.conf"
+				[ "$rc" -eq 0 ] && changed=1
 			done
 			# Добавляем в целевой список (list = режим по умолчанию, отдельного ключа не требует)
 			tgt=""
 			[ "$mode" = "full" ] && tgt="route_full_ip"
 			[ "$mode" = "exclude" ] && tgt="route_excluded_ip"
 			if [ -n "$tgt" ]; then
-				current=$(grep "^${tgt}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-				if ! echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
-					[ -n "$current" ] && current="${current}+${ip}" || current="$ip"
-					sed -i "/^${tgt}=/d" "$KVAS_CONF_FILE" 2>/dev/null
-					echo "${tgt}=${current}" >> "$KVAS_CONF_FILE"
-					changed=1
-				fi
+				conf_list_edit "$tgt" + add "$ip"; rc=$?
+				[ "$rc" -eq 2 ] && json_error "cannot write kvas.conf"
+				[ "$rc" -eq 0 ] && changed=1
 			fi
 			# route refresh нужен только если конфиг реально поменялся
 			if [ "$changed" = 0 ]; then
@@ -1312,13 +1431,12 @@ main() {
 			net=$(echo "$QUERY_STRING" | sed 's/.*net=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
 			[ -z "$net" ] && json_error "net required"
 			valid_ifname "$net" || json_error "invalid interface"
-			current=$(grep "^INFACE_GUEST_ENT=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-			if echo "$current" | tr ',' '\n' | grep -Fxq "$net"; then
+			conf_list_edit INFACE_GUEST_ENT , add "$net"; rc=$?
+			if [ "$rc" -eq 1 ]; then
 				json_ok "already added"
+			elif [ "$rc" -ne 0 ]; then
+				json_error "cannot write kvas.conf"
 			else
-				[ -n "$current" ] && current="${current},${net}" || current="$net"
-				sed -i "/^INFACE_GUEST_ENT=/d" "$KVAS_CONF_FILE" 2>/dev/null
-				echo "INFACE_GUEST_ENT=${current}" >> "$KVAS_CONF_FILE"
 				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
 					json_ok "added $net"
 				else
@@ -1331,174 +1449,17 @@ main() {
 			net=$(echo "$QUERY_STRING" | sed 's/.*net=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
 			[ -z "$net" ] && json_error "net required"
 			valid_ifname "$net" || json_error "invalid interface"
-			current=$(grep "^INFACE_GUEST_ENT=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-			if ! echo "$current" | tr ',' '\n' | grep -Fxq "$net"; then
+			conf_list_edit INFACE_GUEST_ENT , del "$net"; rc=$?
+			if [ "$rc" -eq 1 ]; then
 				json_ok "not found"
+			elif [ "$rc" -ne 0 ]; then
+				json_error "cannot write kvas.conf"
 			else
-				new_list=$(echo "$current" | tr ',' '\n' | grep -v "^${net}$" | tr '\n' ',' | sed 's/,$//')
-				sed -i "/^INFACE_GUEST_ENT=/d" "$KVAS_CONF_FILE" 2>/dev/null
-				[ -n "$new_list" ] && echo "INFACE_GUEST_ENT=${new_list}" >> "$KVAS_CONF_FILE"
 				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
 					json_ok "removed $net"
 				else
 					json_error "route refresh failed, see /tmp/kvas-route-refresh.log"
 				fi
-			fi
-			;;
-		tags_list)
-			check_token "$token"
-			[ ! -f "$TAGS_FILE" ] && echo '{"ok":true,"tags":[]}' && return
-			printf '{"ok":true,"tags":['
-			tag=""
-			while IFS= read -r line; do
-				line_trimmed=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-				if [ -z "$line_trimmed" ] || echo "$line_trimmed" | grep -qE '^[[:space:]]*#'; then continue; fi
-			if echo "$line_trimmed" | grep -qE '^\['; then
-					if [ -n "$tag" ]; then
-						printf ']},'
-					fi
-					tag=$(echo "$line_trimmed" | tr -d '[]')
-					printf '{"name":%s,"domains":[' "$(json_str "$tag")"
-					dfirst=1
-				else
-					in_list="false"
-					[ -f "$KVAS_LIST" ] && grep -qxF "$line_trimmed" "$KVAS_LIST" 2>/dev/null && in_list="true"
-					[ "$dfirst" -eq 0 ] && printf ','
-					dfirst=0
-					printf '{"name":%s,"in_list":%s}' "$(json_str "$line_trimmed")" "$in_list"
-				fi
-			done < "$TAGS_FILE"
-		if [ -n "$tag" ]; then
-			printf ']}'
-		fi
-		printf ']}'
-			;;
-		tags_status)
-			check_token "$token"
-			tag=$(echo "$QUERY_STRING" | sed 's/.*tag=//; s/&.*//' 2>/dev/null)
-			[ "$tag" = "$QUERY_STRING" ] && tag=""
-			[ -z "$tag" ] && json_error "tag required"
-			grep -q "\[$tag\]" "$TAGS_FILE" 2>/dev/null || json_error "tag not found"
-			domains=$(get_tag_domain_list_from_file "$TAGS_FILE" "$tag")
-			printf '{"ok":true,"tag":%s,"domains":[' "$(json_str "$tag")"
-			first=1
-			for d in $domains; do
-				[ "$first" -eq 0 ] && printf ','
-				first=0
-				in_list="false"
-				[ -f "$KVAS_LIST" ] && grep -qxF "$d" "$KVAS_LIST" 2>/dev/null && in_list="true"
-				printf '{"name":%s,"in_list":%s}' "$(json_str "$d")" "$in_list"
-			done
-			echo ']}'
-			;;
-		tags_add)
-			check_token "$token"
-			tag=$(echo "$QUERY_STRING" | sed 's/.*tag=//; s/&.*//' 2>/dev/null)
-			[ "$tag" = "$QUERY_STRING" ] && tag=""
-			[ -z "$tag" ] && json_error "tag required"
-			grep -q "\[$tag\]" "$TAGS_FILE" 2>/dev/null || json_error "tag not found"
-			out=$($KVAS_BIN tags add-protect "$tag" 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "add failed: $out"
-			$KVAS_BIN init >/dev/null 2>&1
-			json_ok "added $tag"
-			;;
-		tags_create)
-			check_token "$token"
-			name=$(echo "$QUERY_STRING" | sed 's/.*name=//; s/&.*//' 2>/dev/null)
-			raw_domains=$(echo "$QUERY_STRING" | sed 's/.*domains=//; s/&.*//' 2>/dev/null)
-			raw_domains=$(printf '%s' "$raw_domains" | sed 's/%0D%0A/ /g; s/%0A/ /g; s/%0D/ /g; s/%20/ /g; s/+/ /g')
-			domains=$(echo "$raw_domains" | sed 's/  */ /g; s/^ //; s/ $//')
-			[ "$name" = "$QUERY_STRING" ] && name=""
-			[ -z "$name" ] && json_error "name required"
-			[ -z "$domains" ] && json_error "domains required"
-			case "$name" in -*) json_error "invalid name" ;; esac
-			# $domains идёт в kvas БЕЗ кавычек (word-split) → валидируем каждый токен:
-			# запрещаем ведущий '-' (option injection) и спецсимволы
-			for _d in $domains; do
-				case "$_d" in -*|*[!a-zA-Z0-9.*_-]*) json_error "invalid domain" ;; esac
-			done
-			out=$($KVAS_BIN tags create "$name" $domains 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "create failed: $out"
-			json_ok "created $name"
-			;;
-		tags_del)
-			check_token "$token"
-			tag=$(echo "$QUERY_STRING" | sed 's/.*tag=//; s/&.*//' 2>/dev/null)
-			[ "$tag" = "$QUERY_STRING" ] && tag=""
-			[ -z "$tag" ] && json_error "tag required"
-			grep -q "\[$tag\]" "$TAGS_FILE" 2>/dev/null || json_error "tag not found"
-			out=$($KVAS_BIN tags del-protect "$tag" 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "del failed: $out"
-			$KVAS_BIN init >/dev/null 2>&1
-			json_ok "removed $tag"
-			;;
-		tags_delete)
-			check_token "$token"
-			tag=$(echo "$QUERY_STRING" | sed 's/.*tag=//; s/&.*//' 2>/dev/null)
-			[ "$tag" = "$QUERY_STRING" ] && tag=""
-			[ -z "$tag" ] && json_error "tag required"
-			grep -q "\[$tag\]" "$TAGS_FILE" 2>/dev/null || json_error "tag not found"
-			out=$($KVAS_BIN tags delete "$tag" 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "delete failed: $out"
-			$KVAS_BIN init >/dev/null 2>&1
-			json_ok "удалена закваска $tag"
-			;;
-		tags_edit_save)
-			check_token "$token"
-			tag=$(echo "$QUERY_STRING" | sed 's/.*tag=//; s/&.*//' 2>/dev/null)
-			[ "$tag" = "$QUERY_STRING" ] && tag=""
-			[ -z "$tag" ] && json_error "tag required"
-			grep -q "\[$tag\]" "$TAGS_FILE" 2>/dev/null || json_error "tag not found"
-			raw_domains=$(echo "$QUERY_STRING" | sed 's/.*domains=//; s/&.*//' 2>/dev/null)
-			raw_domains=$(printf '%s' "$raw_domains" | sed 's/%0D%0A/ /g; s/%0A/ /g; s/%0D/ /g; s/%20/ /g; s/+/ /g')
-			domains=$(echo "$raw_domains" | sed 's/  */ /g; s/^ //; s/ $//')
-			for _d in $domains; do
-				case "$_d" in -*|*[!a-zA-Z0-9.*_-]*) json_error "invalid domain" ;; esac
-			done
-			out=$($KVAS_BIN tags edit-save "$tag" $domains 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "edit failed: $out"
-			$KVAS_BIN init >/dev/null 2>&1
-			json_ok "закваска $tag обновлена"
-			;;
-		tags_download)
-			check_token "$token"
-			[ ! -f "$TAGS_FILE" ] && json_error "no tags"
-			printf 'Content-Type: text/plain; charset=utf-8\n'
-			printf 'Content-Disposition: attachment; filename="tags.list"\n\n'
-			cat "$TAGS_FILE"
-			exit 0
-			;;
-		tags_upload)
-			check_token "$token"
-			replace=$(echo "$QUERY_STRING" | sed 's/.*replace=//; s/&.*//' 2>/dev/null)
-			[ "$replace" = "$QUERY_STRING" ] && replace="0"
-			[ "$replace" != "1" ] && replace="0"
-			[ ! -f "$TAGS_FILE" ] && touch "$TAGS_FILE"
-			upload_tmp=$(mktemp)
-			cat > "$upload_tmp"
-			if [ "$replace" = "1" ]; then
-				mv -f "$upload_tmp" "$TAGS_FILE"
-				json_ok "tags replaced"
-			else
-				# merge: append uploaded tags to existing, skip first line if it's a section header
-				merged_tmp=$(mktemp)
-				cat "$TAGS_FILE" > "$merged_tmp"
-				first=1
-				while IFS= read -r line; do
-					if [ $first -eq 1 ] && echo "$line" | grep -qE '^\['; then
-						continue
-					fi
-					first=0
-					echo "$line"
-				done < "$upload_tmp" >> "$merged_tmp"
-				mv -f "$merged_tmp" "$TAGS_FILE"
-				rm -f "$upload_tmp"
-				json_ok "tags merged"
 			fi
 			;;
 		*)

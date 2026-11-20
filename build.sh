@@ -51,29 +51,48 @@ mkdir -p \
 	"${DATA}/opt/etc/ndm/netfilter.d" \
 	"${CTRL}"
 
-# 1. Всё дерево пакета → /opt/apps/kvas/
-cp -a "${REPO_DIR}/opt/." "${DATA}/opt/apps/kvas/"
+# 1. Дерево пакета → /opt/apps/kvas/
+#    Только файлы под git (в состоянии рабочей копии: изменения отслеживаемых
+#    файлов попадают в локальную сборку; НОВЫЙ файл нужно сначала `git add`),
+#    без мусора: раньше cp -a забирал всё подряд (бэкапы редактора, тестовые
+#    артефакты). Вне git-репозитория — весь opt/.
+SRC="${BUILD}/src"
+mkdir -p "${SRC}"
+if command -v git >/dev/null 2>&1 && git -C "${REPO_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	# tar читает список сам (--null -T -): ошибка (отслеживаемый файл удалён из рабочей
+	# копии) роняет сборку через set -e, а не теряется в конвейере
+	( cd "${REPO_DIR}" && git ls-files -z -- opt | tar --null -T - -cf "${BUILD}/src.tar" )
+	tar -xf "${BUILD}/src.tar" -C "${SRC}"
+else
+	cp -a "${REPO_DIR}/opt" "${SRC}/"
+fi
+cp -a "${SRC}/opt/." "${DATA}/opt/apps/kvas/"
 
 # 2. Системные точки входа, которые читает сама прошивка (init.d/ndm),
 #    дублируются в /opt/etc/ (как в отгружаемом релизе)
-cp -a "${REPO_DIR}/opt/etc/init.d/S96kvas"                    "${DATA}/opt/etc/init.d/"
-cp -a "${REPO_DIR}/opt/etc/init.d/S99kvas-awg-route"          "${DATA}/opt/etc/init.d/"
-cp -a "${REPO_DIR}/opt/etc/ndm/fs.d/15-kvas-start.sh"         "${DATA}/opt/etc/ndm/fs.d/"
-cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/100-dns-local"     "${DATA}/opt/etc/ndm/netfilter.d/"
+cp -a "${SRC}/opt/etc/init.d/S96kvas"                    "${DATA}/opt/etc/init.d/"
+cp -a "${SRC}/opt/etc/init.d/S99kvas-awg-route"          "${DATA}/opt/etc/init.d/"
+cp -a "${SRC}/opt/etc/ndm/fs.d/15-kvas-start.sh"         "${DATA}/opt/etc/ndm/fs.d/"
+cp -a "${SRC}/opt/etc/ndm/netfilter.d/100-dns-local"     "${DATA}/opt/etc/ndm/netfilter.d/"
 # 100-vpn-mark регистрируем в /opt/etc/ndm/ рядом с 100-dns-local, чтобы NDM
 # пересоздавал маркировку KVAS_MARK на netfilter-сбросах (иначе выживал только
 # DNS-редирект, а маркировка слетала — корень хрупкости KVAS_MARK).
-cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/100-vpn-mark"      "${DATA}/opt/etc/ndm/netfilter.d/"
+cp -a "${SRC}/opt/etc/ndm/netfilter.d/100-vpn-mark"      "${DATA}/opt/etc/ndm/netfilter.d/"
 # 090-iot-lockdown: изоляция недоверенных устройств от портов управления роутера
 # (по MAC из /opt/etc/kvas-iot-lockdown.list, которым управляет веб-UI). Как и
 # прочие хуки — в активный /opt/etc/ndm/netfilter.d/, иначе NDM его не запустит.
-cp -a "${REPO_DIR}/opt/etc/ndm/netfilter.d/090-iot-lockdown"  "${DATA}/opt/etc/ndm/netfilter.d/"
+cp -a "${SRC}/opt/etc/ndm/netfilter.d/090-iot-lockdown"  "${DATA}/opt/etc/ndm/netfilter.d/"
+
+# Права: фиксированные, не зависят от umask/прав в рабочей копии сборщика
+# (с umask 077 каталоги в пакете получили бы 700).
+find "${DATA}" -type d -exec chmod 755 {} +
+find "${DATA}" -type f -exec chmod 644 {} +
 
 # Права на исполнение
-chmod -R +x "${DATA}/opt/apps/kvas/bin"          2>/dev/null || true
-chmod -R +x "${DATA}/opt/apps/kvas/etc/init.d"   2>/dev/null || true
-chmod -R +x "${DATA}/opt/apps/kvas/etc/ndm"      2>/dev/null || true
-chmod +x    "${DATA}/opt/etc/init.d/S96kvas" \
+chmod -R a+x "${DATA}/opt/apps/kvas/bin"          2>/dev/null || true
+chmod -R a+x "${DATA}/opt/apps/kvas/etc/init.d"   2>/dev/null || true
+chmod -R a+x "${DATA}/opt/apps/kvas/etc/ndm"      2>/dev/null || true
+chmod a+x   "${DATA}/opt/etc/init.d/S96kvas" \
             "${DATA}/opt/etc/init.d/S99kvas-awg-route" \
             "${DATA}/opt/etc/ndm/fs.d/15-kvas-start.sh" \
             "${DATA}/opt/etc/ndm/netfilter.d/100-dns-local" \
@@ -234,15 +253,24 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     # KVAS_MARK, таблицу 1001, ip rule (fwmark→1001) и наполняет ipset.
     # Запускается только если интерфейс уже настроен (INFACE_ENT задан);
     # на чистой установке маршрутизацию поднимет 'kvas setup'.
-    if grep -q '^INFACE_ENT=.\+' "\${kvas_conf}" 2>/dev/null; then
-        /opt/apps/kvas/bin/kvas init >/dev/null 2>&1 &
-    fi
+    # Сторож перезапускаем ПОСЛЕ init, одним фоновым заданием: параллельно они оба
+    # видели «KVAS_MARK неполна» и собирали её дважды (18 правил вместо 9).
+    _kvas_init=""
+    grep -q '^INFACE_ENT=.\+' "\${kvas_conf}" 2>/dev/null && _kvas_init=1
 
     # Watcher маршрутизации для НЕ-NDM AmneziaWG-туннеля (opkgtunNN).
     # Держит default/rule/KVAS_MARK при переподключении туннеля и сбросах NDM.
     # Для не-opkgtun интерфейсов демон сам сразу выходит — ставим всегда.
     chmod +x /opt/etc/init.d/S99kvas-awg-route 2>/dev/null
-    /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1 &
+    # rc.unslung запускает ВСЕ исполняемые /opt/etc/init.d/S* — ручные копии сторожа
+    # (S99kvas-awg-route.bak, .pre-…) стартовали бы вторым сторожем, без флага паузы.
+    for _old in /opt/etc/init.d/S99kvas-awg-route.*; do
+        [ -f "\${_old}" ] && chmod -x "\${_old}"
+    done
+    (
+        [ -n "\${_kvas_init}" ] && /opt/apps/kvas/bin/kvas init >/dev/null 2>&1
+        /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1
+    ) </dev/null >/dev/null 2>&1 &
 
     # Сборщик истории DPI-интерференции для дашборда веб-монитора (раз в минуту).
     # Пишет дропы туннеля opkgtunNN в кольцевой буфер 24ч. Идемпотентно.
@@ -263,6 +291,44 @@ fi
 exit 0
 POSTINST
 chmod +x "${CTRL}/postinst"
+
+# 5. prerm / postrm.
+#    ВНИМАНИЕ: opkg вызывает старые prerm/postrm с аргументом "remove" и при
+#    `opkg install --force-reinstall` (так ставит kvas upgrade) — отличить обновление
+#    от удаления по аргументам нельзя (проверено на роутере). Поэтому:
+#    - prerm только останавливает сторож (на обновлении postinst его перезапустит);
+#    - postrm запускает ОТЛОЖЕННУЮ уборку: если через 30 с пакета kvas нет — это было
+#      удаление, убираем маршрутизацию (ip rule, table 1001, KVAS_MARK, DoT-блок) и
+#      cron-строку. Перехват DNS и dnsmasq не трогаем: при dns-override родной DNS
+#      Keenetic выключен, без перехвата LAN осталась бы без DNS. Полная уборка с
+#      возвратом DNS — `kvas uninstall`.
+cat > "${CTRL}/prerm" <<'PRERM'
+#!/bin/sh
+[ -x /opt/etc/init.d/S99kvas-awg-route ] && /opt/etc/init.d/S99kvas-awg-route stop >/dev/null 2>&1
+exit 0
+PRERM
+cat > "${CTRL}/postrm" <<'POSTRM'
+#!/bin/sh
+(
+    sleep 30
+    opkg list-installed 2>/dev/null | grep -q '^kvas ' && exit 0
+    ip rule del fwmark 0xd1000/0xd1000 lookup 1001 2>/dev/null
+    ip route flush table 1001 2>/dev/null
+    for _r in $(iptables -w -t mangle -S PREROUTING 2>/dev/null | grep -n -- '-j KVAS_MARK' | cut -d: -f1 | sort -rn); do
+        iptables -w -t mangle -D PREROUTING $((_r - 1)) 2>/dev/null
+    done
+    iptables -w -t mangle -F KVAS_MARK 2>/dev/null
+    iptables -w -t mangle -X KVAS_MARK 2>/dev/null
+    for _p in tcp udp; do
+        while iptables -w -D FORWARD -i br0 -p $_p --dport 853 -j REJECT 2>/dev/null; do :; done
+    done
+    [ -f /opt/etc/crontab ] && sed -i '/dpi_history.sh/d' /opt/etc/crontab
+    rm -f /opt/etc/kvas.paused
+    logger -t kvas "postrm: пакет удалён — маршрутизация kvas убрана (DNS оставлен; полная уборка: kvas uninstall)"
+) </dev/null >/dev/null 2>&1 &
+exit 0
+POSTRM
+chmod +x "${CTRL}/prerm" "${CTRL}/postrm"
 
 # 5. Упаковка (root:root, чтобы opkg ставил от root)
 echo '2.0' > "${BUILD}/debian-binary"

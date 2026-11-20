@@ -31,7 +31,6 @@ TABLE_MARK=mangle
 
 CHAIN_DNAT_TO_PORT=KVAS_DNAT_TO_PORT
 TABLE_DNAT_TO_PORT=nat
-#ToDo: переписать на https://github.com/shadowsocks/shadowsocks-libev?tab=readme-ov-file#transparent-proxy-pure-tproxy
 
 # shellcheck disable=SC2034  # используется в файлах, подключающих ndm
 IPv4='IPv4::'
@@ -172,7 +171,14 @@ ip4__get_subrule_for_ip() {
 }
 
 # удаляет правило, полученное из iptables-save
+# ВНИМАНИЕ: IFS. Библиотеки kvas переключают ГЛОБАЛЬНЫЙ IFS ($'\n' для циклов, ' ' —
+# в других местах), и итог зависит от того, какая функция отработала последней. Функции,
+# которые режут правило на аргументы через $(echo "${…}") без кавычек, объявляют
+# `local IFS=' '`: иначе после IFS=$'\n' правило уходило в iptables ОДНИМ аргументом и
+# -D молча падал (kvas pause оставлял прыжок в KVAS_MARK → -X «Too many links»).
+# Все вызовы iptables — с -w (ждать xtables-лок, а не падать при параллельной работе NDM).
 iptables__delete_rule() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	if [ -z "${1}" ] ; then
 		error "[${FUNCNAME}] Не задан обязательный аргумент — таблица"
 		return
@@ -190,7 +196,7 @@ iptables__delete_rule() {
 	fi
 
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
-	/opt/sbin/iptables -t "${table}" -D $(echo "${rule:3}")
+	/opt/sbin/iptables -w -t "${table}" -D $(echo "${rule:3}")
 }
 
 # удаляет правила, получаемые по критерию
@@ -238,6 +244,7 @@ ip4__ipset__is_exist() {
 }
 
 ip4__ipset__create() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	if [ -z "${1}" ] ; then
 		error "[${FUNCNAME}] Не задан обязательный аргумент — имя"
 		return
@@ -261,6 +268,10 @@ ip4__ipset__create() {
 	log_warning "Cоздание набора IP ${ipset_name}${submessage}"
 
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
+	# maxelem не задан → 65536. При переполнении dnsmasq молча не добавит новые IP — они
+	# пойдут мимо туннеля (maxelem уже созданного набора не меняется — только пересоздание).
+	# На роутере (2026-11-20) набор создан БЕЗ timeout (записи не истекают, набор
+	# пересоздаётся при kvas init/перезагрузке), заполнен на ~9% (5.9k) — запас есть.
 	/opt/sbin/ipset create "${ipset_name}" hash:net family inet -exist$(echo "${subcomand}") \
 	 || {
 		error "[${FUNCNAME}] Ошибка при создании набора IP ${ipset_name}${submessage}"
@@ -279,6 +290,7 @@ ip4set_create_table() {
 
 # Для постоянного списка исключаемых сетей
 ip4__ipset__fill_destination_excluded() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	if ip4__ipset__is_exist "${IPSET_DESTINATION_EXCLUDED}"; then
 		return
 	fi
@@ -347,6 +359,8 @@ ip4__ipset__destroy_destination_excluded() {
 #
 # ------------------------------------------------------------------------------------------
 
+# Существует ли цепочка (в т.ч. ПУСТАЯ — NDM при reload делает -F, а не -X).
+# Целостность наших цепочек проверяют ip4__mark__create_chain / ip4__dns__create_chain.
 ip4__chain__is_exist() {
 	if [ -z "${1}" ] ; then
 		error "[${FUNCNAME}] Не задан обязательный аргумент — таблица"
@@ -360,7 +374,7 @@ ip4__chain__is_exist() {
 	fi
 	local chain_name="${2}"
 
-	save_iptables -t "${table}" | grep -Fq "${chain_name}"
+	ipt_chain_exists "${table}" "${chain_name}"
 }
 
 ip4__chain__exclude_source_by_config() {
@@ -409,13 +423,12 @@ ip4__chain__create_for_data() {
 	fi
 	local chain_name="${2}"
 
-	if ip4__chain__is_exist "${table}" "${chain_name}" ; then
-		return
+	# Существующую цепочку не пересоздаём (на неё ссылаются прыжки из PREROUTING) —
+	# вызывающий её уже очистил, только наполняем заново.
+	if ! ip4__chain__is_exist "${table}" "${chain_name}" ; then
+		log_warning "Создание цепочки ${chain_name} в ${table} для данных"
+		/opt/sbin/iptables -N "${chain_name}" -w -t "${table}"
 	fi
-
-	log_warning "Создание цепочки ${chain_name} в ${table} для данных"
-
-	/opt/sbin/iptables -N "${chain_name}" -w -t "${table}"
 
 	ip4__chain__exclude_source_by_config "${table}" "${chain_name}"
 
@@ -449,8 +462,8 @@ ip4__chain__delete() {
 
 	log_warning "Удаление цепочки ${chain_name} в ${table}"
 
-	/opt/sbin/iptables -F "${chain_name}" -t "${table}"
-	/opt/sbin/iptables -X "${chain_name}" -t "${table}"
+	/opt/sbin/iptables -w -F "${chain_name}" -t "${table}"
+	/opt/sbin/iptables -w -X "${chain_name}" -t "${table}"
 }
 
 # удаляем входы в цепочку
@@ -477,51 +490,46 @@ ip4__chain__delete_jump() {
 #
 # ------------------------------------------------------------------------------------------
 
-ip4__dnat_to_port__create_chain() {
-	if [ -z "${1}" ] ; then
-		error "[${FUNCNAME}] Не задан обязательный аргумент — таблица"
-		return
-	fi
-	local table="${1}"
 
-	if [ -z "${2}" ] ; then
-		error "[${FUNCNAME}] Не задан обязательный аргумент — цепочка"
-		return
-	fi
-	local chain_name="${2}"
 
-	if [ -z "${3}" ] ; then
-		error "[${FUNCNAME}] Не задан обязательный аргумент — порт"
-		return
-	fi
-	local port="${3}"
-
-	{
-		if ip4__chain__is_exist "${table}" "${chain_name}" ; then
-			return
+# Сборку KVAS_MARK/KVAS_DNS сериализуем: её одновременно запускают хук NDM, сторож и
+# kvas init — каждый видел «цепочка неполна» и дописывал свой комплект (после установки
+# пакета было 18 правил вместо 9). mkdir-лок; брошенный (процесс убит) — по возрасту
+# самого лока, снос атомарным mv. Внутри лока целостность проверяется заново.
+KVAS_CHAIN_LOCK=/tmp/kvas-ndm-chain.lock
+ndm_chain_lock() {
+	local born
+	while ! mkdir "${KVAS_CHAIN_LOCK}" 2>/dev/null; do
+		born=$(date -r "${KVAS_CHAIN_LOCK}" +%s 2>/dev/null) || continue
+		if [ $(( $(date +%s) - born )) -gt 60 ] &&
+			mv "${KVAS_CHAIN_LOCK}" "${KVAS_CHAIN_LOCK}.stale.$$" 2>/dev/null; then
+			rm -rf "${KVAS_CHAIN_LOCK}.stale.$$"
+			continue
 		fi
-
-		ip4__chain__create_for_data "${table}" "${chain_name}"
-
-		IFS=' '
-		for protocol in udp tcp ; do
-			# не будет ли задвоения без -w?
-			/opt/sbin/iptables -A "${chain_name}" -t "${table}" -p "${protocol}" -j REDIRECT --to-port "${port}"
-		done
-	} &>/dev/null || error "[${FUNCNAME}] Возникли ошибки при установке правил трафика для прокси"
+		sleep 1
+	done
 }
-
-ip4__shadowsocks__create_chain() {
-	local local_port
-	local_port=$(get_config_value SSR_DNS_PORT)
-
-	ip4__dnat_to_port__create_chain "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}" "${local_port}"
-}
+ndm_chain_unlock() { rmdir "${KVAS_CHAIN_LOCK}" 2>/dev/null; }
 
 ip4__mark__create_chain() {
+	ndm_chain_lock
+	_ip4__mark__create_chain
+	ndm_chain_unlock
+}
+
+_ip4__mark__create_chain() {
 	{
-		if ip4__chain__is_exist "${TABLE_MARK}" "${CHAIN_MARK}" ; then
+		# Целая KVAS_MARK заканчивается CONNMARK --save-mark. Раньше достаточно было
+		# «цепочка существует» — а NDM при reload делает -F: пустая цепочка оставалась
+		# пустой (прыжок из PREROUTING в никуда → трафик KVAS_LIST мимо туннеля), и
+		# сторож, вызывая этот хук, ничего не мог восстановить.
+		# ровно ОДИН --save-mark: задвоенную (гонка, см. ndm_chain_lock) тоже пересобираем
+		if [ "$(ipt_chain_rules "${TABLE_MARK}" "${CHAIN_MARK}" | grep -c -- '--save-mark')" -eq 1 ] ; then
 			return
+		fi
+		if ip4__chain__is_exist "${TABLE_MARK}" "${CHAIN_MARK}" ; then
+			log_warning "Цепочка ${CHAIN_MARK} пуста или неполна — пересобираем"
+			/opt/sbin/iptables -w -t "${TABLE_MARK}" -F "${CHAIN_MARK}"
 		fi
 
 		ip4__chain__create_for_data "${TABLE_MARK}" "${CHAIN_MARK}"
@@ -537,6 +545,11 @@ ip4__mark__create_chain() {
 			# На отдельных устройствах, к сожалению, не работает.
 			#/opt/sbin/iptables -w -t "${TABLE_MARK}" -A "${CHAIN_MARK}" -p tcp -m conntrack ! --ctstate NEW -j RETURN
 
+			# restore/save-mark без масок работают со всеми 32 битами. Проверено на роутере
+			# (2026-11-20): кроме kvas, fwmark/connmark никто не ставит (у NDM — только
+			# проверка --mark 0x0; её NDMMARK — отдельный механизм), в conntrack метки
+			# только 0 и 0xd1000 — конфликта нет. Если появится второй пользователь меток —
+			# перейти на --nfmask/--ctmask 0xd1000 и --set-xmark 0xd1000/0xd1000.
 			/opt/sbin/iptables -w -t "${TABLE_MARK}" -A "${CHAIN_MARK}" -j CONNMARK --restore-mark
 			/opt/sbin/iptables -w -t "${TABLE_MARK}" -A "${CHAIN_MARK}" -m mark --mark ${MARK_NUM} -j RETURN
 
@@ -584,7 +597,9 @@ ip4__add_routing_for_home() {
 
 	local net_interface=$(get_local_inface)
 
-	if save_iptables | grep -F 'PREROUTING' | grep -F "${net_interface}" | grep -F "${IPSET_TABLE_NAME}" | grep -Fq "${chain_name}" ; then
+	# поцепочечно: полный дамп iptables-save на Keenetic обрывается ещё в nat, и это
+	# условие было всегда ложным → дубль прыжка при каждом прогоне хука (см. libs/main)
+	if ipt_chain_rules "${table}" PREROUTING | grep -F -- "-i ${net_interface} " | grep -F "${IPSET_TABLE_NAME}" | grep -Fq -- "-j ${chain_name}" ; then
 		return
 	fi
 
@@ -593,9 +608,6 @@ ip4__add_routing_for_home() {
 	/opt/sbin/iptables -A PREROUTING -w -t "${table}" -i "${net_interface}" -m set --match-set "${IPSET_TABLE_NAME}" dst -j "${chain_name}"
 }
 
-ip4__shadowsocks__add_routing_for_home() {
-	ip4__add_routing_for_home "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}" 'ShadowSocks'
-}
 
 # VPN
 ip4__mark__add_routing_for_home() {
@@ -609,15 +621,29 @@ ip4__mark__add_routing_for_home() {
 #
 # ------------------------------------------------------------------------------------------
 
+# Целая KVAS_DNS — два DNAT (udp, tcp) на 127.0.0.1:${DNS_PORT}. Как и KVAS_MARK, после
+# flush nat цепочка «есть», но пуста — раньше это считалось нормой, и прыжок вёл в
+# пустую цепочку (DNS LAN не уходил на :9753).
 # Создаёт (если нет) цепочку для DNS редиректа
 ip4__dns__create_chain() {
-	if save_iptables | grep -Fq "${CHAIN_DNS}"; then
+	ndm_chain_lock
+	_ip4__dns__create_chain
+	ndm_chain_unlock
+}
+
+_ip4__dns__create_chain() {
+	# ровно два DNAT (udp+tcp); задвоенную тоже пересобираем
+	if [ "$(ipt_chain_rules "${TABLE_DNS}" "${CHAIN_DNS}" | grep -cF -- "127.0.0.1:${DNS_PORT}")" -eq 2 ]; then
 		return
 	fi
 
-	log_warning 'Создание цепочки для DNS перенаправления'
-
-	/opt/sbin/iptables -N "${CHAIN_DNS}" -w -t "${TABLE_DNS}"
+	if ip4__chain__is_exist "${TABLE_DNS}" "${CHAIN_DNS}" ; then
+		log_warning 'Цепочка DNS перенаправления пуста или неполна — пересобираем'
+		/opt/sbin/iptables -w -t "${TABLE_DNS}" -F "${CHAIN_DNS}"
+	else
+		log_warning 'Создание цепочки для DNS перенаправления'
+		/opt/sbin/iptables -N "${CHAIN_DNS}" -w -t "${TABLE_DNS}"
+	fi
 
 	# НЕ исключаем route_excluded_ip из DNS-редиректа: иначе устройство в режиме
 	# «Напрямую» теряет DNS (kvas dnsmasq слушает только :9753, а на :53 для
@@ -627,8 +653,7 @@ ip4__dns__create_chain() {
 
 	IFS=' '
 	for protocol in udp tcp ; do
-		# не будет ли задвоения без -w?
-		/opt/sbin/iptables -A "${CHAIN_DNS}" -t "${TABLE_DNS}" -p "${protocol}" --dport 53 -j DNAT --to-destination 127.0.0.1:"${DNS_PORT}"
+		/opt/sbin/iptables -w -A "${CHAIN_DNS}" -t "${TABLE_DNS}" -p "${protocol}" --dport 53 -j DNAT --to-destination 127.0.0.1:"${DNS_PORT}"
 	done
 }
 
@@ -646,7 +671,7 @@ ip4__get_rulenum() {
 	local chain='PREROUTING'
 
 	# shellcheck disable=SC2046  # намеренно: echo $(...) склеивает вывод в одну строку
-	echo $(save_iptables -t "${table}" | grep -F "${chain}" | grep -vF :"${chain}" \
+	echo $(ipt_chain_rules "${table}" "${chain}" \
 	 | grep -nF -- "${find}" | head -n 1 | grep -oE '^[0-9]+')
 }
 
@@ -675,6 +700,7 @@ ip4__dns__get_rulenum() {
 #Example input param:-s 192.168.3.0/24 -i eth3
 #Example input param:-i sstp+
 ip4__dns__add_routing() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	local iptables_filter
 	local submessage
 	if [ -n "${1}" ]; then
@@ -686,15 +712,17 @@ ip4__dns__add_routing() {
 		submessage=''
 	fi
 
-	if save_iptables | grep -F 'PREROUTING' | grep -F -- "${iptables_filter}" | grep -Fq "${CHAIN_DNS}" ; then
+	# Цепочку проверяем/чиним ДО проверки прыжка: после flush nat прыжок есть, а
+	# KVAS_DNS пуста — раньше функция выходила раньше, и цепочка не восстанавливалась.
+	ip4__dns__create_chain
+
+	if ipt_chain_rules "${TABLE_DNS}" PREROUTING | grep -F -- "${iptables_filter}" | grep -Fq -- "-j ${CHAIN_DNS}" ; then
 		return
 	fi
 	local rulenum
 	rulenum=$(ip4__dns__get_rulenum)
 
 	log_warning "Подключение DNS перенаправления с приоритетом ${rulenum}${submessage}"
-
-	ip4__dns__create_chain
 	# без echo дублирование пробелов (что даёт warning и проблему наличия)
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 	/opt/sbin/iptables -I PREROUTING "${rulenum}" -w -t "${TABLE_DNS}"$(echo "${iptables_filter}") -j "${CHAIN_DNS}"
@@ -704,6 +732,7 @@ ip4__dns__add_routing() {
 #Example input param:-s 192.168.3.0/24 -i eth3
 #Example input param:-i sstp+
 ip4__dns__delete_routing() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	local iptables_filter
 	local submessage
 	if [ -n "${1}" ]; then
@@ -715,7 +744,7 @@ ip4__dns__delete_routing() {
 		submessage=''
 	fi
 
-	if ! save_iptables | grep -F 'PREROUTING' | grep -F -- "${iptables_filter}" | grep -Fq "${CHAIN_DNS}" ; then
+	if ! ipt_chain_rules "${TABLE_DNS}" PREROUTING | grep -F -- "${iptables_filter}" | grep -Fq -- "-j ${CHAIN_DNS}" ; then
 		return
 	fi
 
@@ -723,7 +752,7 @@ ip4__dns__delete_routing() {
 
 	# без echo дублирование пробелов (что даёт warning и проблему наличия)
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
-	/opt/sbin/iptables -D PREROUTING -t "${TABLE_DNS}"$(echo "${iptables_filter}") -j "${CHAIN_DNS}"
+	/opt/sbin/iptables -w -D PREROUTING -t "${TABLE_DNS}"$(echo "${iptables_filter}") -j "${CHAIN_DNS}"
 }
 
 
@@ -747,6 +776,7 @@ get_ikev2_net_pool() {
 }
 
 ip4__add_routing() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	if [ -z "${3}" ] ; then
 		error "[${FUNCNAME}] Не передан обязательный параметр — критерий"
 		return
@@ -780,7 +810,7 @@ ip4__add_routing() {
 		submessage=" ipset ${ipset_list} и${submessage}"
 	fi
 
-	if save_iptables | grep -F 'PREROUTING' | grep -F -- "${iptables_filter}" | grep -Fq "${chain_name}" ; then
+	if ipt_chain_rules "${table}" PREROUTING | grep -F -- "${iptables_filter}" | grep -Fq -- "-j ${chain_name}" ; then
 		return
 	fi
 
@@ -800,14 +830,11 @@ ip4__add_routing_by_list_for_net() {
 	local iptables_filter
 	iptables_filter=$(iptables__get_subrule_for_net "${net_interface}")
 
-	if is_shadowsocks_enabled ; then
-		ip4__add_routing "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
-	else
-		ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
-	fi
+	ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
 }
 
 ip4__delete_routing() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	if [ -z "${3}" ] ; then
 		error "[${FUNCNAME}] Не передан обязательный параметр — критерий"
 		return
@@ -838,14 +865,14 @@ ip4__delete_routing() {
 		submessage=" ipset ${ipset_list} и${submessage}"
 	fi
 
-	if ! save_iptables | grep -F 'PREROUTING' | grep -F -- "${iptables_filter}" | grep -Fq "${chain_name}" ; then
+	if ! ipt_chain_rules "${table}" PREROUTING | grep -F -- "${iptables_filter}" | grep -Fq -- "-j ${chain_name}" ; then
 		return
 	fi
 
 	log_warning "Отключение перехвата трафика по${submessage}"
 
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
-	/opt/sbin/iptables -D PREROUTING -t "${table}" $(echo "${iptables_filter}") -j "${chain_name}"
+	/opt/sbin/iptables -w -D PREROUTING -t "${table}" $(echo "${iptables_filter}") -j "${chain_name}"
 }
 
 ip4__delete_routing_by_list_for_net() {
@@ -860,11 +887,7 @@ ip4__delete_routing_by_list_for_net() {
 
 	ip4__dns__delete_routing "${iptables_filter}"
 
-	if is_shadowsocks_enabled ; then
-		ip4__delete_routing "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
-	else
-		ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
-	fi
+	ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
 }
 
 
@@ -898,11 +921,7 @@ ip4__add_routing_for_ip_from_config() {
 			fi
 
 			ip_or_range=$(ip4__get_subrule_for_ip "${ip_or_range}")
-			if is_shadowsocks_enabled ; then
-				ip4__add_routing "${TABLE_DNAT_TO_PORT}"  "${CHAIN_DNAT_TO_PORT}"  "${ip_or_range}"
-			else
-				ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}"
-			fi
+			ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}"
 		done
 	fi
 
@@ -916,11 +935,7 @@ ip4__add_routing_for_ip_from_config() {
 			fi
 
 			ip_or_range=$(ip4__get_subrule_for_ip "${ip_or_range}")
-			if is_shadowsocks_enabled ; then
-				ip4__add_routing "${TABLE_DNAT_TO_PORT}"  "${CHAIN_DNAT_TO_PORT}"  "${ip_or_range}" "${IPSET_TABLE_NAME}"
-			else
-				ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}" "${IPSET_TABLE_NAME}"
-			fi
+			ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}" "${IPSET_TABLE_NAME}"
 		done
 	fi
 }
@@ -939,18 +954,7 @@ ip4_mark_vpn_network() {
 }
 
 ip4_firewall_set_all_rules() {
-	if is_shadowsocks_enabled ; then
-		ip4__shadowsocks__create_chain &>/dev/null
-
-		# Сначала правила по IP, затем по сетям
-		ip4__add_routing_for_ip_from_config &> /dev/null
-		ip4__add_routing_by_list_for_net_from_config &> /dev/null
-
-		#ToDo: сделать home отключаемой
-		ip4__shadowsocks__add_routing_for_home &> /dev/null
-	else
-		ip4_mark_vpn_network
-	fi
+	ip4_mark_vpn_network
 }
 
 
@@ -984,11 +988,7 @@ ip4__delete_routing_for_ip_from_config() {
 			fi
 
 			ip_or_range=$(ip4__get_subrule_for_ip "${ip_or_range}")
-			if is_shadowsocks_enabled ; then
-				ip4__delete_routing "${TABLE_DNAT_TO_PORT}"  "${CHAIN_DNAT_TO_PORT}"  "${ip_or_range}"
-			else
-				ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}"
-			fi
+			ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}"
 		done
 	fi
 
@@ -1002,11 +1002,7 @@ ip4__delete_routing_for_ip_from_config() {
 			fi
 
 			ip_or_range=$(ip4__get_subrule_for_ip "${ip_or_range}")
-			if is_shadowsocks_enabled ; then
-				ip4__delete_routing "${TABLE_DNAT_TO_PORT}"  "${CHAIN_DNAT_TO_PORT}"  "${ip_or_range}" "${IPSET_TABLE_NAME}"
-			else
-				ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}" "${IPSET_TABLE_NAME}"
-			fi
+			ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}" "${IPSET_TABLE_NAME}"
 		done
 	fi
 }
@@ -1030,32 +1026,10 @@ ip4_firewall_flush_vpn_rules() {
 	} &>/dev/null
 }
 
-# Удаление старых цепочек прокси из предыдущих версий.
-ip4_firewall_flush_dnat_to_port() {
-	{
-		ip4__delete_routing_by_list_for_net_from_config
-		ip4__delete_routing_for_ip_from_config
-
-		# достаточно удалять правила для br0, но на всякий случай
-		ip4__chain__delete_jump "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}"
-		# в бета 9 перехваты DNS не очищались, да и они универсальны меж подключениями
-		#ip4__chain__delete_jump "${TABLE_DNS}" "${CHAIN_DNS}"
-
-		# Во время работы удалять цепочки бессмысленно, они константны и не влияют ни на что
-		# Достаточно убрать входы туда, что сделано выше
-		# По идее, нижеидущее нужно вызывать лишь при установке или удалении
-		#ip4__chain__delete "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}"
-		#ip4__chain__delete "${TABLE_DNS}" "${CHAIN_DNS}"
-	} &>/dev/null
-}
 
 # Удаляем все маршрутизирующие правила iptables
 ip4_firewall_flush_all_rules() {
-	if is_shadowsocks_enabled ; then
-		ip4_firewall_flush_dnat_to_port
-	else
-		ip4_firewall_flush_vpn_rules
-	fi
+	ip4_firewall_flush_vpn_rules
 }
 
 # может прибрать всё (с убиванием цепочек и наборов)
@@ -1083,8 +1057,7 @@ ip4__flush() {
 		ip4__chain__delete_jump "${TABLE_DNS}" "${CHAIN_DNS}"
 		ip4__chain__delete      "${TABLE_DNS}" "${CHAIN_DNS}"
 
-		# можно оптимизировать, удаляя лишь нужный с проверкой is_shadowsocks_enabled
-		# но тогда нужно переписать код в смене интерфейса
+		# KVAS_DNAT_TO_PORT — цепочка удалённого Shadowsocks: только уборка после старых версий
 		ip4__chain__delete_jump "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}"
 		ip4__chain__delete      "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}"
 		ip4__chain__delete_jump "${TABLE_MARK}" "${CHAIN_MARK}"
@@ -1095,8 +1068,7 @@ ip4__flush() {
 	elif echo "${parts}" | grep -Fq ' jump ' ; then
 		ip4__chain__delete_jump "${TABLE_DNS}"          "${CHAIN_DNS}"
 
-		# можно оптимизировать, удаляя лишь нужный с проверкой is_shadowsocks_enabled
-		# но тогда нужно переписать код в смене интерфейса
+		# KVAS_DNAT_TO_PORT — цепочка удалённого Shadowsocks: только уборка после старых версий
 		ip4__chain__delete_jump "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}"
 		ip4__chain__delete_jump "${TABLE_MARK}"         "${CHAIN_MARK}"
 	fi
@@ -1140,7 +1112,19 @@ ip4__route__is_exist_table() {
 	[ "$(ip4__route__show_table "${table_id}" | head -c1 | wc -c)" -gt 0 ]
 }
 
+# fail-closed: «unreachable default metric 4000» в table 1001. Пока туннель жив, рабочий
+# default (метрика 0) выигрывает; туннель лёг — помеченный трафик упирается в unreachable,
+# а не проваливается в main → WAN. Держат и сторож S99kvas-awg-route, и ndm (ниже).
+ip4__route__ensure_failclosed() {
+	/opt/sbin/ip route show table "${ROUTE_TABLE_ID}" 2>/dev/null | grep -q '^unreachable default' \
+		|| /opt/sbin/ip route add table "${ROUTE_TABLE_ID}" unreachable default metric 4000 2>/dev/null
+}
+
+# Строка «unreachable default…» — не признак рабочей таблицы: раньше она не проходила
+# grep '^default' → flush таблицы → при упавшем туннеле `ip route add default dev …`
+# падал, таблица оставалась ПУСТОЙ, и помеченный трафик уходил в WAN до прохода сторожа.
 ip4__route__add_table() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	local net_interface=$(get_config_value 'INFACE_ENT')
 	local is_need_flush=''
 
@@ -1156,23 +1140,26 @@ ip4__route__add_table() {
 	submessage="таблицы маршрутизации ${ROUTE_TABLE_ID} для ${net_interface}${submessage}"
 
 	local route_show=$(ip4__route__show_table "${ROUTE_TABLE_ID}")
+	local route_live=$(echo "${route_show}" | grep -v '^unreachable')
 	# Таблицу считаем валидной, если её default-маршрут уже смотрит на нужный
 	# интерфейс (с 'via ...' или без). Строгое сравнение со строкой subroute
 	# не совпадало с 'default via <ip> dev <iface>' (например от внешнего
 	# watcher'а для AmneziaWG opkgtun10) и вызывало лишний flush таблицы 1001
 	# на каждом kvas update — транзиентный обрыв тоннельной маршрутизации.
-	if [ -n "${route_show}" ] && ! echo "${route_show}" | grep '^default' | grep -Fq "dev ${net_interface}" ; then
+	if [ -n "${route_live}" ] && ! echo "${route_live}" | grep '^default' | grep -Fq "dev ${net_interface}" ; then
 		# таблица существует, но её default не смотрит на нужный интерфейс
 		log_warning "Очистка таблицы маршрутизации ${ROUTE_TABLE_ID} из-за отсутствия ${subroute}"
 		/opt/sbin/ip route flush table "${ROUTE_TABLE_ID}" &>/dev/null
+		ip4__route__ensure_failclosed
 
 		is_need_flush='1'
 
 		# чтобы передобавилось ниже
 		route_show=$(ip4__route__show_table "${ROUTE_TABLE_ID}")
+		route_live=$(echo "${route_show}" | grep -v '^unreachable')
 	fi
 
-	if [ -z "${route_show}" ] ; then
+	if [ -z "${route_live}" ] ; then
 		log_warning "Добавление ${submessage}"
 
 		# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
@@ -1207,6 +1194,8 @@ ip4__route__add_table() {
 			fi
 		fi
 	fi
+
+	ip4__route__ensure_failclosed
 
 	if [ -n "${is_need_flush}" ] ; then
 		ip4__route__flush_cache
@@ -1247,6 +1236,7 @@ ip4__rule__get_submessage() {
 }
 
 ip4__rule__add_mark_to_table() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	local subrule="$(ip4__rule__get_sub)"
 	if /opt/sbin/ip rule show | grep -Fq "${subrule}" ; then
 		return
@@ -1263,6 +1253,7 @@ ip4__rule__add_mark_to_table() {
 }
 
 ip4__rule__delete_mark_to_table() {
+	local IFS=' '   # строку правила режем по пробелам — см. iptables__delete_rule
 	local subrule="$(ip4__rule__get_sub)"
 	if ! /opt/sbin/ip rule show | grep -Fq "${subrule}" ; then
 		return
@@ -1298,15 +1289,11 @@ ip4_rule_del_priority() {
 
 # Чистим и заполняем таблицу правил iptables для vpn подключений
 cmd_vpn_iptable_reset() {
-	if is_shadowsocks_enabled ; then
-		warning 'VPN соединение не активно!'
-	else
-		ready "Переустановка iptables для vpn завершена"
-		{
-			cmd_vpn_iptable_flush
-			ip4_mark_vpn_network
-		} &> /dev/null && when_ok "УСПЕШНО" || when_bad "C ОШИБКАМИ"
-	fi
+	ready "Переустановка iptables для vpn завершена"
+	{
+		cmd_vpn_iptable_flush
+		ip4_mark_vpn_network
+	} &> /dev/null && when_ok "УСПЕШНО" || when_bad "C ОШИБКАМИ"
 }
 
 # Чистим таблицу правил iptables для vpn подключений

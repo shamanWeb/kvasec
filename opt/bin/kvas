@@ -3,7 +3,6 @@
 . /opt/apps/kvas/bin/libs/check
 . /opt/apps/kvas/bin/libs/hosts
 . /opt/apps/kvas/bin/libs/route
-. /opt/apps/kvas/bin/libs/tags
 . /opt/apps/kvas/bin/libs/update
 . /opt/apps/kvas/bin/libs/vpn
 . /opt/apps/kvas/bin/libs/monitor
@@ -43,7 +42,9 @@ cmd_show_kvas_list(){
 	fi
 }
 
-if  echo "${1}" | grep -qvEi 'uninstall|vpn|route|ver|help' && [ -z "$(get_config_value "SETUP_FINISHED")" ]; then
+# [ -n "$1" ]: без аргументов (`kvas`, в т.ч. проба из скриптов) grep -v по пустой
+# строке был истинным → при незавершённой настройке запускалась полная установка.
+if [ -n "${1}" ] && echo "${1}" | grep -qvEi 'uninstall|vpn|route|ver|help' && [ -z "$(get_config_value "SETUP_FINISHED")" ]; then
 	print_line
 	echo "${2}" | grep -qE 'upgrade|true' && warning "Запускаем настройку пакета" || {
 		error "Настройка пакета не завершена, запускаем настройку пакета" "1"
@@ -99,7 +100,7 @@ case "${1}" in
 			done
 			# Тяжёлое — в фоне, чтобы команда возвращалась сразу:
 			#  - refresh_dnsmasq_ipset_table пересобирает ipset=/домен/ директивы из
-			#    ПОЛНОГО kvas.list (ловит домены, добавленные по тегам/импорту);
+			#    ПОЛНОГО kvas.list (ловит домены, добавленные импортом);
 			#  - main/ipset добирает IP-литералы/подсети, если они были в аргументах;
 			#  - перезапуск DNS подхватывает новые директивы (для авто-добавления
 			#    будущих IP домена). Текущие IP уже в ipset — доступ работает до рестарта.
@@ -112,6 +113,8 @@ case "${1}" in
 					/opt/etc/init.d/S99adguardhome restart
 				fi
 			} &>/dev/null &
+		else
+			_rc=1   # ничего не добавлено — WebUI покажет ошибку, а не «добавлено»
 		fi
 		;;
 	del | rm  )
@@ -121,17 +124,13 @@ case "${1}" in
 			[ -n "$_skip_first" ] && { _skip_first=; continue; }
 			_domains="$_domains${_domains:+ }$_arg"
 		done
-		if [ "$_domains" = "tags" ]; then
-			del_tag_section_to_protect_list
-			exit 0
-		fi
 		for _dom in $_domains; do
 			[ -z "$_dom" ] && continue
 			ready "Удаляем $_dom из списка защищенных..."
-			_esc_dom=$(echo "$_dom" | sed 's/\//\\\//g')
-			if grep -qe "${_dom}$" "$KVAS_LIST_FILE" 2>/dev/null; then
-				sed -i "/${_esc_dom}/d" "$KVAS_LIST_FILE" 2>/dev/null
-				cmd_adguardhome_status | grep -q ВКЛЮЧЕН 2>/dev/null && sed -i "/${_esc_dom}/d" "$ADGUARD_IPSET_FILE" 2>/dev/null
+			# точное совпадение записи (d или *.d), не подстрока/регэксп
+			if list_remove_entry "$KVAS_LIST_FILE" "$_dom"; then
+				list_remove_entry "$ADGUARD_IPSET_FILE" "$_dom"
+				_dom=${_dom#\*}; _dom=${_dom#.}
 				for _ip in $(dns__get_ips_by_domain "$_dom" 2>/dev/null); do
 					/opt/sbin/ipset -exist del "${IPSET_TABLE_NAME}" "$_ip" &>/dev/null
 				done
@@ -148,6 +147,8 @@ case "${1}" in
 			else
 				/opt/etc/init.d/S99adguardhome restart &>/dev/null
 			fi
+		else
+			_rc=1   # ни одного домена не было в списке
 		fi
 		;;
 
@@ -176,16 +177,6 @@ case "${1}" in
 			[ -f "$_b" ] && cp -f "$_b" "$_f" 2>/dev/null && echo "Восстановлен: $(basename $_f)"
 		done
 		_f="$KVAS_WEB_PASS"; _b="${BKP}/$(basename $_f)"; [ -f "$_b" ] && cp -f "$_b" "$_f" 2>/dev/null && echo "Восстановлен: $(basename $_f)"
-		;;
-
-	tags)
-		case "${2}" in
-			list) 			cmd_show_tags_domain_list "${3}" ;;
-			add)			cmd_add_domain_to_tag_list "${3}" "${4}" ;;
-			del)			cmd_del_domain_from_tag_list "${3}" "${4}" ;;
-			update)			cmd_update_tags_domain_list "${3}";;
-			*) 				cmd_show_tags_domain_list "${2}" ;;
-		esac
 		;;
 
 	# Расширенные настройки
@@ -388,11 +379,11 @@ case "${1}" in
 
 	version | ver)			version
 		;;
-	upgrade)			sh /opt/apps/kvas/bin/main/upgrade "${2}" "${3}"; exit 0
+	upgrade)			sh /opt/apps/kvas/bin/main/upgrade "${2}" "${3}"; exit $?
 		;;
 	update)				sh /opt/apps/kvas/bin/main/update "${2}"; exit 0
 		;;
-	rollback)				sh /opt/apps/kvas/bin/main/upgrade rollback "${2}"; exit 0
+	rollback)				sh /opt/apps/kvas/bin/main/upgrade rollback "${2}"; exit $?
 		;;
 
 	# Отключение и удаление
@@ -416,3 +407,5 @@ case "${1}" in
 esac
 
 print_line
+# код возврата команды (если она его выставила) — WebUI различает ошибку и успех
+exit "${_rc:-0}"

@@ -34,3 +34,52 @@ if grep -Fq 'Access-Control-Allow-Origin: *' "$HTTPD"; then
 fi
 
 grep -Fq 'path=${S:-/}' "$HTTPD"
+
+# Лимит строк заголовков: 60 строк → 431, а не бесконечный разбор.
+many=$(i=0; while [ "$i" -lt 60 ]; do printf 'X-H%s: v\\r\\n' "$i"; i=$((i + 1)); done)
+request "GET / HTTP/1.0\\r\\n${many}\\r\\n" | head -1 | tr -d '\r' | grep -Fx 'HTTP/1.0 431 Request Header Fields Too Large' >/dev/null
+
+# Таймаут заголовков (где shell умеет read -t): клиент, который молчит, отваливается.
+if command -v busybox >/dev/null 2>&1; then
+    mkfifo "$WORK/slow"
+    busybox sh -c "$(printf '%s' "$HANDLER" | sed 's/^HDR_TIMEOUT=.*/HDR_TIMEOUT=1/')" < "$WORK/slow" > /dev/null 2>&1 &
+    hpid=$!
+    # писатель держит FIFO открытым и молчит после первой строки
+    (printf 'GET / HTTP/1.0\r\n'; sleep 20) > "$WORK/slow" &
+    wpid=$!
+    i=0
+    while kill -0 "$hpid" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
+    alive=0; kill -0 "$hpid" 2>/dev/null && alive=1
+    kill "$hpid" "$wpid" 2>/dev/null || true
+    [ "$alive" -eq 0 ] || { echo 'header read timeout not applied' >&2; exit 1; }
+fi
+
+# POST-тело по Content-Length при НЕзакрытом соединении (как у браузера):
+# CGI получает CONTENT_LENGTH и читает ровно столько, обработчик не висит.
+printf '#!/bin/sh\nprintf "{\\"len\\":\\"%%s\\",\\"body\\":\\"%%s\\"}" "$CONTENT_LENGTH" "$(head -c "$CONTENT_LENGTH")"\n' > "$WORK/www/cgi-bin/manage.sh"
+mkfifo "$WORK/post"
+sh -c "$HANDLER" < "$WORK/post" > "$WORK/post.out" 2>/dev/null &
+hpid=$!
+(printf 'POST /cgi-bin/manage.sh?action=x HTTP/1.1\r\nContent-Length: 11\r\n\r\na.com\nb.com'; sleep 20) > "$WORK/post" &
+wpid=$!
+i=0
+while kill -0 "$hpid" 2>/dev/null && [ "$i" -lt 25 ]; do sleep 0.2; i=$((i + 1)); done
+alive=0; kill -0 "$hpid" 2>/dev/null && alive=1
+kill "$hpid" "$wpid" 2>/dev/null || true
+[ "$alive" -eq 0 ] || { echo 'POST handler hangs waiting for EOF' >&2; exit 1; }
+grep -F '"len":"11","body":"a.com' "$WORK/post.out" >/dev/null || { echo 'CGI did not get the body'; cat "$WORK/post.out"; exit 1; }
+request 'POST / HTTP/1.0\r\nContent-Length: 1x\r\n\r\n' | head -1 | tr -d '\r' | grep -Fx 'HTTP/1.0 400 Bad Request' >/dev/null
+request 'POST / HTTP/1.0\r\nContent-Length: 99999999\r\n\r\n' | head -1 | tr -d '\r' | grep -Fx 'HTTP/1.0 413 Payload Too Large' >/dev/null
+
+# Общий срок на заголовки: клиент шлёт по строке раз в 0.5 с (per-line таймаут не срабатывает) → 408.
+mkfifo "$WORK/drip"
+sh -c "$(printf '%s' "$HANDLER" | sed 's/^HDR_TOTAL=.*/HDR_TOTAL=2/')" < "$WORK/drip" > "$WORK/drip.out" 2>/dev/null &
+hpid=$!
+( printf 'GET / HTTP/1.0\r\n'; i=0; while [ "$i" -lt 30 ]; do printf 'X-D%s: v\r\n' "$i"; sleep 0.5; i=$((i + 1)); done ) > "$WORK/drip" 2>/dev/null &
+wpid=$!
+i=0
+while kill -0 "$hpid" 2>/dev/null && [ "$i" -lt 40 ]; do sleep 0.2; i=$((i + 1)); done
+alive=0; kill -0 "$hpid" 2>/dev/null && alive=1
+kill "$hpid" "$wpid" 2>/dev/null || true
+[ "$alive" -eq 0 ] || { echo 'total header deadline not applied' >&2; exit 1; }
+head -1 "$WORK/drip.out" | tr -d '\r' | grep -Fx 'HTTP/1.0 408 Request Timeout' >/dev/null

@@ -45,6 +45,8 @@
 awk -F'"' '/"ip":/ { ip = $4 } /"name":/ { name = $4; if (ip) { print ip "|" name; ip=""; name="" } }'
 ```  
 **Примечание**: jq доступен на роутере, так что этот fallback используется редко, но на всякий случай.
+**Статус**: до 2026-11-20 фикс в коде НЕ был применён (оставался sed). Применён в аудите: RCI отдаёт JSON
+построчно с пробелом (`"ip": "x"`), поэтому разбор по полям `-F'"'` + сброс на `{`/`}`.
 
 ## Adblock-фиксы (сессия 2026-08-01, v344–v347)
 
@@ -95,6 +97,9 @@ NR==FNR { gsub(/\*/, "", $0); if ($0 !~ /^#/ && $0 != "") wl[$0]=1; next }
 те сборки (346/347 использовались дважды: proxy и adblock — разные ветки).
 
 ## External SOCKS5 Proxy (v347, на базе 3proxy)
+
+> ⚠ (аудит 2026-11-20) Кода этой функции в репозитории НЕТ: `libs/vless`, `proxy_ext_*`, `kvas proxy` —
+> отсутствуют (жили в старой Windows-сборке). Раздел — историческая справка, не описание текущего пакета.
 
 ### Зачем 3proxy
 xray-вариант (v346) не зашёл: внешние клиенты с SOCKS5 auth (Chrome) не подключались (ERR_UNEXPECTED_PROXY_AUTH). По статье форума Keenetic (forum.keenetic.ru/topic/3543) рабочая схема — 3proxy. Доступ извне через KeenDNS без проброса портов.
@@ -187,7 +192,9 @@ cp: can't create '/opt/etc/adblock/exception.list': No such file or directory
 ```
 **Причина**: `restore_backup()` (`main/setup`, строки ~96-135) делал `cp -f backup dest` без создания родительской директории. `/opt/etc/adblock/` появляется только при `kvas adblock on`, поэтому при чистой установке/апгрейде cp для `exception.list` (и `ads.kvas.list`, `sources.list`) падал.
 **Фикс (v352)**: в `restore_backup()` перед обоими `cp` добавить `mkdir -p "$(dirname "${dest_file}")"`.
-**Примечание**: `/opt/etc/adblock/` не удаляется при upgrade (только при uninstall), `block.list` сохраняется.
+**Примечание (исправлено аудитом 2026-11-20)**: утверждение «`/opt/etc/adblock/` не удаляется при upgrade» НЕВЕРНО —
+`kvas upgrade` делает `kvas uninstall` → `rm_dir /opt/etc/adblock`, `block.list` в бэкап не входит и теряется.
+Лечится переходом upgrade на `opkg install --force-reinstall` без uninstall (план аудита, п.3.1).
 
 **Версия**: `kvas_1.1.9_beta-10-352_all.ipk`.
 
@@ -339,9 +346,7 @@ on/off правит список и число правил (11 MAC×6 порт�
 - `route_guest_add`/`del`: `valid_ifname "$net"`.
 - `host_add`: очищенный домен в lower + `valid_domain` ДО `sed -i "s|^${clean}$|…"`
   (раньше без проверки → sed-инъекция/порча kvas.list).
-- `tags_create`/`tags_edit_save`: `$domains` идёт в kvas БЕЗ кавычек (word-split) —
-  per-token гвард `case "$_d" in -*|*[!a-zA-Z0-9.*_-]*) ... ` (option/arg injection);
-  плюс запрет ведущего `-` у `name`.
+- (закваски/`tags_*` удалены целиком 2026-11-20 — стандартного add/del/import достаточно.)
 - Мин. длина пароля панели 4→8 (`set_pass`/`change_pass`); тест обновлён.
 
 **data.sh**: `action=debug` и `action=test_data` (раскрывали `$PATH`, DNS-лог, срезы
@@ -353,6 +358,39 @@ conntrack) выключены по умолчанию — гейт `[ -f /opt/et
 
 Проверено на живом роутере: плохие ip/mac/domain/iface отклоняются, валидные проходят,
 `debug disabled`, все `make test` зелёные.
+
+## Аудит 2026-11-20 (ветка build-from-repo): инварианты, которые не ломать
+
+- **Токен WebUI** — только 32 hex (`check_token`); иначе `../<файл>` проходил как токен.
+- **Пользовательский ввод не вклеивается в код awk/sed/регэкспы**: `awk -v` + сравнение строк.
+- **Списки** (kvas.list, kvas.ipset, hosts, ads, exception, inface_equals) — только точное сравнение:
+  `list_has_entry`/`list_remove_entry`, `inface_field` (libs/main). Никаких `sed "/$x/d"`, `grep "$x"`.
+- **JSON из awk** — через `AWK_JESC`/`jesc()` (manage.sh): экранирование в замене `gsub` у busybox
+  awk и mawk РАЗНОЕ. `url_decode` — на awk (printf `%b` в dash не знает `\x`).
+- **innerHTML** в index.html — только через `esc()`.
+- **Тело POST** — `head -c "$CONTENT_LENGTH"` (httpd экспортирует), не `cat`.
+- **Импорт** только ДОПИСЫВАЕТ kvas.list (раньше `clear_file_content` переписывал весь список).
+- **Закваски (tags) удалены целиком** — стандартных add/del/import достаточно.
+- **CI**: версия = max git-тег + 1 PATCH; существующий релиз не перезаписывается.
+  (2026-11-10 старый CI перезалил ассеты v1.4.0/v1.4.1 — их содержимое не соответствует исходным.)
+- **build.sh** пакует только файлы под git, права фиксированные.
+- **iptables-save и `iptables -S` по всей таблице на Keenetic ОБРЫВАЮТСЯ** (rc=1) на match'е прошивки
+  `connndmmark`/`ndmmark` в INPUT: объявления цепочек (`:KVAS_MARK`) в выводе есть, правил после INPUT
+  нет. Полный дамп обрывался ещё в nat (порядок nat, mangle, filter) — mangle не попадал вовсе,
+  и проверки ndm «прыжок в KVAS_MARK уже есть?» всегда отвечали «нет» → дубль на каждом прогоне
+  хука (сторож удалял ~470 в сутки). Исправлено: хелперы `ipt_chain_rules`/`ipt_chain_exists`
+  (libs/main), `save_iptables` — поцепочечная эмуляция; проверки ndm — по нужной цепочке.
+- **Целостность цепочек**: KVAS_MARK «целая» = есть `CONNMARK --save-mark`, KVAS_DNS = два DNAT на
+  :9753. Пустую/неполную (NDM делает -F, не -X) хук очищает и наполняет заново, не удаляя
+  (на неё ссылаются прыжки). Проверка KVAS_DNS — ДО проверки прыжка в ip4__dns__add_routing.
+- Shadowsocks и libs/keen_api удалены полностью (вкл. ветки в ndm и заглушки). Остались только
+  уборка после старых версий: S22shadowsocks/цепочки SHADOWSOCKS в uninstall, KVAS_DNAT_TO_PORT в ip4__flush.
+- Локально `mkdir` — uutils coreutils 0.10, он НЕ атомарен (два процесса могут оба «создать»
+  каталог); тесты локов подставляют `busybox mkdir`, как на роутере.
+- Брутфорс WebUI: лимит 5 ошибок на адрес + общий 30 на всех. Общий потолок — компромисс:
+  хост, меняющий 6+ IP, всё ещё может на 5 мин запереть вход всем; зато перебор с ротацией
+  адресов упирается в лимит.
+- План и статус аудита — локальный `docs/audit-2026-11.md` (вне git).
 
 ## Формат ipk
 gzip(tar( debian-binary + control.tar.gz + data.tar.gz )), строки с LF.

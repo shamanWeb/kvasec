@@ -103,37 +103,6 @@ vpn_debug() {
 #	 Формируем лог отладочной информации
 #
 # ------------------------------------------------------------------------------------------
-shadowsocks_debug() {
-
-	ready "Состояние службы shadowsocks"
-	if /opt/etc/init.d/S22shadowsocks status &> /dev/null; then
-		when_ok "ЗАПУЩЕНА"
-		port=$(cat < '/opt/etc/shadowsocks.json' | grep local_port | cut -d':' -f2 | tr -d ' ,')
-		result=$(netstat -ltunp 2> /dev/null | grep "${SSR_NAME}" | tr -s " ")
-		echo_debug "Отчет по прослушиванию порта shadowsocks [${port}]\nкоманда: netstat -ltunp | grep \"ss-redir\"" "${result}"
-		result=$(cat < /opt/etc/shadowsocks.json | grep -vE "password|server")
-		echo_debug "Выборка из файла конфигурации shadowsocks /opt/etc/shadowsocks.json" "${result}"
-
-	else
-		when_bad "ОСТАНОВЛЕНА"
-		print_line
-		warning "Файл конфигурации shadowsocks"
-		print_line
-		cat < "/opt/etc/shadowsocks.json" | sed 's/^\(.*\)\(#.*\)/\2/; /^#/d; /^$/d'
-		print_line
-		warning "Запускаем shadowsocks в режиме отладки"
-		print_line
-		ssr_run -v
-		print_line
-		exit 1
-	fi
-}
-
-# ------------------------------------------------------------------------------------------
-#
-#	 Формируем лог отладочной информации
-#
-# ------------------------------------------------------------------------------------------
 kvas__show_list() {
 	if ! [ -f "${KVAS_LIST_FILE}" ] ; then
 		error "Не найден файл списка ${KVAS_LIST_FILE}"
@@ -267,26 +236,21 @@ cmd_debug_iptables() {
 	output=$(ip route)
 	echo_debug 'Подключения (соединитесь с гостевой заранее)' "${output}"
 
-	if is_shadowsocks_enabled ; then
-		title='Перенаправление в порт'
-		output="${CHAIN_DNAT_TO_PORT}"
+	output=$(ip route show table "${ROUTE_TABLE_ID}")
+	if [ -z "${output}" ] ; then
+		output=$(iptables__text_empty 'Маршруты тоннеля' "${1}")
 	else
-		output=$(ip route show table "${ROUTE_TABLE_ID}")
-		if [ -z "${output}" ] ; then
-			output=$(iptables__text_empty 'Маршруты тоннеля' "${1}")
+		title=$(ip rule show | grep -F "$(ip4__rule__get_sub)")
+		if [ -z "${title}" ] ; then
+			output=$(iptables__text_empty 'Правила перенаправления' "${1}")
 		else
-			title=$(ip rule show | grep -F "$(ip4__rule__get_sub)")
-			if [ -z "${title}" ] ; then
-				output=$(iptables__text_empty 'Правила перенаправления' "${1}")
-			else
-				output="${output}"'\n'"${title}"
-			fi
+			output="${output}"'\n'"${title}"
 		fi
-		echo_debug 'Политика' "${output}"
-
-		title='Маркировка'
-		output="${CHAIN_MARK}"
 	fi
+	echo_debug 'Политика' "${output}"
+
+	title='Маркировка'
+	output="${CHAIN_MARK}"
 	output=$(iptables__get_by_chain "${output}")
 	if [ -z "${output}" ] ; then
 		output=$(iptables__text_empty 'Правила' "${1}")

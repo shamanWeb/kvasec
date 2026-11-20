@@ -9,9 +9,10 @@ for file in opt/bin/kvas opt/bin/libs/vpn opt/bin/main/setup opt/etc/init.d/S96k
     sh -n "$file"
 done
 
-! grep -q '/libs/vless' opt/bin/kvas opt/bin/libs/vpn
-! grep -q 'is_vless_over_proxy_enabled' opt/etc/ndm/ndm
-! grep -qiE 'VLESS|Xray|ShadowSocks' opt/bin/monitor/www/index.html opt/etc/conf/kvas.help
-grep -Fq 'opkgtun*) vpn_on' opt/bin/libs/vpn
+if grep -q '/libs/vless' opt/bin/kvas opt/bin/libs/vpn; then echo "FAIL: test_amnezia_only.sh:12" >&2; exit 1; fi
+if grep -q 'is_vless_over_proxy_enabled' opt/etc/ndm/ndm; then echo "FAIL: test_amnezia_only.sh:13" >&2; exit 1; fi
+if grep -qiE 'VLESS|Xray|ShadowSocks' opt/bin/monitor/www/index.html opt/etc/conf/kvas.help; then echo "FAIL: test_amnezia_only.sh:14" >&2; exit 1; fi
+# switch_vpn_on: проверка opkgtun идёт ДО ndm_interface_change
+sed -n '/^switch_vpn_on(){/,/^}/p' opt/bin/libs/vpn | awk '/opkgtun\*\) : ;;/ { c = NR } /^[[:space:]]*ndm_interface_change / && !n { n = NR } END { exit !(c && n && c < n) }'
 grep -q "Поддерживается только туннель AmneziaWG" opt/bin/libs/vpn
 grep -q 'opkgtun\[0-9\]\*)' build.sh

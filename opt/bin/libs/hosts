@@ -81,7 +81,17 @@ cmd_hosts_one_del(){
 
 	if [ -f ${HOSTS_FILE} ] ; then 
 		if [ -n "${1}" ]; then
-			sed -i "/${1}/d" ${HOSTS_FILE}
+			# точно по полю (IP или имя): sed "/1.1.1.1/d" удалял и 1.1.1.10, точка — любой символ
+			local tmp_file="${HOSTS_FILE}.tmp.$$"
+			ready "Записи с ${1} удалены..."
+			if awk -v a="${1}" '{ for (i = 1; i <= NF; i++) if ($i == a) next } { print }' "${HOSTS_FILE}" > "${tmp_file}" \
+				&& mv -f "${tmp_file}" "${HOSTS_FILE}"; then
+				when_ok "УСПЕШНО"
+				dns_server_restart "${1}"
+			else
+				rm -f "${tmp_file}"
+				when_bad "ОШИБКА"
+			fi
 		else
 			error "Аргумент не задан" nl
 			print_line

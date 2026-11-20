@@ -1,0 +1,137 @@
+#!/bin/sh
+# Регрессии мелких ошибок CLI (этап 7 аудита 2026-11).
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT HUP INT TERM
+
+# 7.1 IP_PORT_FILTER: 0 в последнем октете допустим (раньше [1-9] отвергал .10/.100)
+eval "$(grep '^IP_PORT_FILTER=' "$ROOT/opt/bin/libs/main")"
+for ok in 10.0.0.10:53 192.168.1.100#5353 1.2.3.4:53; do
+    echo "$ok" | grep -qxE "$IP_PORT_FILTER" || { echo "FAIL 7.1: $ok отвергнут"; exit 1; }
+done
+for bad in 1.2.3:53 1.2.3.4 x1.2.3.4:53; do
+    ! echo "$bad" | grep -qxE "$IP_PORT_FILTER" || { echo "FAIL 7.1: $bad принят"; exit 1; }
+done
+grep -F 'grep -qxE "${IP_PORT_FILTER}"' "$ROOT/opt/bin/libs/vpn" >/dev/null
+
+# 7.3 Меню отката: ≥10 релизов (шаблон [1-N] в case ломался), Enter, мусор, .sha256 не в списке
+{
+    echo 'print_line() { :; }; print_error() { :; }; get_n_spaces() { :; }; release_url=x'
+    echo 'gh_api() { cat "$GH_JSON"; }'
+    sed -n '/^select_release_from_list(){/,/^}/p' "$ROOT/opt/bin/main/upgrade"
+} > "$WORK/upg.sh"
+python3 -c '
+import json
+print(json.dumps([{"assets":[{"name":"kvasec_1.%d.0.ipk"%i,"browser_download_url":"u/v/w/x/y/z/a/kvasec_1.%d.0.ipk"%i},
+                             {"name":"kvasec_1.%d.0.ipk.sha256"%i,"browser_download_url":"u/v/w/x/y/z/a/kvasec_1.%d.0.ipk.sha256"%i}]}
+                  for i in range(12, 0, -1)]))' > "$WORK/gh.json"
+pick() { printf "$1" | GH_JSON="$WORK/gh.json" sh -c ". '$WORK/upg.sh'; select_release_from_list R >/dev/null; echo \"\$R\""; }
+[ "$(pick '11\n')" = "u/v/w/x/y/z/a/kvasec_1.2.0.ipk" ] || { echo "FAIL 7.3: пункт 11 — $(pick '11\n')"; exit 1; }
+[ "$(pick '\n')" = "u/v/w/x/y/z/a/kvasec_1.12.0.ipk" ] || { echo "FAIL 7.3: Enter"; exit 1; }
+[ "$(pick 'x\n13\n0\n2\n')" = "u/v/w/x/y/z/a/kvasec_1.11.0.ipk" ] || { echo "FAIL 7.3: мусор/вне диапазона"; exit 1; }
+grep -F "''|*[!0-9]*) num_inface=0 ;;" "$ROOT/opt/bin/libs/vpn" >/dev/null
+
+# 7.8 add_host_to_adguard: не дублирует запись в kvas.list, точная проверка, без дублей ipset=
+{
+    echo "KVAS_LIST_FILE='$WORK/kl'; ADGUARD_IPSET_FILE='$WORK/ag'; DNSMASQ_IPSET_HOSTS='$WORK/dm'; IPSET_TABLE_NAME=KVAS_LIST"
+    sed -n '/^_list_entry_awk=/,/^list_remove_entry() {/p' "$ROOT/opt/bin/libs/main"
+    sed -n '/^list_remove_entry() {/,/^}/p' "$ROOT/opt/bin/libs/main" | sed 1d
+    sed -n '/^add_host_to_adguard(){/,/^}/p' "$ROOT/opt/bin/libs/vpn"
+} > "$WORK/ag.sh"
+printf '%s\n' 'x.com' > "$WORK/kl"; printf '%s\n' 'netflix.com/KVAS_LIST' > "$WORK/ag"; : > "$WORK/dm"
+RUNB="sh"; command -v busybox >/dev/null 2>&1 && RUNB="busybox sh"
+$RUNB -c ". '$WORK/ag.sh'; add_host_to_adguard flix.com flix.com; add_host_to_adguard flix.com flix.com; add_host_to_adguard w.org '*w.org'"
+printf '%s\n' 'x.com' | cmp - "$WORK/kl" || { echo 'FAIL 7.8: kvas.list изменён'; exit 1; }
+printf '%s\n' 'netflix.com/KVAS_LIST' 'flix.com/KVAS_LIST' 'w.org/KVAS_LIST' | cmp - "$WORK/ag" || { echo 'FAIL 7.8: kvas.ipset'; cat "$WORK/ag"; exit 1; }
+printf '%s\n' 'ipset=/flix.com/KVAS_LIST' 'ipset=/:.*w.org:/KVAS_LIST' | cmp - "$WORK/dm" || { echo 'FAIL 7.8: dnsmasq ipset'; exit 1; }
+
+# 7.9 Ожидание первичной настройки AdGuard: выход при смерти процесса/таймауте + возврат DNS
+grep -F 'if ! kill -0 "${ag_pid}" 2>/dev/null || [ "${ag_wait}" -ge 1800 ]; then' "$ROOT/opt/bin/libs/vpn" >/dev/null
+grep -F '/opt/etc/init.d/S56dnsmasq start' "$ROOT/opt/bin/libs/vpn" >/dev/null
+
+# 3.5 kvas upgrade/rollback возвращают код upgrade-скрипта, а не всегда 0
+grep -F 'sh /opt/apps/kvas/bin/main/upgrade "${2}" "${3}"; exit $?' "$ROOT/opt/bin/kvas" >/dev/null
+grep -F 'sh /opt/apps/kvas/bin/main/upgrade rollback "${2}"; exit $?' "$ROOT/opt/bin/kvas" >/dev/null
+
+# 3.4 Обновление AdGuardHome: без curl -k, sha256 по checksums.txt (формат релиза: "hash  ./file")
+! grep -hE 'curl -k|curl -[a-zA-Z]*k[a-zA-Z]* ' "$ROOT/opt/bin/libs/update" "$ROOT/opt/bin/libs/main" | grep -qv '^[[:space:]]*#' \
+    || { echo 'FAIL 3.4: curl -k'; exit 1; }
+printf '%s\n' 'aaa  ./AdGuardHome_linux_mips.tar.gz' 'f5c3  ./AdGuardHome_linux_arm64.tar.gz' > "$WORK/cs.txt"
+awkprog=$(grep -o "\$2 == f || [^']*" "$ROOT/opt/bin/libs/update")
+[ "$(awk -v f=AdGuardHome_linux_arm64.tar.gz "$awkprog" "$WORK/cs.txt")" = f5c3 ] || { echo 'FAIL 3.4: checksums parse'; exit 1; }
+# sha256 обязателен для kvasec_*.ipk (upgrade и install.sh)
+{
+    echo 'print_error() { :; }'
+    echo 'gh_download() { return 1; }          # .sha256 не скачался'
+    echo 'gh_ok() { printf "%s  x\n" "$(sha256sum "$PKG" | cut -d" " -f1)" > "$2"; }'
+    for f in verify_package version_key get_package_version; do
+        sed -n "/^${f}(){/,/^}/p" "$ROOT/opt/bin/main/upgrade"
+    done
+} > "$WORK/vp.sh"
+mkdir -p "$WORK/ipk"; : > "$WORK/ipk/data.tar.gz"
+for v in 1.3.0 1.2.3; do tar -czf "$WORK/kvasec_$v.ipk" -C "$WORK/ipk" data.tar.gz; done
+vp() { PKG="$WORK/$1" sh -c ". '$WORK/vp.sh'; package_url=x; $2 verify_package \"\$PKG\""; }
+if vp kvasec_1.3.0.ipk ''; then echo 'FAIL 3.4: 1.3.0 без .sha256 принят'; exit 1; fi
+vp kvasec_1.2.3.ipk '' || { echo 'FAIL 3.4: откат на 1.2.3 (до .sha256) заблокирован'; exit 1; }
+vp kvasec_1.3.0.ipk 'gh_download() { gh_ok "$@"; };' || { echo 'FAIL 3.4: верный sha256 отвергнут'; exit 1; }
+grep -F "fail 'cannot download SHA-256 file" "$ROOT/install.sh" >/dev/null
+
+# Ревью: описание гостевой сети в inface_equals пишется хуком через jq без -r (с кавычками)
+printf '%s\n' 'Wireguard1|nwg1|"My VPN"' 'Bridge0|br0|' > "$WORK/ifeq"
+awkg=$(grep -o "'{ x = \$3; gsub[^']*'" "$ROOT/opt/bin/libs/vpn" | sed "s/^'//; s/'$//")
+[ "$(awk -F'|' -v d='My VPN' "$awkg" "$WORK/ifeq")" = nwg1 ] || { echo 'FAIL: guest desc в кавычках'; exit 1; }
+[ -z "$(awk -F'|' -v d='' "$awkg" "$WORK/ifeq")" ] || { echo 'FAIL: пустое описание совпало'; exit 1; }
+
+# Ревью: kvas add/del без результата → код 1 (manage.sh показывает ошибку, а не «добавлено»)
+[ "$(grep -c '_rc=1   #' "$ROOT/opt/bin/kvas")" -eq 2 ] || { echo 'FAIL: _rc в add/del'; exit 1; }
+
+# kvas test: правила считаются поцепочечно (iptables-save/-S по таблице обрываются на connndmmark)
+if grep -q 'save_iptables' "$ROOT/opt/bin/libs/check"; then echo 'FAIL: libs/check снова использует save_iptables'; exit 1; fi
+grep -F 'iptables -t mangle -S KVAS_MARK' "$ROOT/opt/bin/libs/check" >/dev/null
+
+# 7.4 service_action: выполняет переданное действие, только точный S<NN><имя>
+mkdir -p "$WORK/initd"
+for n in S56dnsmasq K56dnsmasq S56dnsmasq.bak S09dnscrypt-proxy2; do
+    printf '#!/bin/sh\necho "%s $1" >> "%s/svc.log"\n' "$n" "$WORK" > "$WORK/initd/$n"; chmod +x "$WORK/initd/$n"
+done
+sed -n '/^service_action(){/,/^}/p' "$ROOT/opt/bin/libs/main" > "$WORK/sa.sh"
+INITD_DIR="$WORK/initd" sh -c ". '$WORK/sa.sh'; service_action dnsmasq stop; service_action dnsmasq restart; service_action nosuch start" || true
+printf '%s\n' 'S56dnsmasq stop' 'S56dnsmasq restart' | cmp - "$WORK/svc.log" || { echo 'FAIL 7.4'; cat "$WORK/svc.log"; exit 1; }
+if INITD_DIR="$WORK/initd" sh -c ". '$WORK/sa.sh'; service_action nosuch start"; then echo 'FAIL 7.4: нет скрипта, а rc=0'; exit 1; fi
+# restart_all_services: «ОТКЛЮЧЕН» не должен гасить dnsmasq
+if sed -n '/^restart_all_services(){/,/^}/p' "$ROOT/opt/bin/main/setup" | grep -q 'ОТКЛЮЧЕН)'; then
+    echo 'FAIL 7.4: restart_all_services гасит dnsmasq при ОТКЛЮЧЕН'; exit 1
+fi
+
+# 7.6 dnsmasq_dns_change меняет только upstream server=, не комментарии и не server=/домен/
+printf '%s\n' '#server=/localnet/192.168.0.1' 'rev-server=10.0.0.0/8,10.0.0.1' 'server=/corp.lan/10.1.1.1' 'server=127.0.0.1#9153' > "$WORK/dm.conf"
+{
+    echo "DNSMASQ_CONFIG='$WORK/dm.conf'"
+    echo 'ready() { :; }; when_alert() { :; }; when_bad() { :; }; ipset_dns_change() { :; }; set_config_value() { :; }'
+    sed -n '/^dnsmasq_dns_change() {/,/^}/p' "$ROOT/opt/bin/libs/vpn" | sed 's|/opt/etc/init.d/S56dnsmasq restart|true|'
+} > "$WORK/dd.sh"
+sh -c ". '$WORK/dd.sh'; dnsmasq_dns_change 1.1.1.1#53"
+printf '%s\n' '#server=/localnet/192.168.0.1' 'rev-server=10.0.0.0/8,10.0.0.1' 'server=/corp.lan/10.1.1.1' 'server=1.1.1.1#53' \
+    | cmp - "$WORK/dm.conf" || { echo 'FAIL 7.6'; cat "$WORK/dm.conf"; exit 1; }
+
+# 7.2 switch_vpn_on: проверка интерфейса ДО ndm_interface_change (иначе маршрутизация
+# уже сброшена); kvas vpn gateway: аргумент учитывается, не-opkgtun — отказ без изменений
+{
+    echo "error() { :; }; print_line() { :; }; is_install_stage=yes"
+    echo "ndm_interface_change() { echo \"change \$*\" >> '$WORK/sv.log'; }; vpn_on() { echo \"on \$1\" >> '$WORK/sv.log'; }"
+    echo "ndm_gateway_change() { echo \"gw \$1\" >> '$WORK/sv.log'; }; cmd_kvas_init() { echo init >> '$WORK/sv.log'; }"
+    echo "get_guest_inface_list_from_config() { :; }"
+    grep '^IP_FILTER=' "$ROOT/opt/bin/libs/main"
+    sed -n '/^switch_vpn_on(){/,/^}/p; /^cmd_manual_gateway_set() {/,/^}/p' "$ROOT/opt/bin/libs/vpn"
+} | sed "s|/opt/sbin/ip |$WORK/fakeip |" > "$WORK/sv.sh"
+printf '#!/bin/sh\nprintf "%%s\\n" "7: opkgtun10    inet 10.8.1.3/32 scope global opkgtun10" "2: br0    inet 192.168.1.1/24 brd 192.168.1.255 scope global br0"\n' > "$WORK/fakeip"; chmod +x "$WORK/fakeip"
+RUNB="sh"; command -v busybox >/dev/null 2>&1 && RUNB="busybox sh"
+: > "$WORK/sv.log"
+$RUNB -c ". '$WORK/sv.sh'; switch_vpn_on eth3 GigabitEthernet1" || true
+[ ! -s "$WORK/sv.log" ] || { echo 'FAIL 7.2: не-opkgtun тронул маршрутизацию'; cat "$WORK/sv.log"; exit 1; }
+$RUNB -c ". '$WORK/sv.sh'; cmd_manual_gateway_set 192.168.1.1" >/dev/null 2>&1 || true
+[ ! -s "$WORK/sv.log" ] || { echo 'FAIL 7.2: gateway на br0 принят'; exit 1; }
+$RUNB -c ". '$WORK/sv.sh'; cmd_manual_gateway_set 10.8.1.3" >/dev/null 2>&1
+printf '%s\n' 'gw 10.8.1.3' 'change opkgtun10 Gateway' 'on opkgtun10' 'init' | cmp - "$WORK/sv.log" || { echo 'FAIL 7.2: gateway'; cat "$WORK/sv.log"; exit 1; }

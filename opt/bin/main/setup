@@ -137,35 +137,54 @@ restore_backup(){
 
 
 
+# Пауза: маршрутизация kvas выключается целиком и не возвращается сама.
+#  - сторож S99kvas-awg-route останавливается (cleanup) и не стартует, пока есть флаг
+#    /opt/etc/kvas.paused (переживает перезагрузку) — раньше он за ≤10 с возвращал
+#    ip rule/default/KVAS_MARK, и пауза фактически не работала;
+#  - NDM-хуки маршрутизации уносятся в бэкап (иначе reload firewall вернёт KVAS_MARK).
+#    Перехват DNS (100-dns-local) остаётся: DNS продолжает идти через kvas-dnsmasq.
+KVAS_PAUSED_FLAG=/opt/etc/kvas.paused
+KVAS_WATCHER=/opt/etc/init.d/S99kvas-awg-route
+
+# пары «рабочий хук → имя в бэкапе» (раньше проверялся один файл, а переносился другой)
+_pause_hooks() {
+	echo "/opt/etc/ndm/iflayerchanged.d/100-kvas-vpn 100-kvas-vpn-layer"
+	echo "/opt/etc/ndm/iflayerchanged.d/kvas-ips-reset kvas-ips-reset-layer"
+	echo "/opt/etc/ndm/ifstatechanged.d/100-kvas-vpn 100-kvas-vpn-state"
+	echo "/opt/etc/ndm/netfilter.d/100-vpn-mark 100-vpn-mark"
+}
+
 # Функция временной остановки работы пакета
 cmd_pause_kvas(){
 
-		ready "Временно приостанавливаем работу KVASEC..."
+	ready "Временно приостанавливаем работу KVASEC..."
 	{
-		ip4__flush &> /dev/null
+		touch "${KVAS_PAUSED_FLAG}"
+		[ -x "${KVAS_WATCHER}" ] && "${KVAS_WATCHER}" cleanup
 
-		# Архивируем файлы механизма ndm
-		[ -f /opt/etc/ndm/iflayerchanged.d/100-kvas-vpn ] && {
-			mv /opt/etc/ndm/iflayerchanged.d/100-kvas-vpn ${KVAS_BACKUP_PATH}/100-kvas-vpn-layer
-		}
-		[ -f /opt/etc/ndm/iflayerchanged.d/kvas-ips-reset ] && {
-			mv /opt/etc/ndm/iflayerchanged.d/kvas-ips-reset ${KVAS_BACKUP_PATH}/kvas-ips-reset-layer
-		}
-		[ -f /opt/etc/ndm/ifstatechanged.d/kvas-ips-reset ] && {
-			mv /opt/etc/ndm/ifstatechanged.d/100-kvas-vpn ${KVAS_BACKUP_PATH}/100-kvas-vpn-state
-		}
-		[ -f /opt/etc/ndm/netfilter.d/100-proxy-redirect ] && {
-			mv /opt/etc/ndm/netfilter.d/100-proxy-redirect ${KVAS_BACKUP_PATH}/100-proxy-redirect 
-		}
-		[ -f /opt/etc/ndm/netfilter.d/100-vpn-mark ] && {
-			mv /opt/etc/ndm/netfilter.d/100-vpn-mark ${KVAS_BACKUP_PATH}/100-vpn-mark
-		}
+		# Хуки — ДО очистки: NDM перезапускает netfilter-хуки после изменений iptables,
+		# и 100-vpn-mark успевал вернуть прыжок в KVAS_MARK.
+		mkdir -p "${KVAS_BACKUP_PATH}"
+		_pause_hooks | while read -r hook name; do
+			[ -f "${hook}" ] && mv -f "${hook}" "${KVAS_BACKUP_PATH}/${name}"
+		done
+
+		# Снимаем только маршрутизацию в туннель. Перехват DNS (KVAS_DNS) и ipset не
+		# трогаем: раньше ip4__flush удалял и их — у LAN пропадал DNS (на :53 без
+		# kvas-dnsmasq ответа нет), пока хук 100-dns-local не вернёт перехват.
+		ip4__flush 'net ip table' &> /dev/null
+		ip4__chain__delete_jump "${TABLE_MARK}" "${CHAIN_MARK}" &> /dev/null
+		ip4__chain__delete      "${TABLE_MARK}" "${CHAIN_MARK}" &> /dev/null
+		true
 	} &> /dev/null && when_ok "УСПЕШНО" || when_bad "C ОШИБКАМИ"
 }
 
 restart_all_services(){
 
-	if cmd_adguardhome_status | grep -qE "(ВКЛЮЧЕН|ОТКЛЮЧЕН)" ; then
+	# AdGuard — резолвер ТОЛЬКО когда ВКЛЮЧЕН. Раньше условие ловило и «ОТКЛЮЧЕН»;
+	# пока service_action игнорировал действие, это было безвредно, а с рабочим
+	# stop погасило бы dnsmasq при выключенном AdGuard — LAN без DNS.
+	if cmd_adguardhome_status | grep -q "ВКЛЮЧЕН" ; then
 		service_action dnsmasq stop
 		service_action adguardhome restart 
 	else
@@ -183,27 +202,17 @@ cmd_unpause_kvas(){
 	ready "Восстанавливаем работу KVASEC после паузы..."
 	{
 		#  Восстанавливаем из архива файлы механизма ndm
-		[ -f ${KVAS_BACKUP_PATH}/100-kvas-vpn-layer ] && {
-			mv ${KVAS_BACKUP_PATH}/100-kvas-vpn-layer /opt/etc/ndm/iflayerchanged.d/100-kvas-vpn 
-		}
-		[ -f ${KVAS_BACKUP_PATH}/100-kvas-vpn-layer ] && {
-			mv ${KVAS_BACKUP_PATH}/100-kvas-vpn-layer /opt/etc/ndm/iflayerchanged.d/100-kvas-vpn 
-		}
-		[ -f ${KVAS_BACKUP_PATH}/100-kvas-vpn-state ] && {
-			mv ${KVAS_BACKUP_PATH}/100-kvas-vpn-state /opt/etc/ndm/ifstatechanged.d/100-kvas-vpn
-		}
-		[ -f ${KVAS_BACKUP_PATH}/100-proxy-redirect ] && {
-			mv ${KVAS_BACKUP_PATH}/100-proxy-redirect /opt/etc/ndm/netfilter.d/100-proxy-redirect  
-		}
-		[ -f ${KVAS_BACKUP_PATH}/100-vpn-mark ] && {
-			mv ${KVAS_BACKUP_PATH}/100-vpn-mark /opt/etc/ndm/netfilter.d/100-vpn-mark 
-		}	
+		_pause_hooks | while read -r hook name; do
+			[ -f "${KVAS_BACKUP_PATH}/${name}" ] && mv -f "${KVAS_BACKUP_PATH}/${name}" "${hook}"
+		done
+		rm -f "${KVAS_PAUSED_FLAG}"
 
 		cmd_kvas_init
 		restart_all_services
-
+		[ -x "${KVAS_WATCHER}" ] && "${KVAS_WATCHER}" start
+		true
 	} &> /dev/null && when_ok "УСПЕШНО" || when_bad "C ОШИБКАМИ"
-	
+
 }
 
 
@@ -269,7 +278,6 @@ stop_crypt(){
 restore_backups(){
 	restore_backup "${KVAS_LIST_FILE_BACKUP}" "${KVAS_LIST_FILE}" "защищенного списка"
 	restore_backup "${KVAS_CONFIG_BACKUP}" "${KVAS_CONF_FILE}" "конфигурации пакета KVASEC"
-	restore_backup "${TAGS_LIST_BACKUP}" "${TAGS_LIST_FILE}" "списка заквасок"
 
 	restore_backup "${ADGUARDHOME_CONFIG_BACKUP}" "${ADGUARDHOME_CONFIG}" "конфигурации AdGuardHome"
 	restore_backup "${ADGUARD_IPSET_FILE_BACKUP}" "${ADGUARD_IPSET_FILE}" "списка ipset для AdGuardHome"
@@ -279,6 +287,7 @@ restore_backups(){
 
 	restore_backup "${DNSCRYPT_CONFIG_BACKUP}" "${DNSCRYPT_CONFIG}" "конфигурации dnscrypt_proxy2"
 	restore_backup "${ADBLOCK_LIST_EXCEPTION_BACKUP}" "${ADBLOCK_LIST_EXCEPTION}" "списка хостов-исключений для блокировки рекламы"
+	restore_backup "${ADBLOCK_BLOCK_FILE_BACKUP}" "${ADBLOCK_BLOCK_FILE}" "списка родительского контроля"
 	restore_backup "${ADBLOCK_HOSTS_FILE_BACKUP}" "${ADBLOCK_HOSTS_FILE}" "списка хостов для блокировки рекламы"
 	restore_backup "${ADBLOCK_SOURCES_LIST_BACKUP}" "${ADBLOCK_SOURCES_LIST}" "списка источников хостов для блокировки рекламы"
 	restore_backup "${KVAS_WEB_PASS_BACKUP}" "${KVAS_WEB_PASS}" "пароля веб-интерфейса"
@@ -287,6 +296,9 @@ restore_backups(){
 
 
 # Сохраняем все значимые файлы конфигурации пакета KVASEC
+# Бэкап конфигов перед uninstall (rm_package_files удаляет весь /opt/etc/adblock).
+# block.list (родительский контроль) добавлен 2026-11-20 — раньше терялся. `kvas upgrade`
+# теперь ставит пакет поверх и uninstall не вызывает (кроме явного `full`).
 save_backups(){
 	# Создаем директорию для бэкапа
 	local backup_dir="${KVAS_BACKUP_PATH}"
@@ -295,7 +307,6 @@ save_backups(){
 	# Бэкап основных конфигов
 	backup_copy "${KVAS_CONF_FILE}" "${KVAS_CONFIG_BACKUP}"
 	backup_copy "${KVAS_LIST_FILE}" "${KVAS_LIST_FILE_BACKUP}"
-	backup_copy "${TAGS_LIST_FILE}" "${TAGS_LIST_BACKUP}"
 	backup_copy "${KVAS_WEB_PASS}" "${KVAS_WEB_PASS_BACKUP}"
 
 	# Бэкап остальных конфигов
@@ -310,6 +321,7 @@ save_backups(){
 	backup_copy "${ADBLOCK_HOSTS_FILE}" "${ADBLOCK_HOSTS_FILE_BACKUP}"
 	backup_copy "${ADBLOCK_SOURCES_LIST}" "${ADBLOCK_SOURCES_LIST_BACKUP}"
 	backup_copy "${ADBLOCK_LIST_EXCEPTION}" "${ADBLOCK_LIST_EXCEPTION_BACKUP}"
+	backup_copy "${ADBLOCK_BLOCK_FILE}" "${ADBLOCK_BLOCK_FILE_BACKUP}"
 
 
 	echo "Резервная копия сохранена в: ${backup_dir}"
@@ -507,10 +519,6 @@ cmd_install(){
 
 	ready 'Удаляем файлы предыдущих версий'
 	rm_previous_version_files && when_ok || when_bad
-	if [ -f /tmp/kvas_tags_backup/tags.list ]; then
-		cp -f /tmp/kvas_tags_backup/tags.list /opt/etc/tags.list 2>/dev/null || true
-		rm -f /tmp/kvas_tags_backup/tags.list 2>/dev/null || true
-	fi
 	# При обновлении НЕ удаляем бэкапы конфигов (save_backups сделал их до opkg remove)
 	[ "${update_mode}" = "true" ] || rm_dir /opt/etc/.kvas
 
@@ -527,9 +535,23 @@ cmd_install(){
 	ready 'Обновляем пакеты opkg'
 	{
 		opkg update >/dev/null 2>&1
-		opkg list-installed | grep -q 'nano' && opkg remove nano >/dev/null 2>&1
-		opkg list-installed | grep -q 'dnsmasq-full' && opkg remove dnsmasq-full --force-depends >/dev/null 2>&1
-		opkg install dnsmasq-full --force-maintainer >/dev/null 2>&1
+		# точное имя: grep 'nano' ловил и nano-full (удалял, чтобы тут же поставить снова)
+		opkg list-installed | grep -q '^nano ' && opkg remove nano >/dev/null 2>&1
+		# dnsmasq-full переустанавливается ради «чистого» dnsmasq.conf (--force-maintainer).
+		# Раньше пакет сначала удалялся, а новый качался из сети без проверки: при
+		# недоступном репозитории Entware (DPI/сбой) LAN оставалась без DNS (br0:53
+		# DNAT'ится на :9753, которого больше нет). Теперь пакет сначала СКАЧИВАЕТСЯ и
+		# ставится поверх (--force-reinstall, без удаления); не скачался — остаётся прежний.
+		if opkg list-installed | grep -q '^dnsmasq-full '; then
+			_dl_dir=/opt/tmp/kvas-dnsmasq-dl
+			rm -rf "${_dl_dir}"; mkdir -p "${_dl_dir}"
+			( cd "${_dl_dir}" && opkg download dnsmasq-full ) >/dev/null 2>&1
+			_pkg=$(ls "${_dl_dir}"/dnsmasq-full_*.ipk 2>/dev/null | head -1)
+			[ -n "${_pkg}" ] && opkg install --force-reinstall --force-maintainer "${_pkg}" >/dev/null 2>&1
+			rm -rf "${_dl_dir}"
+		else
+			opkg install dnsmasq-full --force-maintainer >/dev/null 2>&1
+		fi
 		opkg install iptables nano-full >/dev/null 2>&1
 	} && when_ok 'ГОТОВО' || when_bad 'ОШИБКА'
 
@@ -652,24 +674,6 @@ cmd_install(){
 	#	fi
 	fi
 
-	# Подключаем библиотеку keen_api
-	#source /opt/apps/kvas/bin/libs/keen_api
-	# Устанавливаем DNS роутера и порт по умолчанию
-	#set_dns_router_server_ip "$(get_router_ip)" "${MAIN_DNS_PORT}"
-
-	# Закрываем снаружи DNS порты для всех вншних сетей
-	# deny_firewall_port "53" "tcp" "KVASEC: закрываем снаружи 53/TCP DNS порт"
-	# deny_firewall_port "53" "udp" "KVASEC: закрываем снаружи 53/UDP DNS порт"
-	# allow_firewall_local_net_to_port "53" "tcp" "KVASEC: разрешаем локальной сети обращения в 53/TCP DNS порт"
-	# allow_firewall_local_net_to_port "53" "udp" "KVASEC: разрешаем локальной сети обращения в 53/UDP DNS порт"
-	# # Устанавливаем вышесозданные правила на первое место в списке правил
-	# set_firewall_order_for_rule "53" "tcp" "deny" "0"
-	# set_firewall_order_for_rule "53" "udp" "deny" "0"
-	# set_firewall_order_for_rule "53" "udp" "permit" "0"
-	# set_firewall_order_for_rule "53" "udp" "permit" "0"
-	# Записываем изменения в конфиг
-	#save_system_configuration_by_api
-
 	#------------------------------------------------------
 	# 	Запускаем KVASEC в работу
 	#------------------------------------------------------
@@ -766,28 +770,17 @@ all_services_rm_develop_mode() {
 		
 	else 
 		
-		if has_ssr_enable ; then
-			ready "Останавливаем службу Shadowsocks "
-			{
-				# Останавливаем сервер SSR
-				/opt/etc/init.d/S22shadowsocks stop &> /dev/null 
-				rm_file /opt/etc/shadowsocks.json
-				opkg remove shadowsocks-libev --force-depends &> /dev/null
+		ready "Останавливаем службу dnsmasq "
+		{
+			rm_file /opt/etc/dnsmasq.conf
+			opkg remove dnsmasq --force-depends &> /dev/null
+		} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
 
-			} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
-		else
-			ready "Останавливаем службу dnsmasq "
-			{
-				rm_file /opt/etc/dnsmasq.conf
-				opkg remove dnsmasq --force-depends &> /dev/null
-			} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
-
-			ready "Останавливаем службу dnscrypt-proxy2 "
-			{
-				rm_file /opt/etc/dnscrypt-proxy.toml
-				opkg remove dnscrypt-proxy2 --force-depends &> /dev/null
-			} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
-		fi
+		ready "Останавливаем службу dnscrypt-proxy2 "
+		{
+			rm_file /opt/etc/dnscrypt-proxy.toml
+			opkg remove dnscrypt-proxy2 --force-depends &> /dev/null
+		} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
 	fi
 }
 
@@ -843,6 +836,15 @@ cmd_uninstall() {
 		# 1. Останавливаем все сервисы
 		ready 'Останавливаем все сервисы'
 		{
+			# сторож маршрутизации: иначе живёт до перезагрузки (держит ip rule/table 1001/
+			# DoT-REJECT). При обычном uninstall (в т.ч. из kvas upgrade) — только stop:
+			# правила остаются, новый пакет перезапустит сторож; при full — cleanup.
+			if [ -x /opt/etc/init.d/S99kvas-awg-route ]; then
+				if [ "${rm_type}" = full ]; then /opt/etc/init.d/S99kvas-awg-route cleanup
+				else /opt/etc/init.d/S99kvas-awg-route stop; fi
+			fi 2>/dev/null
+			# флаг паузы снимаем только при full: upgrade во время паузы её сохраняет
+			[ "${rm_type}" = full ] && rm -f /opt/etc/kvas.paused
 			[ -f /opt/etc/init.d/S99adguardhome ] && /opt/etc/init.d/S99adguardhome stop 2>/dev/null
 		} 2>/dev/null
 		when_ok 'УСПЕШНО' || when_bad 'ОШИБКА'
