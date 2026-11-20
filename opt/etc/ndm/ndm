@@ -31,7 +31,6 @@ TABLE_MARK=mangle
 
 CHAIN_DNAT_TO_PORT=KVAS_DNAT_TO_PORT
 TABLE_DNAT_TO_PORT=nat
-#ToDo: переписать на https://github.com/shadowsocks/shadowsocks-libev?tab=readme-ov-file#transparent-proxy-pure-tproxy
 
 # shellcheck disable=SC2034  # используется в файлах, подключающих ndm
 IPv4='IPv4::'
@@ -491,46 +490,7 @@ ip4__chain__delete_jump() {
 #
 # ------------------------------------------------------------------------------------------
 
-ip4__dnat_to_port__create_chain() {
-	if [ -z "${1}" ] ; then
-		error "[${FUNCNAME}] Не задан обязательный аргумент — таблица"
-		return
-	fi
-	local table="${1}"
 
-	if [ -z "${2}" ] ; then
-		error "[${FUNCNAME}] Не задан обязательный аргумент — цепочка"
-		return
-	fi
-	local chain_name="${2}"
-
-	if [ -z "${3}" ] ; then
-		error "[${FUNCNAME}] Не задан обязательный аргумент — порт"
-		return
-	fi
-	local port="${3}"
-
-	{
-		if ip4__chain__is_exist "${table}" "${chain_name}" ; then
-			return
-		fi
-
-		ip4__chain__create_for_data "${table}" "${chain_name}"
-
-		IFS=' '
-		for protocol in udp tcp ; do
-			# не будет ли задвоения без -w?
-			/opt/sbin/iptables -A "${chain_name}" -t "${table}" -p "${protocol}" -j REDIRECT --to-port "${port}"
-		done
-	} &>/dev/null || error "[${FUNCNAME}] Возникли ошибки при установке правил трафика для прокси"
-}
-
-ip4__shadowsocks__create_chain() {
-	local local_port
-	local_port=$(get_config_value SSR_DNS_PORT)
-
-	ip4__dnat_to_port__create_chain "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}" "${local_port}"
-}
 
 # Сборку KVAS_MARK/KVAS_DNS сериализуем: её одновременно запускают хук NDM, сторож и
 # kvas init — каждый видел «цепочка неполна» и дописывал свой комплект (после установки
@@ -648,9 +608,6 @@ ip4__add_routing_for_home() {
 	/opt/sbin/iptables -A PREROUTING -w -t "${table}" -i "${net_interface}" -m set --match-set "${IPSET_TABLE_NAME}" dst -j "${chain_name}"
 }
 
-ip4__shadowsocks__add_routing_for_home() {
-	ip4__add_routing_for_home "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}" 'ShadowSocks'
-}
 
 # VPN
 ip4__mark__add_routing_for_home() {
@@ -873,13 +830,7 @@ ip4__add_routing_by_list_for_net() {
 	local iptables_filter
 	iptables_filter=$(iptables__get_subrule_for_net "${net_interface}")
 
-	# (Shadowsocks удалён из пакета; is_shadowsocks_enabled — заглушка `return 1` в libs/main.
-	#  Все такие ветки в этом файле мёртвые и подлежат удалению вместе с заглушкой.)
-	if is_shadowsocks_enabled ; then
-		ip4__add_routing "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
-	else
-		ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
-	fi
+	ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
 }
 
 ip4__delete_routing() {
@@ -936,11 +887,7 @@ ip4__delete_routing_by_list_for_net() {
 
 	ip4__dns__delete_routing "${iptables_filter}"
 
-	if is_shadowsocks_enabled ; then
-		ip4__delete_routing "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
-	else
-		ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
-	fi
+	ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${iptables_filter}" "${IPSET_TABLE_NAME}"
 }
 
 
@@ -974,11 +921,7 @@ ip4__add_routing_for_ip_from_config() {
 			fi
 
 			ip_or_range=$(ip4__get_subrule_for_ip "${ip_or_range}")
-			if is_shadowsocks_enabled ; then
-				ip4__add_routing "${TABLE_DNAT_TO_PORT}"  "${CHAIN_DNAT_TO_PORT}"  "${ip_or_range}"
-			else
-				ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}"
-			fi
+			ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}"
 		done
 	fi
 
@@ -992,11 +935,7 @@ ip4__add_routing_for_ip_from_config() {
 			fi
 
 			ip_or_range=$(ip4__get_subrule_for_ip "${ip_or_range}")
-			if is_shadowsocks_enabled ; then
-				ip4__add_routing "${TABLE_DNAT_TO_PORT}"  "${CHAIN_DNAT_TO_PORT}"  "${ip_or_range}" "${IPSET_TABLE_NAME}"
-			else
-				ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}" "${IPSET_TABLE_NAME}"
-			fi
+			ip4__add_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}" "${IPSET_TABLE_NAME}"
 		done
 	fi
 }
@@ -1015,18 +954,7 @@ ip4_mark_vpn_network() {
 }
 
 ip4_firewall_set_all_rules() {
-	if is_shadowsocks_enabled ; then
-		ip4__shadowsocks__create_chain &>/dev/null
-
-		# Сначала правила по IP, затем по сетям
-		ip4__add_routing_for_ip_from_config &> /dev/null
-		ip4__add_routing_by_list_for_net_from_config &> /dev/null
-
-		#ToDo: сделать home отключаемой
-		ip4__shadowsocks__add_routing_for_home &> /dev/null
-	else
-		ip4_mark_vpn_network
-	fi
+	ip4_mark_vpn_network
 }
 
 
@@ -1060,11 +988,7 @@ ip4__delete_routing_for_ip_from_config() {
 			fi
 
 			ip_or_range=$(ip4__get_subrule_for_ip "${ip_or_range}")
-			if is_shadowsocks_enabled ; then
-				ip4__delete_routing "${TABLE_DNAT_TO_PORT}"  "${CHAIN_DNAT_TO_PORT}"  "${ip_or_range}"
-			else
-				ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}"
-			fi
+			ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}"
 		done
 	fi
 
@@ -1078,11 +1002,7 @@ ip4__delete_routing_for_ip_from_config() {
 			fi
 
 			ip_or_range=$(ip4__get_subrule_for_ip "${ip_or_range}")
-			if is_shadowsocks_enabled ; then
-				ip4__delete_routing "${TABLE_DNAT_TO_PORT}"  "${CHAIN_DNAT_TO_PORT}"  "${ip_or_range}" "${IPSET_TABLE_NAME}"
-			else
-				ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}" "${IPSET_TABLE_NAME}"
-			fi
+			ip4__delete_routing "${TABLE_MARK}" "${CHAIN_MARK}" "${ip_or_range}" "${IPSET_TABLE_NAME}"
 		done
 	fi
 }
@@ -1106,32 +1026,10 @@ ip4_firewall_flush_vpn_rules() {
 	} &>/dev/null
 }
 
-# Удаление старых цепочек прокси из предыдущих версий.
-ip4_firewall_flush_dnat_to_port() {
-	{
-		ip4__delete_routing_by_list_for_net_from_config
-		ip4__delete_routing_for_ip_from_config
-
-		# достаточно удалять правила для br0, но на всякий случай
-		ip4__chain__delete_jump "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}"
-		# в бета 9 перехваты DNS не очищались, да и они универсальны меж подключениями
-		#ip4__chain__delete_jump "${TABLE_DNS}" "${CHAIN_DNS}"
-
-		# Во время работы удалять цепочки бессмысленно, они константны и не влияют ни на что
-		# Достаточно убрать входы туда, что сделано выше
-		# По идее, нижеидущее нужно вызывать лишь при установке или удалении
-		#ip4__chain__delete "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}"
-		#ip4__chain__delete "${TABLE_DNS}" "${CHAIN_DNS}"
-	} &>/dev/null
-}
 
 # Удаляем все маршрутизирующие правила iptables
 ip4_firewall_flush_all_rules() {
-	if is_shadowsocks_enabled ; then
-		ip4_firewall_flush_dnat_to_port
-	else
-		ip4_firewall_flush_vpn_rules
-	fi
+	ip4_firewall_flush_vpn_rules
 }
 
 # может прибрать всё (с убиванием цепочек и наборов)
@@ -1159,8 +1057,7 @@ ip4__flush() {
 		ip4__chain__delete_jump "${TABLE_DNS}" "${CHAIN_DNS}"
 		ip4__chain__delete      "${TABLE_DNS}" "${CHAIN_DNS}"
 
-		# можно оптимизировать, удаляя лишь нужный с проверкой is_shadowsocks_enabled
-		# но тогда нужно переписать код в смене интерфейса
+		# KVAS_DNAT_TO_PORT — цепочка удалённого Shadowsocks: только уборка после старых версий
 		ip4__chain__delete_jump "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}"
 		ip4__chain__delete      "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}"
 		ip4__chain__delete_jump "${TABLE_MARK}" "${CHAIN_MARK}"
@@ -1171,8 +1068,7 @@ ip4__flush() {
 	elif echo "${parts}" | grep -Fq ' jump ' ; then
 		ip4__chain__delete_jump "${TABLE_DNS}"          "${CHAIN_DNS}"
 
-		# можно оптимизировать, удаляя лишь нужный с проверкой is_shadowsocks_enabled
-		# но тогда нужно переписать код в смене интерфейса
+		# KVAS_DNAT_TO_PORT — цепочка удалённого Shadowsocks: только уборка после старых версий
 		ip4__chain__delete_jump "${TABLE_DNAT_TO_PORT}" "${CHAIN_DNAT_TO_PORT}"
 		ip4__chain__delete_jump "${TABLE_MARK}"         "${CHAIN_MARK}"
 	fi
@@ -1393,15 +1289,11 @@ ip4_rule_del_priority() {
 
 # Чистим и заполняем таблицу правил iptables для vpn подключений
 cmd_vpn_iptable_reset() {
-	if is_shadowsocks_enabled ; then
-		warning 'VPN соединение не активно!'
-	else
-		ready "Переустановка iptables для vpn завершена"
-		{
-			cmd_vpn_iptable_flush
-			ip4_mark_vpn_network
-		} &> /dev/null && when_ok "УСПЕШНО" || when_bad "C ОШИБКАМИ"
-	fi
+	ready "Переустановка iptables для vpn завершена"
+	{
+		cmd_vpn_iptable_flush
+		ip4_mark_vpn_network
+	} &> /dev/null && when_ok "УСПЕШНО" || when_bad "C ОШИБКАМИ"
 }
 
 # Чистим таблицу правил iptables для vpn подключений

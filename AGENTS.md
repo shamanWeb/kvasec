@@ -383,8 +383,8 @@ conntrack) выключены по умолчанию — гейт `[ -f /opt/et
 - **Целостность цепочек**: KVAS_MARK «целая» = есть `CONNMARK --save-mark`, KVAS_DNS = два DNAT на
   :9753. Пустую/неполную (NDM делает -F, не -X) хук очищает и наполняет заново, не удаляя
   (на неё ссылаются прыжки). Проверка KVAS_DNS — ДО проверки прыжка в ip4__dns__add_routing.
-- Shadowsocks и libs/keen_api удалены; заглушки has_ssr_enable/is_shadowsocks_enabled живут, пока
-  их вызывает ndm.
+- Shadowsocks и libs/keen_api удалены полностью (вкл. ветки в ndm и заглушки). Остались только
+  уборка после старых версий: S22shadowsocks/цепочки SHADOWSOCKS в uninstall, KVAS_DNAT_TO_PORT в ip4__flush.
 - Локально `mkdir` — uutils coreutils 0.10, он НЕ атомарен (два процесса могут оба «создать»
   каталог); тесты локов подставляют `busybox mkdir`, как на роутере.
 - Брутфорс WebUI: лимит 5 ошибок на адрес + общий 30 на всех. Общий потолок — компромисс:

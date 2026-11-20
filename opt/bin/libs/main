@@ -729,10 +729,6 @@ nets__get() {
 
 ## Compatibility guards for obsolete branches that remain in shared routing
 ## helpers. KVASEC no longer permits or starts these clients.
-# Shadowsocks удалён (2026-11-20). Заглушки остаются, пока ветки в opt/etc/ndm/ndm
-# не вычищены (правка ndm — только в окне с резервным туннелем, план аудита).
-has_ssr_enable() { return 1; }
-is_shadowsocks_enabled() { return 1; }
 
 has_adguard_enable() {
 	if [ -f "${ADGUARDHOME_DEMON}" ]; then  
