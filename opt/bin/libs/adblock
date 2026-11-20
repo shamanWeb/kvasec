@@ -199,11 +199,17 @@ cmd_ads_add_host(){
 		else
 			echo "${host}" >> "${ADBLOCK_BLOCK_FILE}"
 		#	если домен был в списке исключений — убираем его оттуда
-			[ -f "${ADBLOCK_LIST_EXCEPTION}" ] && sed -i "/.*${host}$/d" "${ADBLOCK_LIST_EXCEPTION}"
+		#	(сам домен и его поддомены; раньше regex ".*vk.com$" убирал и xvk.com)
+			if [ -f "${ADBLOCK_LIST_EXCEPTION}" ]; then
+				tmp_file="${ADBLOCK_LIST_EXCEPTION}.tmp.$$"
+				awk -v h="${host}" '!($0 == h || (length($0) > length(h) && substr($0, length($0) - length(h)) == "." h))' \
+					"${ADBLOCK_LIST_EXCEPTION}" > "${tmp_file}" && mv -f "${tmp_file}" "${ADBLOCK_LIST_EXCEPTION}"
+			fi
 			ready "Доменное имя ${host} добавлено в список блокировки рекламы"
 		fi
 	#	Гарантируем, что домен реально в hosts-файле блокировки (даже если уже был в списке)
-		if ! grep -qF "0.0.0.0 ${host}" "${ADBLOCK_HOSTS_FILE}"; then
+	#	(точно по полям: grep -F "0.0.0.0 ya.ru" находил и "0.0.0.0 ya.ru.example")
+		if ! awk -v h="${host}" '$1 == "0.0.0.0" && $2 == h { f = 1; exit } END { exit !f }' "${ADBLOCK_HOSTS_FILE}" 2>/dev/null; then
 			echo "0.0.0.0 ${host}" >> "${ADBLOCK_HOSTS_FILE}" && \
 			when_ok "УСПЕШНО" || when_bad "С ОШИБКОЙ"
 		fi
