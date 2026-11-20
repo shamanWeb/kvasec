@@ -376,8 +376,13 @@ conntrack) выключены по умолчанию — гейт `[ -f /opt/et
 - **build.sh** пакует только файлы под git, права фиксированные.
 - **iptables-save и `iptables -S` по всей таблице на Keenetic ОБРЫВАЮТСЯ** (rc=1) на match'е прошивки
   `connndmmark`/`ndmmark` в INPUT: объявления цепочек (`:KVAS_MARK`) в выводе есть, правил после INPUT
-  нет. Проверять правила только поцепочечно (`iptables -t T -S <chain>`) или `iptables -C`.
-  `save_iptables` в ndm пока на этом сломан (план аудита, 2.0 — правка ndm в окне с резервным туннелем).
+  нет. Полный дамп обрывался ещё в nat (порядок nat, mangle, filter) — mangle не попадал вовсе,
+  и проверки ndm «прыжок в KVAS_MARK уже есть?» всегда отвечали «нет» → дубль на каждом прогоне
+  хука (сторож удалял ~470 в сутки). Исправлено: хелперы `ipt_chain_rules`/`ipt_chain_exists`
+  (libs/main), `save_iptables` — поцепочечная эмуляция; проверки ndm — по нужной цепочке.
+- **Целостность цепочек**: KVAS_MARK «целая» = есть `CONNMARK --save-mark`, KVAS_DNS = два DNAT на
+  :9753. Пустую/неполную (NDM делает -F, не -X) хук очищает и наполняет заново, не удаляя
+  (на неё ссылаются прыжки). Проверка KVAS_DNS — ДО проверки прыжка в ip4__dns__add_routing.
 - Shadowsocks и libs/keen_api удалены; заглушки has_ssr_enable/is_shadowsocks_enabled живут, пока
   их вызывает ndm.
 - Локально `mkdir` — uutils coreutils 0.10, он НЕ атомарен (два процесса могут оба «создать»

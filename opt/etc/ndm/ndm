@@ -350,12 +350,8 @@ ip4__ipset__destroy_destination_excluded() {
 #
 # ------------------------------------------------------------------------------------------
 
-# ИЗВЕСТНАЯ ПРОБЛЕМА: проверка «цепочка существует» по save_iptables | grep -F <имя>
-# истинна и для ПУСТОЙ цепочки (NDM при reload делает -F, а не -X) — тогда
-# ip4__mark__create_chain/ip4__dns__create_chain сразу выходят и ничего не строят, а
-# прыжок из PREROUTING ведёт в пустую цепочку (трафик идёт мимо туннеля). См. также
-# предупреждение у save_iptables в libs/main: дамп на Keenetic обрывается до правил.
-# Правильнее: `iptables -t T -S <chain>` (rc + число ^-A строк).
+# Существует ли цепочка (в т.ч. ПУСТАЯ — NDM при reload делает -F, а не -X).
+# Целостность наших цепочек проверяют ip4__mark__create_chain / ip4__dns__create_chain.
 ip4__chain__is_exist() {
 	if [ -z "${1}" ] ; then
 		error "[${FUNCNAME}] Не задан обязательный аргумент — таблица"
@@ -369,7 +365,7 @@ ip4__chain__is_exist() {
 	fi
 	local chain_name="${2}"
 
-	save_iptables -t "${table}" | grep -Fq "${chain_name}"
+	ipt_chain_exists "${table}" "${chain_name}"
 }
 
 ip4__chain__exclude_source_by_config() {
@@ -418,13 +414,12 @@ ip4__chain__create_for_data() {
 	fi
 	local chain_name="${2}"
 
-	if ip4__chain__is_exist "${table}" "${chain_name}" ; then
-		return
+	# Существующую цепочку не пересоздаём (на неё ссылаются прыжки из PREROUTING) —
+	# вызывающий её уже очистил, только наполняем заново.
+	if ! ip4__chain__is_exist "${table}" "${chain_name}" ; then
+		log_warning "Создание цепочки ${chain_name} в ${table} для данных"
+		/opt/sbin/iptables -N "${chain_name}" -w -t "${table}"
 	fi
-
-	log_warning "Создание цепочки ${chain_name} в ${table} для данных"
-
-	/opt/sbin/iptables -N "${chain_name}" -w -t "${table}"
 
 	ip4__chain__exclude_source_by_config "${table}" "${chain_name}"
 
@@ -529,8 +524,16 @@ ip4__shadowsocks__create_chain() {
 
 ip4__mark__create_chain() {
 	{
-		if ip4__chain__is_exist "${TABLE_MARK}" "${CHAIN_MARK}" ; then
+		# Целая KVAS_MARK заканчивается CONNMARK --save-mark. Раньше достаточно было
+		# «цепочка существует» — а NDM при reload делает -F: пустая цепочка оставалась
+		# пустой (прыжок из PREROUTING в никуда → трафик KVAS_LIST мимо туннеля), и
+		# сторож, вызывая этот хук, ничего не мог восстановить.
+		if ipt_chain_rules "${TABLE_MARK}" "${CHAIN_MARK}" | grep -q -- '--save-mark' ; then
 			return
+		fi
+		if ip4__chain__is_exist "${TABLE_MARK}" "${CHAIN_MARK}" ; then
+			log_warning "Цепочка ${CHAIN_MARK} пуста или неполна — пересобираем"
+			/opt/sbin/iptables -w -t "${TABLE_MARK}" -F "${CHAIN_MARK}"
 		fi
 
 		ip4__chain__create_for_data "${TABLE_MARK}" "${CHAIN_MARK}"
@@ -596,7 +599,9 @@ ip4__add_routing_for_home() {
 
 	local net_interface=$(get_local_inface)
 
-	if save_iptables | grep -F 'PREROUTING' | grep -F "${net_interface}" | grep -F "${IPSET_TABLE_NAME}" | grep -Fq "${chain_name}" ; then
+	# поцепочечно: полный дамп iptables-save на Keenetic обрывается ещё в nat, и это
+	# условие было всегда ложным → дубль прыжка при каждом прогоне хука (см. libs/main)
+	if ipt_chain_rules "${table}" PREROUTING | grep -F -- "-i ${net_interface} " | grep -F "${IPSET_TABLE_NAME}" | grep -Fq -- "-j ${chain_name}" ; then
 		return
 	fi
 
@@ -621,18 +626,22 @@ ip4__mark__add_routing_for_home() {
 #
 # ------------------------------------------------------------------------------------------
 
-# ИЗВЕСТНАЯ ПРОБЛЕМА: как и KVAS_MARK — «есть» и при пустой цепочке (после flush nat
-# хук вставит прыжок в пустую KVAS_DNS: DNS LAN не уйдёт на :9753). Сторож KVAS_DNS
-# не проверяет.
+# Целая KVAS_DNS — два DNAT (udp, tcp) на 127.0.0.1:${DNS_PORT}. Как и KVAS_MARK, после
+# flush nat цепочка «есть», но пуста — раньше это считалось нормой, и прыжок вёл в
+# пустую цепочку (DNS LAN не уходил на :9753).
 # Создаёт (если нет) цепочку для DNS редиректа
 ip4__dns__create_chain() {
-	if save_iptables | grep -Fq "${CHAIN_DNS}"; then
+	if [ "$(ipt_chain_rules "${TABLE_DNS}" "${CHAIN_DNS}" | grep -cF -- "127.0.0.1:${DNS_PORT}")" -ge 2 ]; then
 		return
 	fi
 
-	log_warning 'Создание цепочки для DNS перенаправления'
-
-	/opt/sbin/iptables -N "${CHAIN_DNS}" -w -t "${TABLE_DNS}"
+	if ip4__chain__is_exist "${TABLE_DNS}" "${CHAIN_DNS}" ; then
+		log_warning 'Цепочка DNS перенаправления пуста или неполна — пересобираем'
+		/opt/sbin/iptables -w -t "${TABLE_DNS}" -F "${CHAIN_DNS}"
+	else
+		log_warning 'Создание цепочки для DNS перенаправления'
+		/opt/sbin/iptables -N "${CHAIN_DNS}" -w -t "${TABLE_DNS}"
+	fi
 
 	# НЕ исключаем route_excluded_ip из DNS-редиректа: иначе устройство в режиме
 	# «Напрямую» теряет DNS (kvas dnsmasq слушает только :9753, а на :53 для
@@ -661,7 +670,7 @@ ip4__get_rulenum() {
 	local chain='PREROUTING'
 
 	# shellcheck disable=SC2046  # намеренно: echo $(...) склеивает вывод в одну строку
-	echo $(save_iptables -t "${table}" | grep -F "${chain}" | grep -vF :"${chain}" \
+	echo $(ipt_chain_rules "${table}" "${chain}" \
 	 | grep -nF -- "${find}" | head -n 1 | grep -oE '^[0-9]+')
 }
 
@@ -701,15 +710,17 @@ ip4__dns__add_routing() {
 		submessage=''
 	fi
 
-	if save_iptables | grep -F 'PREROUTING' | grep -F -- "${iptables_filter}" | grep -Fq "${CHAIN_DNS}" ; then
+	# Цепочку проверяем/чиним ДО проверки прыжка: после flush nat прыжок есть, а
+	# KVAS_DNS пуста — раньше функция выходила раньше, и цепочка не восстанавливалась.
+	ip4__dns__create_chain
+
+	if ipt_chain_rules "${TABLE_DNS}" PREROUTING | grep -F -- "${iptables_filter}" | grep -Fq -- "-j ${CHAIN_DNS}" ; then
 		return
 	fi
 	local rulenum
 	rulenum=$(ip4__dns__get_rulenum)
 
 	log_warning "Подключение DNS перенаправления с приоритетом ${rulenum}${submessage}"
-
-	ip4__dns__create_chain
 	# без echo дублирование пробелов (что даёт warning и проблему наличия)
 	# shellcheck disable=SC2046  # намеренно: строка разбивается на аргументы
 	/opt/sbin/iptables -I PREROUTING "${rulenum}" -w -t "${TABLE_DNS}"$(echo "${iptables_filter}") -j "${CHAIN_DNS}"
@@ -730,7 +741,7 @@ ip4__dns__delete_routing() {
 		submessage=''
 	fi
 
-	if ! save_iptables | grep -F 'PREROUTING' | grep -F -- "${iptables_filter}" | grep -Fq "${CHAIN_DNS}" ; then
+	if ! ipt_chain_rules "${TABLE_DNS}" PREROUTING | grep -F -- "${iptables_filter}" | grep -Fq -- "-j ${CHAIN_DNS}" ; then
 		return
 	fi
 
@@ -795,7 +806,7 @@ ip4__add_routing() {
 		submessage=" ipset ${ipset_list} и${submessage}"
 	fi
 
-	if save_iptables | grep -F 'PREROUTING' | grep -F -- "${iptables_filter}" | grep -Fq "${chain_name}" ; then
+	if ipt_chain_rules "${table}" PREROUTING | grep -F -- "${iptables_filter}" | grep -Fq -- "-j ${chain_name}" ; then
 		return
 	fi
 
@@ -855,7 +866,7 @@ ip4__delete_routing() {
 		submessage=" ipset ${ipset_list} и${submessage}"
 	fi
 
-	if ! save_iptables | grep -F 'PREROUTING' | grep -F -- "${iptables_filter}" | grep -Fq "${chain_name}" ; then
+	if ! ipt_chain_rules "${table}" PREROUTING | grep -F -- "${iptables_filter}" | grep -Fq -- "-j ${chain_name}" ; then
 		return
 	fi
 

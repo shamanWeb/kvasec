@@ -29,15 +29,50 @@ PROGRESS_BAR_WIDTH=$((LENGTH-5))  # progress bar length in characters
 KVAS_BACKUP_PATH=/opt/etc/.kvas/backup
 IPSET_TABLE_NAME=KVAS_LIST
 
-# ВНИМАНИЕ: на Keenetic iptables-save (и `iptables -S` по ВСЕЙ таблице) обрывает вывод с
-# rc=1 на match'ах прошивки (connndmmark/ndmmark в INPUT): объявления цепочек (":KVAS_MARK")
-# в дампе есть, а правила после INPUT — нет (весь KVAS_MARK, nat PREROUTING → KVAS_DNS).
-# Поэтому `save_iptables | grep <правило>` для таких правил всегда «не найдено», а
-# `grep <имя цепочки>` находит и ПУСТУЮ цепочку. Для проверок правил использовать только
-# поцепочечный вывод `iptables -t T -S <chain>` или `iptables -t T -C <правило>`.
-# ИЗВЕСТНАЯ ПРОБЛЕМА: ndm (ip4__chain__is_exist, проверки прыжков PREROUTING) всё ещё
-# опирается на save_iptables — вероятная причина дублей прыжков, которые чистит сторож.
-save_iptables(){ /opt/sbin/iptables-save "$@"; }
+# ВНИМАНИЕ: на Keenetic /opt/sbin/iptables-save (и `iptables -S` по ВСЕЙ таблице) обрывает
+# вывод с rc=1 на match'ах прошивки (connndmmark/ndmmark/NDMMARK — их библиотек в Entware
+# нет). Порядок таблиц в /proc/net/ip_tables_names: nat, mangle, filter — полный дамп
+# обрывался ещё в nat, и mangle (KVAS_MARK) в него не попадал вовсе: проверки ndm «прыжок
+# уже есть?» всегда отвечали «нет» и добавляли дубль (сторож удалял ~470 дублей в сутки).
+# Надёжен только поцепочечный вывод: правила kvas стоят в начале цепочек, до правил NDM,
+# поэтому даже оборванный вывод цепочки их содержит (обрезаем неполную последнюю строку).
+
+# Правила (-A …) одной цепочки. $1 — таблица, $2 — цепочка.
+ipt_chain_rules() {
+	local out
+	if out=$(/opt/sbin/iptables -w -t "${1}" -S "${2}" 2>/dev/null); then
+		printf '%s\n' "${out}" | grep '^-A '
+	else
+		printf '%s\n' "${out}" | sed '$d' | grep '^-A '
+	fi
+}
+
+# Цепочка существует (в т.ч. пустая). $1 — таблица, $2 — цепочка.
+ipt_chain_exists() {
+	/opt/sbin/iptables -w -t "${1}" -S "${2}" 2>/dev/null | grep -q -- "^-[NP] ${2}\( \|$\)"
+}
+
+# Эмуляция iptables-save [-t таблица] в его формате (*таблица, :заголовки, -A, COMMIT),
+# собранная поцепочечно. Медленная (iptables на каждую цепочку) — для редких операций;
+# в частых проверках использовать ipt_chain_rules нужной цепочки.
+save_iptables() {
+	local tables t chains c
+	if [ "${1:-}" = "-t" ] && [ -n "${2:-}" ]; then
+		tables="${2}"
+	else
+		tables=$(cat /proc/net/ip_tables_names 2>/dev/null) || tables="nat mangle filter"
+	fi
+	for t in ${tables}; do
+		# заголовки цепочек печатаются ДО первого правила — до места обрыва
+		chains=$(/opt/sbin/iptables-save -t "${t}" 2>/dev/null | grep '^:')
+		echo "*${t}"
+		printf '%s\n' "${chains}"
+		for c in $(printf '%s\n' "${chains}" | sed -n 's/^:\([^ ]*\) .*/\1/p'); do
+			ipt_chain_rules "${t}" "${c}"
+		done
+		echo "COMMIT"
+	done
+}
 
 KVAS_CONF_FILE=/opt/etc/kvas.conf
 KVAS_LIST_FILE=/opt/etc/kvas.list
