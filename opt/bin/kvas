@@ -113,6 +113,8 @@ case "${1}" in
 					/opt/etc/init.d/S99adguardhome restart
 				fi
 			} &>/dev/null &
+		else
+			_rc=1   # ничего не добавлено — WebUI покажет ошибку, а не «добавлено»
 		fi
 		;;
 	del | rm  )
@@ -145,6 +147,8 @@ case "${1}" in
 			else
 				/opt/etc/init.d/S99adguardhome restart &>/dev/null
 			fi
+		else
+			_rc=1   # ни одного домена не было в списке
 		fi
 		;;
 

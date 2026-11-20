@@ -34,14 +34,14 @@ tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/monitor/bypass_
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/monitor/block_watch.sh' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/main/parental_dns' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/etc/ndm/netfilter.d/100-vpn-mark' >/dev/null
-! tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/libs/vless$'
-! tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/S97xray$'
-! tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/kvas.vless$'
-! tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/shadowsocks.json$'
-! tar -xOzf "$UNPACKED/control.tar.gz" ./control | grep -qi 'xray'
-! tar -xOzf "$UNPACKED/control.tar.gz" ./control | grep -qi 'shadowsocks'
+if tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/libs/vless$'; then echo "FAIL: test_build.sh:37" >&2; exit 1; fi
+if tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/S97xray$'; then echo "FAIL: test_build.sh:38" >&2; exit 1; fi
+if tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/kvas.vless$'; then echo "FAIL: test_build.sh:39" >&2; exit 1; fi
+if tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/shadowsocks.json$'; then echo "FAIL: test_build.sh:40" >&2; exit 1; fi
+if tar -xOzf "$UNPACKED/control.tar.gz" ./control | grep -qi 'xray'; then echo "FAIL: test_build.sh:41" >&2; exit 1; fi
+if tar -xOzf "$UNPACKED/control.tar.gz" ./control | grep -qi 'shadowsocks'; then echo "FAIL: test_build.sh:42" >&2; exit 1; fi
 tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'opkgtun[0-9]*)' >/dev/null
-! tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'rm -rf /opt/etc/xray' >/dev/null
+if tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'rm -rf /opt/etc/xray' >/dev/null; then echo "FAIL: test_build.sh:44" >&2; exit 1; fi
 
 if ./build.sh 1.2 >/dev/null 2>&1; then
     echo 'build.sh accepted an invalid SemVer version' >&2
@@ -49,7 +49,12 @@ if ./build.sh 1.2 >/dev/null 2>&1; then
 fi
 
 # 8.2: только файлы под git, фиксированные права
-! tar -tzf "$UNPACKED/data.tar.gz" | grep -F 'zz-untracked.bak' >/dev/null
+if tar -tzf "$UNPACKED/data.tar.gz" | grep -F 'zz-untracked.bak' >/dev/null; then echo "FAIL: test_build.sh:52" >&2; exit 1; fi
 tar -tvzf "$UNPACKED/data.tar.gz" | awk '$1 ~ /^d/ && $1 != "drwxr-xr-x" { bad = 1 } END { exit bad }'
 tar -tvzf "$UNPACKED/data.tar.gz" ./opt/apps/kvas/bin/kvas | grep -q '^-rwxr-xr-x'
 tar -tvzf "$UNPACKED/data.tar.gz" ./opt/apps/kvas/etc/conf/kvas.help | grep -q '^-rw-r--r--'
+
+# Отслеживаемый файл удалён из рабочей копии → сборка падает, а не выпускает пакет без него
+rm -f opt/etc/conf/kvas.help
+if ./build.sh 1.2.43 >/dev/null 2>&1; then echo 'FAIL: build ignored a missing tracked file' >&2; exit 1; fi
+git checkout -q -- opt/etc/conf/kvas.help

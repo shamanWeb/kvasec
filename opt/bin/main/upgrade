@@ -220,9 +220,9 @@ verify_package(){
 	# $1 = путь к .ipk
 	[ -s "$1" ] && gzip -t "$1" 2>/dev/null || return 1
 	tar -tzf "$1" 2>/dev/null | grep -q 'data.tar.gz' || return 1
-	# sha256 из релиза. У kvasec_X.Y.Z.ipk (их собирает CI) он ОБЯЗАТЕЛЕН: раньше при
-	# неудачном скачивании .sha256 проверка молча пропускалась. Старые kvas_*_all.ipk
-	# (откат) публиковались без него — для них хватает gzip/tar.
+	# sha256 из релиза. Для версий ≥1.2.15 (у них есть .sha256) он ОБЯЗАТЕЛЕН: раньше
+	# при неудачном скачивании .sha256 проверка молча пропускалась. Более старые
+	# релизы (откат) публиковались без него — для них хватает gzip/tar.
 	sum_file="/tmp/$(basename "$1").sha256"
 	rm -f "${sum_file}"
 	if gh_download "${package_url}.sha256" "${sum_file}" && [ -s "${sum_file}" ]; then
@@ -232,9 +232,12 @@ verify_package(){
 		[ -n "${want}" ] && [ "${want}" = "${got}" ] || return 1
 	else
 		rm -f "${sum_file}"
-		case "$(basename "$1")" in
-			kvasec_*) print_error "Не удалось получить SHA-256 пакета — установка отменена."; return 1 ;;
-		esac
+		# .sha256 публикуется с v1.2.15 — для них обязателен, откат на более старые без него
+		_v=$(version_key "$(get_package_version "$(basename "$1")")")
+		if [ -n "${_v}" ] && [ "${_v}" -ge 1002015 ]; then
+			print_error "Не удалось получить SHA-256 пакета — установка отменена."
+			return 1
+		fi
 	fi
 	return 0
 }

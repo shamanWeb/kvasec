@@ -62,5 +62,27 @@ printf '%s\n' 'aaa  ./AdGuardHome_linux_mips.tar.gz' 'f5c3  ./AdGuardHome_linux_
 awkprog=$(grep -o "\$2 == f || [^']*" "$ROOT/opt/bin/libs/update")
 [ "$(awk -v f=AdGuardHome_linux_arm64.tar.gz "$awkprog" "$WORK/cs.txt")" = f5c3 ] || { echo 'FAIL 3.4: checksums parse'; exit 1; }
 # sha256 обязателен для kvasec_*.ipk (upgrade и install.sh)
-grep -F 'kvasec_*) print_error "Не удалось получить SHA-256' "$ROOT/opt/bin/main/upgrade" >/dev/null
+{
+    echo 'print_error() { :; }'
+    echo 'gh_download() { return 1; }          # .sha256 не скачался'
+    echo 'gh_ok() { printf "%s  x\n" "$(sha256sum "$PKG" | cut -d" " -f1)" > "$2"; }'
+    for f in verify_package version_key get_package_version; do
+        sed -n "/^${f}(){/,/^}/p" "$ROOT/opt/bin/main/upgrade"
+    done
+} > "$WORK/vp.sh"
+mkdir -p "$WORK/ipk"; : > "$WORK/ipk/data.tar.gz"
+for v in 1.3.0 1.2.3; do tar -czf "$WORK/kvasec_$v.ipk" -C "$WORK/ipk" data.tar.gz; done
+vp() { PKG="$WORK/$1" sh -c ". '$WORK/vp.sh'; package_url=x; $2 verify_package \"\$PKG\""; }
+if vp kvasec_1.3.0.ipk ''; then echo 'FAIL 3.4: 1.3.0 без .sha256 принят'; exit 1; fi
+vp kvasec_1.2.3.ipk '' || { echo 'FAIL 3.4: откат на 1.2.3 (до .sha256) заблокирован'; exit 1; }
+vp kvasec_1.3.0.ipk 'gh_download() { gh_ok "$@"; };' || { echo 'FAIL 3.4: верный sha256 отвергнут'; exit 1; }
 grep -F "fail 'cannot download SHA-256 file" "$ROOT/install.sh" >/dev/null
+
+# Ревью: описание гостевой сети в inface_equals пишется хуком через jq без -r (с кавычками)
+printf '%s\n' 'Wireguard1|nwg1|"My VPN"' 'Bridge0|br0|' > "$WORK/ifeq"
+awkg=$(grep -o "'{ x = \$3; gsub[^']*'" "$ROOT/opt/bin/libs/vpn" | sed "s/^'//; s/'$//")
+[ "$(awk -F'|' -v d='My VPN' "$awkg" "$WORK/ifeq")" = nwg1 ] || { echo 'FAIL: guest desc в кавычках'; exit 1; }
+[ -z "$(awk -F'|' -v d='' "$awkg" "$WORK/ifeq")" ] || { echo 'FAIL: пустое описание совпало'; exit 1; }
+
+# Ревью: kvas add/del без результата → код 1 (manage.sh показывает ошибку, а не «добавлено»)
+[ "$(grep -c '_rc=1   #' "$ROOT/opt/bin/kvas")" -eq 2 ] || { echo 'FAIL: _rc в add/del'; exit 1; }

@@ -767,6 +767,15 @@ adguardhome_check_config() {
 			sleep 2
 
 			while true; do
+				if cat < "${log_file}" | grep 'go to http' | grep -qv ':3000' || cat < "${log_file}" | grep -q ' listen tcp 0.0.0.0:3000: bind: address already in use' ; then
+					mv "${tmp_conf}" "${ADGUARDHOME_CONFIG}"
+					killall AdGuardHome
+					adguardhome_setup
+					print_line
+					exit 0
+				fi
+				# (после проверки лога: при занятом :3000 процесс выходит сразу,
+				#  и ветка "address already in use" выше должна успеть сработать)
 				# AdGuardHome упал или настройку бросили (30 мин) — не висим вечно и
 				# возвращаем dnsmasq/dnscrypt, остановленные выше (иначе в LAN нет DNS)
 				if ! kill -0 "${ag_pid}" 2>/dev/null || [ "${ag_wait}" -ge 1800 ]; then
@@ -778,13 +787,6 @@ adguardhome_check_config() {
 					exit 1
 				fi
 				ag_wait=$((ag_wait + 1))
-				if cat < "${log_file}" | grep 'go to http' | grep -qv ':3000' || cat < "${log_file}" | grep -q ' listen tcp 0.0.0.0:3000: bind: address already in use' ; then
-					mv "${tmp_conf}" "${ADGUARDHOME_CONFIG}"
-					killall AdGuardHome
-					adguardhome_setup
-					print_line
-					exit 0
-				fi
 				# Пауза в секундах между проверками
 				sleep 1
 			done
@@ -853,7 +855,8 @@ dns_server_install_remotely(){
 		local _dns_ip="${_ip_port%[:#]*}" _dns_port="${_ip_port##*[:#]}"
 		# busybox nslookup не умеет порт — проверяем dig'ом, если он есть
 		if command -v dig >/dev/null 2>&1; then
-			dig +short +time=3 +tries=1 -p "${_dns_port}" ya.ru @"${_dns_ip}" 2>/dev/null | grep -q .
+			# при таймауте dig печатает ';; ... timed out' в stdout — ждём именно IP в ответе
+			dig +short +time=3 +tries=1 -p "${_dns_port}" ya.ru @"${_dns_ip}" 2>/dev/null | grep -qE '^[0-9a-fA-F:.]+$'
 		else
 			nslookup ya.ru "${_dns_ip}" &> /dev/null
 		fi
@@ -1102,9 +1105,10 @@ cmd_bridge_vpn_access_list() {
 				ent_inf=$(/opt/sbin/ip a | grep global | grep "${net_ip}" | sed 's/.* \(.*\)$/\1/')
 			else
 				desc=$(echo "${desc_full}" | sed 's|\"\(.*\)\".*|\1|')
-				ent_inf=$(awk -F'|' -v d="${desc}" '$3 == d { print $2; exit }' "${INFACE_NAMES_FILE}")
+				# поле 3 пишет хук через jq без -r — с кавычками; пустое описание не совпадает ни с чем
+				ent_inf=$(awk -F'|' -v d="${desc}" '{ x = $3; gsub(/"/, "", x) } d != "" && x == d { print $2; exit }' "${INFACE_NAMES_FILE}")
 			fi
-			if cat < "${KVAS_CONF_FILE}" | grep 'INFACE_GUEST_ENT=' | grep -qi "${ent_inf}"; then
+			if [ -n "${ent_inf}" ] && cat < "${KVAS_CONF_FILE}" | grep 'INFACE_GUEST_ENT=' | grep -qi "${ent_inf}"; then
 
 				if [ -z "${wild}" ] || [ "${wild}" = del ]; then
 					num=$((num + 1))
