@@ -115,9 +115,6 @@ Priority: optional
 Installed-Size: ${INSTALLED_SIZE}
 EOF
 
-# ВНИМАНИЕ: prerm/postrm нет — `opkg remove kvas` не останавливает сторож
-# S99kvas-awg-route (живёт до перезагрузки, держит ip rule/table 1001/DoT-REJECT) и
-# не убирает сниппеты dnsmasq.d и cron-строку dpi_history.sh.
 # 4. postinst
 #    - генерирует bin/libs/ndm из etc/ndm/ndm (несёт RULE_PRIORITY=99);
 #    - конфиги засеваются ТОЛЬКО при первой установке (upgrade не затирает).
@@ -294,6 +291,44 @@ fi
 exit 0
 POSTINST
 chmod +x "${CTRL}/postinst"
+
+# 5. prerm / postrm.
+#    ВНИМАНИЕ: opkg вызывает старые prerm/postrm с аргументом "remove" и при
+#    `opkg install --force-reinstall` (так ставит kvas upgrade) — отличить обновление
+#    от удаления по аргументам нельзя (проверено на роутере). Поэтому:
+#    - prerm только останавливает сторож (на обновлении postinst его перезапустит);
+#    - postrm запускает ОТЛОЖЕННУЮ уборку: если через 30 с пакета kvas нет — это было
+#      удаление, убираем маршрутизацию (ip rule, table 1001, KVAS_MARK, DoT-блок) и
+#      cron-строку. Перехват DNS и dnsmasq не трогаем: при dns-override родной DNS
+#      Keenetic выключен, без перехвата LAN осталась бы без DNS. Полная уборка с
+#      возвратом DNS — `kvas uninstall`.
+cat > "${CTRL}/prerm" <<'PRERM'
+#!/bin/sh
+[ -x /opt/etc/init.d/S99kvas-awg-route ] && /opt/etc/init.d/S99kvas-awg-route stop >/dev/null 2>&1
+exit 0
+PRERM
+cat > "${CTRL}/postrm" <<'POSTRM'
+#!/bin/sh
+(
+    sleep 30
+    opkg list-installed 2>/dev/null | grep -q '^kvas ' && exit 0
+    ip rule del fwmark 0xd1000/0xd1000 lookup 1001 2>/dev/null
+    ip route flush table 1001 2>/dev/null
+    for _r in $(iptables -w -t mangle -S PREROUTING 2>/dev/null | grep -n -- '-j KVAS_MARK' | cut -d: -f1 | sort -rn); do
+        iptables -w -t mangle -D PREROUTING $((_r - 1)) 2>/dev/null
+    done
+    iptables -w -t mangle -F KVAS_MARK 2>/dev/null
+    iptables -w -t mangle -X KVAS_MARK 2>/dev/null
+    for _p in tcp udp; do
+        while iptables -w -D FORWARD -i br0 -p $_p --dport 853 -j REJECT 2>/dev/null; do :; done
+    done
+    [ -f /opt/etc/crontab ] && sed -i '/dpi_history.sh/d' /opt/etc/crontab
+    rm -f /opt/etc/kvas.paused
+    logger -t kvas "postrm: пакет удалён — маршрутизация kvas убрана (DNS оставлен; полная уборка: kvas uninstall)"
+) </dev/null >/dev/null 2>&1 &
+exit 0
+POSTRM
+chmod +x "${CTRL}/prerm" "${CTRL}/postrm"
 
 # 5. Упаковка (root:root, чтобы opkg ставил от root)
 echo '2.0' > "${BUILD}/debian-binary"

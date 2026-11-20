@@ -62,3 +62,10 @@ git checkout -q -- opt/etc/conf/kvas.help
 # 2.8: копии сторожа в init.d (rc.unslung запускает все S*) обезвреживаются
 tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'for _old in /opt/etc/init.d/S99kvas-awg-route.*; do' >/dev/null
 tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F '[ -f "${_old}" ] && chmod -x "${_old}"' >/dev/null
+
+# 8.3: prerm/postrm — postrm убирает маршрутизацию только если пакета действительно нет
+tar -tzf "$UNPACKED/control.tar.gz" | grep -qx './prerm'
+tar -tzf "$UNPACKED/control.tar.gz" | grep -qx './postrm'
+tar -xOzf "$UNPACKED/control.tar.gz" ./prerm | grep -F 'S99kvas-awg-route stop' >/dev/null
+tar -xOzf "$UNPACKED/control.tar.gz" ./postrm | grep -F "opkg list-installed 2>/dev/null | grep -q '^kvas ' && exit 0" >/dev/null
+if tar -xOzf "$UNPACKED/control.tar.gz" ./postrm | grep -qE 'KVAS_DNS|dnsmasq.d'; then echo 'FAIL: postrm трогает DNS' >&2; exit 1; fi
