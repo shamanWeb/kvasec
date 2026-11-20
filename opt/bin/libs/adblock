@@ -149,26 +149,47 @@ ads_request_to_upload() {
 
 # ------------------------------------------------------------------------------------------
 #
-#	Получаем белый список с разделенный |
+#	Фильтр исключений: убирает из hosts-файла ($2) строки, чей домен равен записи
+#	exception.list ($1) или является её поддоменом (github.com → и api.github.com,
+#	но не xgithub.com). Результат — в stdout.
+#	Раньше: sed "/.*.a$|.*.b$/d" — в BRE '|' обычный символ, и при ≥2 записях
+#	исключения не работали вовсе (collector.githubapp.com блокировался).
 #
 # ------------------------------------------------------------------------------------------
-get_separated_host_list() {
-	list_file="${1}"
-	clear_file_content "${list_file}"
-	exclude_com=".*.$(cat < "${list_file}" | tr -d '*' | sed ':a;N;$!ba;s/\n/$|.*./g')$"
-	echo "${exclude_com}"
+ads_filter_exceptions() {
+	awk '
+		NR == FNR { gsub(/\*/, ""); sub(/^\./, ""); sub(/[ \t\r]+$/, "")
+		            if ($0 !~ /^#/ && $0 != "") ex[$0] = 1; next }
+		{
+			h = $2; keep = 1
+			while (h != "") {
+				if (h in ex) { keep = 0; break }
+				i = index(h, "."); if (!i) break
+				h = substr(h, i + 1)
+			}
+			if (keep) print
+		}' "$1" "$2"
 }
 
+#--------------------------------------------------------------
+#
+# 	Применяем изменения adblock / родительского контроля в dnsmasq.
+# 	addn-hosts (ads.kvas.list) dnsmasq перечитывает по SIGHUP — быстро
+# 	(AGENTS #13: полный рестарт с большим списком медленный). А conf-dir
+# 	(kvas-parental.dnsmasq: address=/.домен/0.0.0.0) — ТОЛЬКО при рестарте:
+# 	раньше после del родительского контроля домен оставался заблокирован.
+# 	$1 - md5 kvas-parental.dnsmasq ДО изменений.
+#
+#--------------------------------------------------------------
+parental_dns_sum() {
+	md5sum "${ADBLOCK_PARENTAL_DNS_FILE:-/opt/etc/dnsmasq.d/kvas-parental.dnsmasq}" 2>/dev/null | cut -d' ' -f1
+}
 
-#--------------------------------------------------------------
-#
-# 	Перегружаем необходимые сервисы для работы блокировки рекламы.
-#
-#--------------------------------------------------------------
 restart_dns_service(){
-
+	local before="${1-}"
 	ready "Перезапускаем сервис dnsmasq"
-	if kill -HUP "$(pidof dnsmasq)" 2>/dev/null; then
+	# shellcheck disable=SC2046  # pidof может вернуть несколько PID
+	if [ "${before}" = "$(parental_dns_sum)" ] && kill -HUP $(pidof dnsmasq) 2>/dev/null; then
 		when_ok "УСПЕШНО"
 	else
 		/opt/etc/init.d/S56dnsmasq restart &>/dev/null
@@ -213,11 +234,12 @@ cmd_ads_add_host(){
 			echo "0.0.0.0 ${host}" >> "${ADBLOCK_HOSTS_FILE}" && \
 			when_ok "УСПЕШНО" || when_bad "С ОШИБКОЙ"
 		fi
+		local parental_before; parental_before=$(parental_dns_sum)
 		/opt/apps/kvas/bin/main/parental_dns || {
 			error "Не удалось обновить правила dnsmasq для родительского контроля"
 			return 1
 		}
-		restart_dns_service
+		restart_dns_service "${parental_before}"
 	}
 }
 
@@ -242,9 +264,10 @@ cmd_ads_del_from_skip_list(){
 				tmp_file="${ADBLOCK_LIST_EXCEPTION}.tmp.$$"
 				awk -v domain="${host}" '$0 != domain' "${ADBLOCK_LIST_EXCEPTION}" > "${tmp_file}" && mv -f "${tmp_file}" "${ADBLOCK_LIST_EXCEPTION}" || return 1
 			fi
+			local parental_before; parental_before=$(parental_dns_sum)
 			/opt/apps/kvas/bin/main/parental_dns || return 1
 			when_ok "УСПЕШНО"
-			restart_dns_service
+			restart_dns_service "${parental_before}"
 		else
 			warning "Список блокировки еще не существует. "
 			warning "Добавьте в него домен командой 'kvas adblock add <host>'"
@@ -263,7 +286,7 @@ ads_remove_white_hosts(){
 
 	if [ -f "${KVAS_LIST_FILE}" ] && [ "$(cat < "${KVAS_LIST_FILE}" | wc -l )" -ge 1 ]; then
 		ready "Удаляем хосты, находящиеся в защищенном списке"
-		TMP_FILE="/opt/tmp/hosts.tmp"
+		TMP_FILE="/opt/tmp/hosts.tmp.$$"
 		awk '
 			NR==FNR { gsub(/\*/, "", $0); if ($0 !~ /^#/ && $0 != "") wl[$0]=1; next }
 			{
@@ -274,9 +297,8 @@ ads_remove_white_hosts(){
 				}
 				if (keep) print
 			}
-		' "${KVAS_LIST_FILE}" "${ADBLOCK_HOSTS_FILE}" > "${TMP_FILE}"
-		mv -f "${TMP_FILE}" "${ADBLOCK_HOSTS_FILE}"
-		when_ok "УСПЕШНО"
+		' "${KVAS_LIST_FILE}" "${ADBLOCK_HOSTS_FILE}" > "${TMP_FILE}" \
+			&& mv -f "${TMP_FILE}" "${ADBLOCK_HOSTS_FILE}" && when_ok "УСПЕШНО" || { rm -f "${TMP_FILE}"; when_bad "ОШИБКА"; }
 	fi
 }
 
@@ -290,9 +312,9 @@ ads_remove_exception_hosts(){
 
 	if [ -f "${ADBLOCK_LIST_EXCEPTION}" ] && [ "$(cat < "${ADBLOCK_LIST_EXCEPTION}" | wc -l )" -ge 1 ]; then
 		ready "Удаляем хосты, находящиеся в списке исключений"
-		exclude_all="$(get_separated_host_list "${ADBLOCK_LIST_EXCEPTION}")"
-		sed -i "/${exclude_all}/d" "${ADBLOCK_HOSTS_FILE}"
-		when_ok "УСПЕШНО"
+		local tmp="${ADBLOCK_HOSTS_FILE}.tmp.$$"
+		ads_filter_exceptions "${ADBLOCK_LIST_EXCEPTION}" "${ADBLOCK_HOSTS_FILE}" > "${tmp}" \
+			&& mv -f "${tmp}" "${ADBLOCK_HOSTS_FILE}" && when_ok "УСПЕШНО" || { rm -f "${tmp}"; when_bad "ОШИБКА"; }
 	fi
 }
 
