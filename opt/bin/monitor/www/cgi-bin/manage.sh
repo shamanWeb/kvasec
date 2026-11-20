@@ -19,6 +19,7 @@ BLOCK_WATCH_EVENTS=/tmp/kvas-block-watch.events
 BLOCK_WATCH_LOCK_DIR=/tmp/kvas-block-watch.lock.d
 KVAS_LIST=/opt/etc/kvas.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
+CONF_LOCK_DIR=/tmp/kvas_conf.lock
 IOT_LOCKDOWN_LIST=/opt/etc/kvas-iot-lockdown.list
 IOT_LOCKDOWN_HOOK=/opt/etc/ndm/netfilter.d/090-iot-lockdown
 PARENTAL_LIST=/opt/etc/adblock/block.list
@@ -438,6 +439,60 @@ check_updates() {
 	else
 		echo "up_to_date"
 	fi
+}
+
+# --- kvas.conf: списки IP/интерфейсов ---
+# Раньше: grep → sed -i "/^key=/d" → echo >> без лока. Два быстрых клика теряли
+# изменение, а параллельный `route refresh` мог увидеть файл без ключа.
+# Лок — mkdir (flock в busybox роутера нет); брошенный — по возрасту самого лока.
+conf_lock() {
+	local born
+	while ! mkdir "$CONF_LOCK_DIR" 2>/dev/null; do
+		born=$(date -r "$CONF_LOCK_DIR" +%s 2>/dev/null) || continue
+		if [ $(( $(date +%s) - born )) -gt 60 ] &&
+			mv "$CONF_LOCK_DIR" "$CONF_LOCK_DIR.stale.$$" 2>/dev/null; then
+			rm -rf "$CONF_LOCK_DIR.stale.$$"
+			continue
+		fi
+		sleep 1
+	done
+}
+conf_unlock() { rmdir "$CONF_LOCK_DIR" 2>/dev/null; }
+
+# $1 ключ, $2 разделитель, $3 add|del, $4 элемент (точное сравнение).
+# 0 — файл изменён, 1 — изменений не потребовалось, 2 — ошибка записи.
+conf_list_edit() {
+	local key="$1" sep="$2" op="$3" item="$4" tmp rc
+	conf_lock
+	[ -f "$KVAS_CONF_FILE" ] || : > "$KVAS_CONF_FILE"
+	tmp="${KVAS_CONF_FILE}.tmp.$$"
+	awk -v k="$key" -v s="$sep" -v op="$op" -v it="$item" '
+		index($0, k "=") == 1 {
+			if (found) { changed = 1; next }    # дубли ключа схлопываем
+			found = 1
+			n = split(substr($0, length(k) + 2), a, s); out = ""; has = 0
+			for (i = 1; i <= n; i++) {
+				if (a[i] == "") continue
+				if (a[i] == it) { has = 1; if (op == "del") { changed = 1; continue } }
+				out = out (out == "" ? "" : s) a[i]
+			}
+			if (op == "add" && !has) { out = out (out == "" ? "" : s) it; changed = 1 }
+			if (out != "") print k "=" out
+			next
+		}
+		{ print }
+		END {
+			if (!found && op == "add") { print k "=" it; changed = 1 }
+			exit (changed ? 0 : 1)
+		}' "$KVAS_CONF_FILE" > "$tmp"
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		mv -f "$tmp" "$KVAS_CONF_FILE" || rc=2
+	else
+		rm -f "$tmp"
+	fi
+	conf_unlock
+	return "$rc"
 }
 
 main() {
@@ -1032,13 +1087,12 @@ main() {
 				exclude) key="route_excluded_ip" ;;
 				*) json_error "type must be full, list, or exclude" ;;
 			esac
-			current=$(grep "^${key}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-			if echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
+			conf_list_edit "$key" + add "$ip"; rc=$?
+			if [ "$rc" -eq 1 ]; then
 				json_ok "already exists"
+			elif [ "$rc" -ne 0 ]; then
+				json_error "cannot write kvas.conf"
 			else
-				[ -n "$current" ] && current="${current}+${ip}" || current="$ip"
-				sed -i "/^${key}=/d" "$KVAS_CONF_FILE" 2>/dev/null
-				echo "${key}=${current}" >> "$KVAS_CONF_FILE"
 				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
 					json_ok "added $ip to $type"
 				else
@@ -1058,13 +1112,12 @@ main() {
 				exclude) key="route_excluded_ip" ;;
 				*) json_error "type must be full, list, or exclude" ;;
 			esac
-			current=$(grep "^${key}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-			if ! echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
+			conf_list_edit "$key" + del "$ip"; rc=$?
+			if [ "$rc" -eq 1 ]; then
 				json_ok "not found"
+			elif [ "$rc" -ne 0 ]; then
+				json_error "cannot write kvas.conf"
 			else
-				new_list=$(echo "$current" | tr '+' '\n' | grep -v "^${ip}$" | tr '\n' '+' | sed 's/+$//')
-				sed -i "/^${key}=/d" "$KVAS_CONF_FILE" 2>/dev/null
-				[ -n "$new_list" ] && echo "${key}=${new_list}" >> "$KVAS_CONF_FILE"
 				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
 					json_ok "removed $ip from $type"
 				else
@@ -1242,26 +1295,18 @@ main() {
 			# из вкладки «Маршрутизация», иначе остался бы невидимый дубль)
 			changed=0
 			for key in route_full_ip route_excluded_ip route_by_list_ip; do
-				current=$(grep "^${key}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-				if echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
-					new_list=$(echo "$current" | tr '+' '\n' | grep -Fxv "$ip" | tr '\n' '+' | sed 's/+$//')
-					sed -i "/^${key}=/d" "$KVAS_CONF_FILE" 2>/dev/null
-					[ -n "$new_list" ] && echo "${key}=${new_list}" >> "$KVAS_CONF_FILE"
-					changed=1
-				fi
+				conf_list_edit "$key" + del "$ip"; rc=$?
+				[ "$rc" -eq 2 ] && json_error "cannot write kvas.conf"
+				[ "$rc" -eq 0 ] && changed=1
 			done
 			# Добавляем в целевой список (list = режим по умолчанию, отдельного ключа не требует)
 			tgt=""
 			[ "$mode" = "full" ] && tgt="route_full_ip"
 			[ "$mode" = "exclude" ] && tgt="route_excluded_ip"
 			if [ -n "$tgt" ]; then
-				current=$(grep "^${tgt}=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-				if ! echo "$current" | tr '+' '\n' | grep -Fxq "$ip"; then
-					[ -n "$current" ] && current="${current}+${ip}" || current="$ip"
-					sed -i "/^${tgt}=/d" "$KVAS_CONF_FILE" 2>/dev/null
-					echo "${tgt}=${current}" >> "$KVAS_CONF_FILE"
-					changed=1
-				fi
+				conf_list_edit "$tgt" + add "$ip"; rc=$?
+				[ "$rc" -eq 2 ] && json_error "cannot write kvas.conf"
+				[ "$rc" -eq 0 ] && changed=1
 			fi
 			# route refresh нужен только если конфиг реально поменялся
 			if [ "$changed" = 0 ]; then
@@ -1386,13 +1431,12 @@ main() {
 			net=$(echo "$QUERY_STRING" | sed 's/.*net=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
 			[ -z "$net" ] && json_error "net required"
 			valid_ifname "$net" || json_error "invalid interface"
-			current=$(grep "^INFACE_GUEST_ENT=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-			if echo "$current" | tr ',' '\n' | grep -Fxq "$net"; then
+			conf_list_edit INFACE_GUEST_ENT , add "$net"; rc=$?
+			if [ "$rc" -eq 1 ]; then
 				json_ok "already added"
+			elif [ "$rc" -ne 0 ]; then
+				json_error "cannot write kvas.conf"
 			else
-				[ -n "$current" ] && current="${current},${net}" || current="$net"
-				sed -i "/^INFACE_GUEST_ENT=/d" "$KVAS_CONF_FILE" 2>/dev/null
-				echo "INFACE_GUEST_ENT=${current}" >> "$KVAS_CONF_FILE"
 				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
 					json_ok "added $net"
 				else
@@ -1405,13 +1449,12 @@ main() {
 			net=$(echo "$QUERY_STRING" | sed 's/.*net=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
 			[ -z "$net" ] && json_error "net required"
 			valid_ifname "$net" || json_error "invalid interface"
-			current=$(grep "^INFACE_GUEST_ENT=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-			if ! echo "$current" | tr ',' '\n' | grep -Fxq "$net"; then
+			conf_list_edit INFACE_GUEST_ENT , del "$net"; rc=$?
+			if [ "$rc" -eq 1 ]; then
 				json_ok "not found"
+			elif [ "$rc" -ne 0 ]; then
+				json_error "cannot write kvas.conf"
 			else
-				new_list=$(echo "$current" | tr ',' '\n' | grep -v "^${net}$" | tr '\n' ',' | sed 's/,$//')
-				sed -i "/^INFACE_GUEST_ENT=/d" "$KVAS_CONF_FILE" 2>/dev/null
-				[ -n "$new_list" ] && echo "INFACE_GUEST_ENT=${new_list}" >> "$KVAS_CONF_FILE"
 				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
 					json_ok "removed $net"
 				else
