@@ -86,6 +86,58 @@ get_tag_domain_list(){
 
 # ------------------------------------------------------------------------------------------
 #
+# 	Правка секции [tag] в TAGS_FILE (точное сравнение заголовков, не регэксп).
+# 	$1 - тег, $2 - режим: delete (секцию целиком) | replace (содержимое на $3 —
+# 	домены через пробел) | deldomain (строку = $3 внутри секции).
+# 	Раньше sed "/\[tag\]/,/\[.*\]/ {d}" удалял и заголовок СЛЕДУЮЩЕЙ секции.
+# 	Код возврата 1 — секция (или домен для deldomain) не найдены.
+#
+# ------------------------------------------------------------------------------------------
+_tags_section_rewrite() {
+    local tag="$1" mode="$2" arg="$3" tmp="${TAGS_FILE}.tmp.$$"
+    awk -v s="[$tag]" -v mode="$mode" -v arg="$arg" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t\r]+$/, "", x); return x }
+        BEGIN { n = split(arg, repl, " ") }
+        { l = trim($0); hdr = (l ~ /^\[.*\]$/) }
+        hdr {
+            insec = (l == s)
+            if (insec) {
+                found = 1
+                if (mode == "delete") next
+                print
+                if (mode == "replace") for (i = 1; i <= n; i++) print repl[i]
+                next
+            }
+        }
+        insec && !hdr {
+            if (mode == "delete" || mode == "replace") next
+            if (mode == "deldomain" && l == arg) { hit = 1; next }
+        }
+        { print }
+        END { exit !(mode == "deldomain" ? hit : found) }' "${TAGS_FILE}" > "${tmp}" \
+        && mv -f "${tmp}" "${TAGS_FILE}" && return 0
+    rm -f "${tmp}"
+    return 1
+}
+
+tag_exists() {
+    awk -v s="[$1]" '{ sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, "") } $0 == s { f = 1; exit } END { exit !f }' "${TAGS_FILE}" 2>/dev/null
+}
+
+# Имя закваски: идёт в заголовок [..] и в регэкспы старого кода — строгий whitelist
+valid_tag_name() {
+    [ -n "$1" ] && [ ${#1} -le 32 ] || return 1
+    case "$1" in -*|*[!A-Za-z0-9_-]*) return 1 ;; esac
+    return 0
+}
+
+# Домены закваски без пустых строк и комментариев
+_tag_domains() {
+    get_tag_domain_list "$1" | sed 's/#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d'
+}
+
+# ------------------------------------------------------------------------------------------
+#
 # 	Получаем первый домен из списка доменных имен по тегу
 #
 # ------------------------------------------------------------------------------------------
@@ -207,26 +259,21 @@ cmd_del_domain_from_tag_list() {
         read_ynq "Будут удалены все домены с закваской '$section' и само имя закваски.\nВы уверены?" answer
         # shellcheck disable=SC2154  # присваивается по имени (eval) внутри read_ynq
         if [[ "$answer" =~ [qn] ]] ; then return 1; fi
-        [ "${answer}" = y ] && {
-            sed -i "/\[$section\]/,/\[.*\]/ { /.*$/d }" "${TAGS_FILE}"
-        }
+        [ "${answer}" = y ] && _tags_section_rewrite "$section" delete
         return
     else
 
         _check_domain_zone "${domain}" || return 1
 
-        grep -q "\[$section\]" "${TAGS_FILE}" || {
+        tag_exists "$section" || {
             echo "Закваска '$section' не найдена."
             return 1
         }
 
-
-        if ! grep -q "^$domain$" "${TAGS_FILE}"; then
+        _tags_section_rewrite "$section" deldomain "$domain" || {
             error "Домен '$domain' не обнаружен в закваске '$section'."
             return 1
-        fi
-
-        sed -i "/\[$section\]/,/\[.*\]/ { /^$domain$/d }" "${TAGS_FILE}"
+        }
     fi
 }
 
@@ -431,4 +478,60 @@ cmd_update_tags_domain_list() {
         fi
 
     fi
+}
+
+
+# ------------------------------------------------------------------------------------------
+#
+#   Неинтерактивные команды для WebUI (manage.sh: tags_add/del/create/delete/edit_save).
+#   Раньше этих подкоманд не было вовсе: `kvas tags add-protect` падал в ветку
+#   показа списка с кодом 0, и WebUI рапортовал успех, ничего не сделав.
+#
+# ------------------------------------------------------------------------------------------
+cmd_tags_add_protect() {
+    local tag="$1" tmp
+    valid_tag_name "$tag" && tag_exists "$tag" || { error "Закваска '$tag' не найдена."; return 1; }
+    tmp=$(mktemp)
+    _tag_domains "$tag" > "$tmp"
+    if [ ! -s "$tmp" ]; then
+        rm -f "$tmp"
+        error "В закваске '$tag' нет доменов."
+        return 1
+    fi
+    cmd_import_hosts "$tmp"
+    rm -f "$tmp"
+}
+
+cmd_tags_del_protect() {
+    local tag="$1" domains
+    valid_tag_name "$tag" && tag_exists "$tag" || { error "Закваска '$tag' не найдена."; return 1; }
+    domains=$(_tag_domains "$tag" | tr '\n' ' ')
+    [ -n "$domains" ] || { error "В закваске '$tag' нет доменов."; return 1; }
+    del_multy_hosts "$domains"
+}
+
+# $1 - имя, далее - домены
+cmd_tags_create() {
+    local tag="$1"; shift
+    valid_tag_name "$tag" || { error "Недопустимое имя закваски '$tag'."; return 1; }
+    tag_exists "$tag" && { error "Закваска '$tag' уже существует."; return 1; }
+    [ $# -gt 0 ] || { error "Не заданы домены."; return 1; }
+    { printf '\n[%s]\n' "$tag"; printf '%s\n' "$@"; } >> "${TAGS_FILE}" || return 1
+    ready "Закваска '$tag' создана" && when_ok "ГОТОВО"
+}
+
+cmd_tags_delete() {
+    local tag="$1"
+    valid_tag_name "$tag" && _tags_section_rewrite "$tag" delete || {
+        error "Закваска '$tag' не найдена."; return 1; }
+    ready "Закваска '$tag' удалена" && when_ok "ГОТОВО"
+}
+
+# $1 - имя, далее - новый список доменов
+cmd_tags_edit_save() {
+    local tag="$1"; shift
+    valid_tag_name "$tag" || { error "Недопустимое имя закваски '$tag'."; return 1; }
+    [ $# -gt 0 ] || { error "Не заданы домены."; return 1; }
+    _tags_section_rewrite "$tag" replace "$*" || { error "Закваска '$tag' не найдена."; return 1; }
+    ready "Закваска '$tag' обновлена" && when_ok "ГОТОВО"
 }

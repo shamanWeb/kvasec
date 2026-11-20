@@ -1513,7 +1513,6 @@ main() {
 			out=$($KVAS_BIN tags add-protect "$tag" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "add failed: $out"
-			$KVAS_BIN init >/dev/null 2>&1
 			json_ok "added $tag"
 			;;
 		tags_create)
@@ -1544,7 +1543,6 @@ main() {
 			out=$($KVAS_BIN tags del-protect "$tag" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "del failed: $out"
-			$KVAS_BIN init >/dev/null 2>&1
 			json_ok "removed $tag"
 			;;
 		tags_delete)
@@ -1556,7 +1554,6 @@ main() {
 			out=$($KVAS_BIN tags delete "$tag" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "delete failed: $out"
-			$KVAS_BIN init >/dev/null 2>&1
 			json_ok "удалена закваска $tag"
 			;;
 		tags_edit_save)
@@ -1574,7 +1571,6 @@ main() {
 			out=$($KVAS_BIN tags edit-save "$tag" $domains 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "edit failed: $out"
-			$KVAS_BIN init >/dev/null 2>&1
 			json_ok "закваска $tag обновлена"
 			;;
 		tags_download)

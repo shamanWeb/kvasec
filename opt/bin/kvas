@@ -184,6 +184,12 @@ case "${1}" in
 			add)			cmd_add_domain_to_tag_list "${3}" "${4}" ;;
 			del)			cmd_del_domain_from_tag_list "${3}" "${4}" ;;
 			update)			cmd_update_tags_domain_list "${3}";;
+			# неинтерактивные — для WebUI
+			add-protect)	cmd_tags_add_protect "${3}"; _rc=$? ;;
+			del-protect)	cmd_tags_del_protect "${3}"; _rc=$? ;;
+			create)			shift 2; cmd_tags_create "$@"; _rc=$? ;;
+			delete)			cmd_tags_delete "${3}"; _rc=$? ;;
+			edit-save)		shift 2; cmd_tags_edit_save "$@"; _rc=$? ;;
 			*) 				cmd_show_tags_domain_list "${2}" ;;
 		esac
 		;;
@@ -416,3 +422,5 @@ case "${1}" in
 esac
 
 print_line
+# код возврата команды (если она его выставила) — WebUI различает ошибку и успех
+exit "${_rc:-0}"

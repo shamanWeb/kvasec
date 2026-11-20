@@ -3239,8 +3239,14 @@ cmd_import_hosts() {
 	done < "${user_list}"
 
 	_hosts_to_add_ubl=$(echo -e "${hosts_to_add_ubl}" | sed '/^$/d')
-	[ -n "${_hosts_to_add_ubl}" ] && echo -e "${_hosts_to_add_ubl}" >> "${KVAS_LIST_FILE}"
-	clear_file_content "${KVAS_LIST_FILE}"
+	# Только дописываем новые записи (дубли уже отсеяны list_has_entry).
+	# Раньше clear_file_content переписывал ВЕСЬ kvas.list: снимал "*." со всех
+	# записей, выкидывал комментарии и сортировал — при каждом импорте из WebUI.
+	if [ -n "${_hosts_to_add_ubl}" ]; then
+		# файл без \n в конце — иначе первая новая запись склеится с последней
+		[ -s "${KVAS_LIST_FILE}" ] && [ -n "$(tail -c 1 "${KVAS_LIST_FILE}")" ] && echo >> "${KVAS_LIST_FILE}"
+		echo -e "${_hosts_to_add_ubl}" >> "${KVAS_LIST_FILE}"
+	fi
 
 	cmd_ads_status | grep -q ВКЛЮЧЕН && ads_list_hosts_update &> /dev/null
 
