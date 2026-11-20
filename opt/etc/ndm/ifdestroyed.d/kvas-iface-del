@@ -17,6 +17,7 @@ if [ "${1}" = "hook" ] ; then
 	#	В случае, если созданное подключение уже есть т в списке интерфейсов,
 	#	то удаляем его из файла  /opt/etc/inface_equals
 
-    grep -q "${id}" "${iface_file}" && sed -i '/'"${id}"'/d' "${iface_file}"
+    # точно по первому полю: "/Wireguard1/d" удалял и Wireguard10
+    grep -q "^${id}|" "${iface_file}" && sed -i "/^${id}|/d" "${iface_file}"
 
 fi

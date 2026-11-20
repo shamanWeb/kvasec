@@ -189,6 +189,15 @@ _list_entry_awk='
 	mode == "del" { if (hit) found = 1; else print }
 	END { exit !found }'
 
+# Поле строки /opt/etc/inface_equals (cli|entware|описание) по ТОЧНОМУ имени
+# entware-интерфейса: grep "opkgtun1" находил и opkgtun10 (несколько строк в
+# INFACE_CLI), а пустое имя совпадало со всем файлом.
+# $1 - entware-имя, $2 - номер поля (1 cli, 2 entware, 3 описание)
+inface_field() {
+	[ -n "$1" ] || return 1
+	awk -F'|' -v e="$1" -v c="${2:-1}" '$2 == e { print $c; exit }' "${INFACE_NAMES_FILE}" 2>/dev/null
+}
+
 _list_entry_base() {
 	local e="${1#\*}"
 	printf '%s' "${e#.}"

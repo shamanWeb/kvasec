@@ -101,7 +101,7 @@ update_time(){
 # ------------------------------------------------------------------------------------------
 current_cli_vpn_interface() {
         inface_entware=$(get_config_value INFACE_ENT)
-        inface=$(grep "${inface_entware}" "${INFACE_NAMES_FILE}"  | cut -d'|' -f1)
+        inface=$(inface_field "${inface_entware}" 1)
         echo "${inface}"
 }
 
@@ -1084,7 +1084,7 @@ cmd_bridge_vpn_access_list() {
 				ent_inf=$(/opt/sbin/ip a | grep global | grep "${net_ip}" | sed 's/.* \(.*\)$/\1/')
 			else
 				desc=$(echo "${desc_full}" | sed 's|\"\(.*\)\".*|\1|')
-				ent_inf=$(cat /opt/etc/inface_equals | grep "${desc}" | cut -d'|' -f2)
+				ent_inf=$(awk -F'|' -v d="${desc}" '$3 == d { print $2; exit }' "${INFACE_NAMES_FILE}")
 			fi
 			if cat < "${KVAS_CONF_FILE}" | grep 'INFACE_GUEST_ENT=' | grep -qi "${ent_inf}"; then
 
@@ -1616,8 +1616,8 @@ ndm_gateway_change() {
 vpn_on() {
 
 	inface_entware="${1}"
-	inface_cli=$(grep "${inface_entware}" "${INFACE_NAMES_FILE}" | cut -d '|' -f1 )
-	inface_cli_desc=$(grep "${inface_entware}" "${INFACE_NAMES_FILE}" | cut -d '|' -f3 )
+	inface_cli=$(inface_field "${inface_entware}" 1)
+	inface_cli_desc=$(inface_field "${inface_entware}" 3)
 
 	ready "Интерфейс ${inface_cli_desc} подключен "
 	{
@@ -2035,7 +2035,7 @@ update_interface_name_list() {
 		#	создаем файл
 		cat <<EOF >"${HOOK_INFACE_FILE}"
 #!/bin/sh
-if [ -z "\$(grep "\${id}" "${INFACE_NAMES_FILE}")" ]; then
+if ! awk -F'|' -v i="\${id}" '\$1 == i { f = 1; exit } END { exit !f }' "${INFACE_NAMES_FILE}"; then
 	echo "\${id}|\${system_name}" >> "${INFACE_NAMES_FILE}"
 fi
 exit 0
@@ -2067,7 +2067,7 @@ EOF
 		# если при ежесекундной проверке интерфейс в файле появится, то ожидание прервётся
 		# если он уже на месте, задержки не будет
 		attempt=15
-		while [[ $attempt -gt 0 ]] && ! grep -Fq "${inface_cli}" "${INFACE_NAMES_FILE}"; do
+		while [[ $attempt -gt 0 ]] && ! grep -q "^${inface_cli}|" "${INFACE_NAMES_FILE}"; do
 			sleep 3
 			attempt=$(( $attempt - 1 ))
 		done
@@ -2078,7 +2078,7 @@ EOF
 
 			# вставляем описание в файл /opt/etc/inface_equals
 			[ -n "${description}" ] && \
-				sed -i 's/\('"${inface_cli}"'.*\)/\1|'"${description}"'/' "${INFACE_NAMES_FILE}"
+				sed -i 's/^\('"${inface_cli}"'|.*\)/\1|'"${description}"'/' "${INFACE_NAMES_FILE}"
 		else
 			log_error "Сетевой интерфейс для ${inface_cli} получить не удалось."
 		fi
@@ -2133,7 +2133,7 @@ get_current_vpn_interface() {
 			*) col=1 ;;
 		esac
 		inface_entware=$(get_config_value "INFACE_ENT")
-		[ -n "${inface_entware}" ] && inface=$(grep "${inface_entware}" "${INFACE_NAMES_FILE}" | cut -d'|' -f"${col}")
+		[ -n "${inface_entware}" ] && inface=$(inface_field "${inface_entware}" "${col}")
 	fi
 	echo "${inface}"
 }
@@ -2343,7 +2343,7 @@ select_vpn_interface() {
 			set_config_value "ADDR_MAN" ""
 			if [[ "$num_vpn_inface" -ge 1 && "$num_vpn_inface" -le "$total" ]]; then
 				inface_entware=$(get_vpn_interface_by_num "${num_vpn_inface}")
-				cli_inface=$(grep "${inface_entware}" "${INFACE_NAMES_FILE}" | cut -d"|" -f1)
+				cli_inface=$(inface_field "${inface_entware}" 1)
 				switch_vpn_on "${inface_entware}" "${cli_inface}"
 			else
 				error "Число должно быть в пределах от 1 до ${total}"
