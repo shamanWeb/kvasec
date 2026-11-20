@@ -170,97 +170,59 @@ vpn_check(){
 
 	vpn_cli_desc=$(get_current_vpn_interface "cli_desc")
 	vpn_cli=$(get_current_vpn_interface "cli")
-#	если выбрано vpn подключение отличное от shadowsocks
-	if ! [ "${vpn_cli}" = 'shadowsocks' ]; then
-		connected=$(is_vpn_interface_connected "${vpn_cli}")
-		ready "Состояние vpn соединения ${vpn_cli_desc}"
-		if [ "${connected}" = 'on' ]; then
-			when_ok "ПОДКЮЧЕНО"
+	connected=$(is_vpn_interface_connected "${vpn_cli}")
+	ready "Состояние vpn соединения ${vpn_cli_desc}"
+	if [ "${connected}" = 'on' ]; then
+		when_ok "ПОДКЮЧЕНО"
 
-			# Проверяем реальную работу через прокси
-			ready "Проверка работоспособности прокси"
-			local test_ip=$(curl -s --connect-timeout 5 -x "socks5://127.0.0.1:1097" "https://ifconfig.me" 2>/dev/null)
-			if [ -n "$test_ip" ] && echo "$test_ip" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$"; then
-				when_ok "РАБОТАЕТ (IP: $test_ip)"
-			else
-				when_bad "НЕ РАБОТАЕТ"
-			fi
+		# Проверяем реальную работу через прокси
+		ready "Проверка работоспособности прокси"
+		local test_ip=$(curl -s --connect-timeout 5 -x "socks5://127.0.0.1:1097" "https://ifconfig.me" 2>/dev/null)
+		if [ -n "$test_ip" ] && echo "$test_ip" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$"; then
+			when_ok "РАБОТАЕТ (IP: $test_ip)"
+		else
+			when_bad "НЕ РАБОТАЕТ"
+		fi
 
-			ready "Таблица VPN маршрутов id=1001"
-			[ -x "/opt/etc/ndm/fs.d/100-vpn" ] && /opt/etc/ndm/fs.d/100-vpn start 2>/dev/null
-			if /opt/sbin/ip route show table 1001 2>/dev/null | grep -qv 'default'; then
-				when_ok "ЗАПОЛНЕНА"
+		ready "Таблица VPN маршрутов id=1001"
+		[ -x "/opt/etc/ndm/fs.d/100-vpn" ] && /opt/etc/ndm/fs.d/100-vpn start 2>/dev/null
+		if /opt/sbin/ip route show table 1001 2>/dev/null | grep -qv 'default'; then
+			when_ok "ЗАПОЛНЕНА"
 
-				ready "Таблица VPN маршрутов id=1001 в правилах маркировки "
-				if [ -n "$(/opt/sbin/ip rule show 2>/dev/null | grep 1001)" ]; then
-					when_ok "ПРИСУТСТВУЕТ"
+			ready "Таблица VPN маршрутов id=1001 в правилах маркировки "
+			if [ -n "$(/opt/sbin/ip rule show 2>/dev/null | grep 1001)" ]; then
+				when_ok "ПРИСУТСТВУЕТ"
 
-					ready "Правила маркировки трафика в iptable"
-					[ -x "/opt/etc/ndm/netfilter.d/100-vpn-mark" ] && /opt/etc/ndm/netfilter.d/100-vpn-mark 2>/dev/null
-					if [ -n "${VPN_IPTABLES_CHAIN}" ] && [ "$(save_iptables | grep -c "${VPN_IPTABLES_CHAIN}")" -ge 2 ]; then
-						when_ok "ДОБАВЛЕНЫ"
-					else
-						when_bad "ОТСУТСТВУЮТ"
-					fi
+				ready "Правила маркировки трафика в iptable"
+				[ -x "/opt/etc/ndm/netfilter.d/100-vpn-mark" ] && /opt/etc/ndm/netfilter.d/100-vpn-mark 2>/dev/null
+				if [ -n "${VPN_IPTABLES_CHAIN}" ] && [ "$(save_iptables | grep -c "${VPN_IPTABLES_CHAIN}")" -ge 2 ]; then
+					when_ok "ДОБАВЛЕНЫ"
 				else
-					when_bad "ОТСУТСТВУЕТ"
+					when_bad "ОТСУТСТВУЮТ"
 				fi
 			else
-				when_bad "ПУСТА"
+				when_bad "ОТСУТСТВУЕТ"
 			fi
 		else
-			when_bad "ОСТАНОВЛЕНО"
-			ready "Перезапускаем еще раз vpn соединение ${vpn_cli_desc}"
-			curl -s -d '{"up":"false"}' "${LOCALHOST_IP}:79/rci/interface/${vpn_cli}" &>/dev/null
-			sleep 1
-			curl -s -d '{"up":"true"}' "${LOCALHOST_IP}:79/rci/interface/${vpn_cli}" &>/dev/null
-			connected=$(is_vpn_interface_connected "${vpn_cli}")
-			if [ "${connected}" = 'on' ]; then
-			# if [ -n "$(echo "${status}" | grep 'interface is up.' )" ]; then
-				when_ok "ПОДКЮЧЕНО"
-			else
-				when_bad "ОШИБКА"
-				error "Запустите диагностику командой kvas debug"
-				exit 1
-			fi
+			when_bad "ПУСТА"
 		fi
-	fi
-}
-# ------------------------------------------------------------------------------------------
-#
-#	 Проверяем работу shadowsocks
-#
-# ------------------------------------------------------------------------------------------
-shadowsocks_check() {
-	vpn_cli=$(get_current_vpn_interface "cli")
-	if [ "${vpn_cli}" = 'shadowsocks' ]; then
-
-		ready "Состояние службы shadowsocks"
-		if /opt/etc/init.d/S22shadowsocks status &> /dev/null; then
-			when_ok "ЗАПУЩЕНА"
+	else
+		when_bad "ОСТАНОВЛЕНО"
+		ready "Перезапускаем еще раз vpn соединение ${vpn_cli_desc}"
+		curl -s -d '{"up":"false"}' "${LOCALHOST_IP}:79/rci/interface/${vpn_cli}" &>/dev/null
+		sleep 1
+		curl -s -d '{"up":"true"}' "${LOCALHOST_IP}:79/rci/interface/${vpn_cli}" &>/dev/null
+		connected=$(is_vpn_interface_connected "${vpn_cli}")
+		if [ "${connected}" = 'on' ]; then
+		# if [ -n "$(echo "${status}" | grep 'interface is up.' )" ]; then
+			when_ok "ПОДКЮЧЕНО"
 		else
-			when_bad "ОСТАНОВЛЕНА"
-			ready "Перезапускаем еще раз shadowsocks"
-			if /opt/etc/init.d/S22shadowsocks restart &> /dev/null; then
-				when_ok "УСПЕШНО"
-			else
-				when_bad "ОШИБКА"
-				error "Запустите диагностику командой kvas debug"
-				exit 1
-			fi
-		fi
-
-		port=$(cat < '/opt/etc/shadowsocks.json' | sed 's/^\(.*\)\(#.*\)/\2/; /^#/d; /^$/d' | grep local_port | cut -d':' -f2 | tr -d ' ,')
-		ready "Отслеживание порта #${port} shadowsocks "
-		if netstat -ltunp 2> /dev/null | grep ':'"${port}" &> /dev/null; then
-			when_ok "СЛЕДИМ"
-		else
-			when_bad "НЕТ ЗАПИСИ"
+			when_bad "ОШИБКА"
+			error "Запустите диагностику командой kvas debug"
 			exit 1
 		fi
 	fi
 }
-
 # ------------------------------------------------------------------------------------------
 #
 #	 Проверяем работу dnscrypt-proxy
@@ -310,31 +272,26 @@ iptable_check() {
 	else
 		count_local_nets=0
 	fi
-	count_ip4tables_rules=$(save_iptables \
-		| grep -E "${IPSET_TABLE_NAME}|${VPN_IPTABLES_CHAIN}|${SSR_IPTABLES_CHAIN}" \
-		| grep -c '\-A')
+	# Только по цепочкам (iptables -S <цепочка>): на Keenetic и iptables-save, и
+	# iptables -S по всей таблице обрываются на match'е connndmmark в INPUT — правила
+	# KVAS_MARK в вывод не попадали, проверка видела 0 и запускала пересборку маршрутизации.
+	count_ip4tables_rules=$(( $(iptables -t mangle -S KVAS_MARK 2>/dev/null | grep -c '^-A') \
+		+ $(iptables -t mangle -S PREROUTING 2>/dev/null | grep -c 'KVAS_MARK') ))
 
 	if [ "${count_ip4tables_rules}" -gt "${count_local_nets}" ] ; then
 		when_ok "ЕСТЬ"
 	else
 		when_bad "ПРАВИЛ НЕТ"
-		if has_ssr_enable; then
-			export type=iptables; export table=mangle && /opt/etc/ndm/netfilter.d/100-proxy-redirect &> /dev/null
-		else
-			cmd_vpn_iptable_flush
-			ip4set_create_table
-			ip4_mark_vpn_network
-		fi
+		cmd_vpn_iptable_flush
+		ip4set_create_table
+		ip4_mark_vpn_network
 		ready "Повторная проверка правил защиты в iptable"
-		if save_iptables | grep -qE "${IPSET_TABLE_NAME}|${VPN_IPTABLES_CHAIN}|${SSR_IPTABLES_CHAIN}";  then
+		if iptables -t mangle -S PREROUTING 2>/dev/null | grep -q 'KVAS_MARK' \
+			&& iptables -t mangle -S KVAS_MARK 2>/dev/null | grep -q '^-A';  then
 			when_ok "ПРОЙДЕНА"
 		else
 			when_bad "ОШИБКА"
-			if has_ssr_enable; then
-				script=/opt/etc/ndm/netfilter.d/100-proxy-redirect
-			else
-				script=/opt/etc/ndm/netfilter.d/100-vpn-mark
-			fi
+			script=/opt/etc/ndm/netfilter.d/100-vpn-mark
 			[ -x "${script}" ] && error "Проверьте работу скрипта ${script}"
 		fi
 	fi
@@ -587,16 +544,9 @@ cmd_state_checker() {
 	fi
 	print_line
 	print_line
-#	По наличию файла ниже определяем наличие использования shadowsocks
-	if has_ssr_enable; then
-#		Проверяем работу shadowsocks
-		shadowsocks_check
-		export type=iptables; export table=mangle && /opt/etc/ndm/netfilter.d/100-proxy-redirect
-	else
-#		Проверяем работу vpn подключения
-		vpn_check
-		ip4_mark_vpn_network
-	fi
+#	Проверяем работу vpn подключения
+	vpn_check
+	ip4_mark_vpn_network
 	print_line
 #	Проверяем правила в таблице iptable
 	iptable_check

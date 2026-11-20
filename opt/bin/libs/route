@@ -18,7 +18,7 @@ nets__set_known_ips() {
 	fi
 }
 
-# Требует передачи "${NETS_TUNNEL}${NETS_COMMON}"
+# Требует передачи "${NETS_COMMON}"
 # с предварительным возможным заполнением через
 # nets__set_common
 # Сам не использует глобальные переменные, т.к. в отдельном контексте
@@ -132,7 +132,7 @@ ip4_up_net_default(){
 cmd_tunnel() {
 	local output cache internet_net_name
 	nets__set_common
-	local nets_dictionary="${NETS_TUNNEL}${NETS_COMMON}"
+	local nets_dictionary="${NETS_COMMON}"
 
 
 	echo 'Интернет шлюз:'
@@ -191,10 +191,8 @@ cmd_tunnel() {
 		output=$( nets__get "${nets_dictionary}" "${tunnel_net_name}" 'title' | xargs )
 		ready 'Название' && when_ok "${output}"
 
-		if [ "${tunnel_keenetic_name}" != 'shadowsocks' ] ; then
-			ready 'Keenetic-имя'      && when_ok "${tunnel_keenetic_name}"
-			ready 'Сетевой интерфейс' && when_ok "${tunnel_net_name}"
-		fi
+		ready 'Keenetic-имя'      && when_ok "${tunnel_keenetic_name}"
+		ready 'Сетевой интерфейс' && when_ok "${tunnel_net_name}"
 
 		if is_interface_online "${tunnel_keenetic_name}"; then
 			output='есть'
@@ -217,15 +215,6 @@ cmd_tunnel() {
 			if [ "${output}" != "${cache}" ] ; then
 				ready 'Домен' && when_ok "${output}"
 			fi
-		fi
-
-		if is_shadowsocks_enabled; then
-			echo
-			print_line
-			echo "Конфигурация ${SHADOWSOCKS_CONF}:"
-			print_line
-			grep -E '(port|method|server)' "${SHADOWSOCKS_CONF}"
-			echo 'password проверьте самостоятельно!'
 		fi
 	fi
 	echo

@@ -86,3 +86,7 @@ awkg=$(grep -o "'{ x = \$3; gsub[^']*'" "$ROOT/opt/bin/libs/vpn" | sed "s/^'//; 
 
 # Ревью: kvas add/del без результата → код 1 (manage.sh показывает ошибку, а не «добавлено»)
 [ "$(grep -c '_rc=1   #' "$ROOT/opt/bin/kvas")" -eq 2 ] || { echo 'FAIL: _rc в add/del'; exit 1; }
+
+# kvas test: правила считаются поцепочечно (iptables-save/-S по таблице обрываются на connndmmark)
+if grep -q 'save_iptables' "$ROOT/opt/bin/libs/check"; then echo 'FAIL: libs/check снова использует save_iptables'; exit 1; fi
+grep -F 'iptables -t mangle -S KVAS_MARK' "$ROOT/opt/bin/libs/check" >/dev/null

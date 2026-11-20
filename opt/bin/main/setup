@@ -646,24 +646,6 @@ cmd_install(){
 	#	fi
 	fi
 
-	# Подключаем библиотеку keen_api
-	#source /opt/apps/kvas/bin/libs/keen_api
-	# Устанавливаем DNS роутера и порт по умолчанию
-	#set_dns_router_server_ip "$(get_router_ip)" "${MAIN_DNS_PORT}"
-
-	# Закрываем снаружи DNS порты для всех вншних сетей
-	# deny_firewall_port "53" "tcp" "KVASEC: закрываем снаружи 53/TCP DNS порт"
-	# deny_firewall_port "53" "udp" "KVASEC: закрываем снаружи 53/UDP DNS порт"
-	# allow_firewall_local_net_to_port "53" "tcp" "KVASEC: разрешаем локальной сети обращения в 53/TCP DNS порт"
-	# allow_firewall_local_net_to_port "53" "udp" "KVASEC: разрешаем локальной сети обращения в 53/UDP DNS порт"
-	# # Устанавливаем вышесозданные правила на первое место в списке правил
-	# set_firewall_order_for_rule "53" "tcp" "deny" "0"
-	# set_firewall_order_for_rule "53" "udp" "deny" "0"
-	# set_firewall_order_for_rule "53" "udp" "permit" "0"
-	# set_firewall_order_for_rule "53" "udp" "permit" "0"
-	# Записываем изменения в конфиг
-	#save_system_configuration_by_api
-
 	#------------------------------------------------------
 	# 	Запускаем KVASEC в работу
 	#------------------------------------------------------
@@ -760,28 +742,17 @@ all_services_rm_develop_mode() {
 		
 	else 
 		
-		if has_ssr_enable ; then
-			ready "Останавливаем службу Shadowsocks "
-			{
-				# Останавливаем сервер SSR
-				/opt/etc/init.d/S22shadowsocks stop &> /dev/null 
-				rm_file /opt/etc/shadowsocks.json
-				opkg remove shadowsocks-libev --force-depends &> /dev/null
+		ready "Останавливаем службу dnsmasq "
+		{
+			rm_file /opt/etc/dnsmasq.conf
+			opkg remove dnsmasq --force-depends &> /dev/null
+		} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
 
-			} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
-		else
-			ready "Останавливаем службу dnsmasq "
-			{
-				rm_file /opt/etc/dnsmasq.conf
-				opkg remove dnsmasq --force-depends &> /dev/null
-			} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
-
-			ready "Останавливаем службу dnscrypt-proxy2 "
-			{
-				rm_file /opt/etc/dnscrypt-proxy.toml
-				opkg remove dnscrypt-proxy2 --force-depends &> /dev/null
-			} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
-		fi
+		ready "Останавливаем службу dnscrypt-proxy2 "
+		{
+			rm_file /opt/etc/dnscrypt-proxy.toml
+			opkg remove dnscrypt-proxy2 --force-depends &> /dev/null
+		} && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
 	fi
 }
 

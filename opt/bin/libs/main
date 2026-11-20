@@ -28,10 +28,6 @@ PROGRESS_BAR_WIDTH=$((LENGTH-5))  # progress bar length in characters
 
 KVAS_BACKUP_PATH=/opt/etc/.kvas/backup
 IPSET_TABLE_NAME=KVAS_LIST
-SSR_NAME=ss-redir
-SSR_CMD=/opt/bin/${SSR_NAME}
-# ssr_run()(/opt/bin/sslocal --protocol redir -c /opt/etc/shadowsocks.json ${@}) )
-ssr_run(){ /opt/bin/ss-redir -c /opt/etc/shadowsocks.json "$@" ;}
 
 save_iptables(){ /opt/sbin/iptables-save "$@"; }
 
@@ -105,25 +101,8 @@ MAIN_DNS_PORT=9753
 LOCALHOST_IP=127.0.0.1
 INFACE_REQUEST="${LOCALHOST_IP}:79/rci/show/interface"
 INFACE_PART_REQUEST="${LOCALHOST_IP}:79/rci/interface"
-SSR_ENTWARE_TEMPL=ezcfg
 MINUS=9
 
-
-#-------------------------------------------------------------------------------
-# 
-#	Функция проверяет установку пакета libmbedtls
-# 
-#-------------------------------------------------------------------------------
-
-check_crypto_ssr_libs(){
-
-	[ -f /opt/lib/libmbedcrypto.so.16 ] || {
-		opkg install libmbedtls &> /dev/null
-		local libmbedcrypto=$(find /opt/lib/ -type f -name "libmbedcrypto.so*" | head -1)
-		[ -n "${libmbedcrypto}" ] && ln -sf "${libmbedcrypto}" /opt/lib/libmbedcrypto.so.16
-	}
-		
-}
 
 #	Функция производит действия над определенными службами в фоне (демонами)
 # 
@@ -375,14 +354,9 @@ is_interface_online() {
 	fi
 	local keenetic_name="${1}"
 
-	if [ "${keenetic_name}" == 'shadowsocks' ]; then
-		# иногда ss запущен, но упал и ничего не слушает
-		netstat -tulpn 2>/dev/null | grep -F ":$(get_config_value SSR_DNS_PORT) " | grep -qF -- 'ss-redir'
-	else
-		keenetic_name=$(curl -s "${INFACE_REQUEST}/${keenetic_name}" \
-		  | jq -r 'select(.state=="up" and .link=="up" and .connected=="yes") | .id // empty')
-		[ -n "${keenetic_name}" ]
-	fi
+	keenetic_name=$(curl -s "${INFACE_REQUEST}/${keenetic_name}" \
+	  | jq -r 'select(.state=="up" and .link=="up" and .connected=="yes") | .id // empty')
+	[ -n "${keenetic_name}" ]
 }
 
 clean_escape(){
@@ -564,8 +538,6 @@ nets__set_common() {
 	fi
 }
 
-NETS_TUNNEL='ezcfg0|78.47.125.180|shadowsocks|"ShadowSocks"'$'\n'
-
 # замена Singleton, чтобы скан был лишь при первом вызове
 NETS_INCOMING=''
 
@@ -697,6 +669,8 @@ nets__get() {
 
 ## Compatibility guards for obsolete branches that remain in shared routing
 ## helpers. KVASEC no longer permits or starts these clients.
+# Shadowsocks удалён (2026-11-20). Заглушки остаются, пока ветки в opt/etc/ndm/ndm
+# не вычищены (правка ndm — только в окне с резервным туннелем, план аудита).
 has_ssr_enable() { return 1; }
 is_shadowsocks_enabled() { return 1; }
 
