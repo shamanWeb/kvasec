@@ -17,8 +17,11 @@
 
 # . /opt/apps/kvas/bin/libs/main
 
-# Файл с тегами
-TAGS_FILE=/opt/apps/kvas/etc/conf/tags.list
+# Файл с тегами: пользовательский /opt/etc/tags.list (его бэкапит upgrade и читает WebUI),
+# пакетный — только шаблон; при первом обращении засеваем пользовательский из шаблона.
+TAGS_DEFAULT_FILE=/opt/apps/kvas/etc/conf/tags.list
+TAGS_FILE=/opt/etc/tags.list
+[ -f "${TAGS_FILE}" ] || cp -f "${TAGS_DEFAULT_FILE}" "${TAGS_FILE}" 2>/dev/null
 KVAS_LIST_FILE=/opt/etc/kvas.list
 
 # ------------------------------------------------------------------------------------------
@@ -412,15 +415,15 @@ cmd_update_tags_domain_list() {
     }
     
     if [ "${_force}" = force ] ; then
-        mv -f /opt/tmp/tags.list /opt/apps/kvas/etc/conf/tags.list
+        mv -f /opt/tmp/tags.list "${TAGS_FILE}"
     else
-        local _diff=$(diff /opt/apps/kvas/etc/conf/tags.list  /opt/tmp/tags.list  | grep -E '^\+\[' | tr -d +)
+        local _diff=$(diff "${TAGS_FILE}" /opt/tmp/tags.list  | grep -E '^\+\[' | tr -d +)
         if [ -n "${_diff}" ] ; then
             print_line
             echo -e "В список были добавлены следущие закваски:\n${_diff}"
             print_line
             printf "%s" "${_diff}"
-            mv -f /opt/tmp/tags.list /opt/apps/kvas/etc/conf/tags.list
+            mv -f /opt/tmp/tags.list "${TAGS_FILE}"
         else
             print_line
             echo -e "В удаленном списке на ${BLUE}GitHub${NOCL} новых заквасок ${RED}не обнаружено${NOCL}."

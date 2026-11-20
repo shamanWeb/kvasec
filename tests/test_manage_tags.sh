@@ -17,6 +17,7 @@ sed -i \
     -e "s|^KVAS_BIN=.*|KVAS_BIN=$WORK/kvas|" \
     -e "s|^KVAS_LIST=.*|KVAS_LIST=$WORK/kvas.list|" \
     -e "s|^TAGS_FILE=.*|TAGS_FILE=$WORK/tags.list|" \
+    -e "s|^TAGS_DEFAULT_FILE=.*|TAGS_DEFAULT_FILE=$WORK/tags.default|" \
     "$WORK/manage.sh"
 
 # Фейковый kvas: записывает аргументы, чтобы проверить, что именно дошло до CLI.
@@ -64,3 +65,8 @@ run_api 'action=tags_add&tag=google' | grep -F '"ok":true' >/dev/null
 run_api 'action=tags_create&name=new%2Dtag&domains=a.com%0Ab.com' | grep -F '"ok":true' >/dev/null
 grep -Fx 'tags add-protect google' "$TEST_KVAS_ARGS" >/dev/null
 grep -Fx 'tags create new-tag a.com b.com' "$TEST_KVAS_ARGS" >/dev/null
+
+# Нет пользовательского tags.list → засевается из пакетного шаблона (тот же файл, что у CLI).
+mv "$WORK/tags.list" "$WORK/tags.default"
+run_api 'action=tags_list' | grep -F '"name":"my-tag_2"' >/dev/null
+cmp "$WORK/tags.list" "$WORK/tags.default"

@@ -19,6 +19,7 @@ BLOCK_WATCH_EVENTS=/tmp/kvas-block-watch.events
 BLOCK_WATCH_LOCK_DIR=/tmp/kvas-block-watch.lock.d
 KVAS_LIST=/opt/etc/kvas.list
 TAGS_FILE=/opt/etc/tags.list
+TAGS_DEFAULT_FILE=/opt/apps/kvas/etc/conf/tags.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
 IOT_LOCKDOWN_LIST=/opt/etc/kvas-iot-lockdown.list
 IOT_LOCKDOWN_HOOK=/opt/etc/ndm/netfilter.d/090-iot-lockdown
@@ -390,6 +391,9 @@ main() {
 	action=$(query_param action)
 	token=$(query_param token)
 	[ -z "$token" ] && token="$HTTP_X_KVAS_TOKEN"
+
+	# Тот же файл, что у CLI (libs/tags): засеваем из пакетного шаблона при первом обращении
+	case "$action" in tags_*) [ -f "$TAGS_FILE" ] || cp -f "$TAGS_DEFAULT_FILE" "$TAGS_FILE" 2>/dev/null ;; esac
 
 	case "$action" in
 		auth_status)
