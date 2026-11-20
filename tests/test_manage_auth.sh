@@ -40,6 +40,16 @@ while [ "$i" -le 5 ]; do
     i=$((i + 1))
 done
 run_api 'action=auth&pass=wrong-password-123' POST | grep -F 'too many attempts' >/dev/null
+
+# Токен — только 32 hex: путь к чужому файлу со свежим epoch (fail-time) не даёт входа,
+# а "просроченный" путь не приводит к rm -f произвольного файла.
+mkdir -p "$WORK/tokens"
+run_api 'action=hosts&token=..%2Ffail-time' GET | grep -F 'auth required' >/dev/null
+QUERY_STRING='action=hosts' REQUEST_METHOD=GET HTTP_X_KVAS_TOKEN='../fail-time' sh "$WORK/manage.sh" \
+    | grep -F 'auth required' >/dev/null
+echo 1 > "$WORK/victim"
+run_api 'action=hosts&token=..%2Fvictim' GET | grep -F 'auth required' >/dev/null
+test -f "$WORK/victim"
 rm -f "$WORK/fail-count" "$WORK/fail-time"
 
 # Успешный вход по старому MD5 мигрирует файл на SHA-256.

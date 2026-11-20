@@ -311,6 +311,9 @@ reset_fails() {
 check_token() {
 	local t="$1"
 	[ -z "$t" ] && json_error "auth required"
+	# Только формат mk_token: иначе ../<файл со свежим epoch> проходил как токен
+	case "$t" in *[!0-9a-f]*) json_error "auth required" ;; esac
+	[ ${#t} -eq 32 ] || json_error "auth required"
 	[ ! -f "$TOKEN_DIR/$t" ] && json_error "invalid token"
 	local created=$(cat "$TOKEN_DIR/$t" 2>/dev/null)
 	[ -z "$created" ] && json_error "token expired"
