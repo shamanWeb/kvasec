@@ -1,6 +1,6 @@
 #!/bin/sh
 # Management API for KVAS Web UI v2
-# Actions: auth, hosts, vpn, upgrade, backup, restore, update, kvas_list
+# Actions: auth, hosts, vpn, upgrade, backup, restore, update, …
 
 PASS_FILE=/opt/kvas_web_pass
 TOKEN_DIR=/tmp/kvas_web_tokens
@@ -607,17 +607,6 @@ main() {
 			: > "$KVAS_LIST"
 			out=$($KVAS_BIN init 2>&1)
 			json_ok "list cleared"
-			;;
-		kvas_list)
-			check_token "$token"
-			# Download kvas.list
-			if [ -f "$KVAS_LIST" ]; then
-				printf "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=\"kvas.list\"\r\n\r\n"
-				cat "$KVAS_LIST"
-			else
-				printf "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\n\r\nFile not found"
-			fi
-			return
 			;;
 		update)
 			check_token "$token"
