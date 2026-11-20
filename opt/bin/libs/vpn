@@ -2703,17 +2703,19 @@ test_host() {
 
 }
 
+# $1 - домен без "*", $2 - запись как в kvas.list (может быть с "*").
+# В kvas.list запись уже добавил host_add — раньше здесь она дописывалась
+# повторно (дубль при каждом add с включённым AdGuard).
 add_host_to_adguard(){
-	clear_host="${1}"
-	#   AdGuardHome обработка
-	echo "${_host}" >> "${KVAS_LIST_FILE}"
-	[ -f "${ADGUARD_IPSET_FILE}" ] && cat < "${ADGUARD_IPSET_FILE}" | grep -q "${clear_host}" \
-	 		|| echo "${clear_host}/${IPSET_TABLE_NAME}" >> "${ADGUARD_IPSET_FILE}"
-	if echo "${host}" | grep -q '\*' ; then
-  		echo "ipset=/:.*${clear_host}:/${IPSET_TABLE_NAME}" >> "${DNSMASQ_IPSET_HOSTS}"
-  	else
-    	echo "ipset=/${clear_host}/${IPSET_TABLE_NAME}" >> "${DNSMASQ_IPSET_HOSTS}"
-  	fi
+	local clear_host="${1}" entry="${2:-$1}" line
+	list_has_entry "${ADGUARD_IPSET_FILE}" "${clear_host}" \
+		|| echo "${clear_host}/${IPSET_TABLE_NAME}" >> "${ADGUARD_IPSET_FILE}"
+	if echo "${entry}" | grep -q '\*' ; then
+		line="ipset=/:.*${clear_host}:/${IPSET_TABLE_NAME}"
+	else
+		line="ipset=/${clear_host}/${IPSET_TABLE_NAME}"
+	fi
+	grep -qxF -- "${line}" "${DNSMASQ_IPSET_HOSTS}" 2>/dev/null || echo "${line}" >> "${DNSMASQ_IPSET_HOSTS}"
 }
 
 # ------------------------------------------------------------------------------------------
@@ -2733,7 +2735,8 @@ host_add() {
 	reset="${2}"
 	wild="${3}"
 #	в режиме импорта хост не трогаем - оставляем как есть
-	[ "${wild}" = import ] || _host="${clear_host}"
+#	(раньше в import-режиме _host не присваивался и оставался от прошлого вызова)
+	if [ "${wild}" = import ]; then _host="${1}"; else _host="${clear_host}"; fi
 
 	if echo "${wild}" | grep -qiE 'import|no|n' ; then
 #		в режиме импорта задавать вопросы не нужно - добавляем хост как есть.
@@ -2773,7 +2776,7 @@ host_add() {
 
 	[ "${reset}" = 'yes' ] && cmd_kvas_init  &> /dev/null
 
-	[ -f /opt/etc/AdGuardHome/AdGuardHome.yaml ] && cmd_adguardhome_status | grep -q ВКЛЮЧЕН && add_host_to_adguard "${clear_host}" &> /dev/null
+	[ -f /opt/etc/AdGuardHome/AdGuardHome.yaml ] && cmd_adguardhome_status | grep -q ВКЛЮЧЕН && add_host_to_adguard "${clear_host}" "${_host}" &> /dev/null
 
 	if echo "${clear_host}" | grep -qE -- "$(get_regexp_ip_or_range)" ; then
 		# если строка IP, диапазон или маска; то добавляем напрямую и без ttl
