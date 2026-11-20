@@ -128,10 +128,10 @@ case "${1}" in
 		for _dom in $_domains; do
 			[ -z "$_dom" ] && continue
 			ready "Удаляем $_dom из списка защищенных..."
-			_esc_dom=$(echo "$_dom" | sed 's/\//\\\//g')
-			if grep -qe "${_dom}$" "$KVAS_LIST_FILE" 2>/dev/null; then
-				sed -i "/${_esc_dom}/d" "$KVAS_LIST_FILE" 2>/dev/null
-				cmd_adguardhome_status | grep -q ВКЛЮЧЕН 2>/dev/null && sed -i "/${_esc_dom}/d" "$ADGUARD_IPSET_FILE" 2>/dev/null
+			# точное совпадение записи (d или *.d), не подстрока/регэксп
+			if list_remove_entry "$KVAS_LIST_FILE" "$_dom"; then
+				list_remove_entry "$ADGUARD_IPSET_FILE" "$_dom"
+				_dom=${_dom#\*}; _dom=${_dom#.}
 				for _ip in $(dns__get_ips_by_domain "$_dom" 2>/dev/null); do
 					/opt/sbin/ipset -exist del "${IPSET_TABLE_NAME}" "$_ip" &>/dev/null
 				done

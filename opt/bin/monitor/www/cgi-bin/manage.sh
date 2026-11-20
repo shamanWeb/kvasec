@@ -571,11 +571,14 @@ main() {
 			;;
 		host_del)
 			check_token "$token"
-			domain=$(echo "$QUERY_STRING" | sed 's/.*domain=//; s/&.*//' 2>/dev/null)
-			[ "$domain" = "$QUERY_STRING" ] && domain=""
+			domain=$(query_param domain)
 			[ -z "$domain" ] && json_error "domain required"
 			# Strip wildcard prefix: *.example.com → example.com for kvas del
-			clean=$(echo "$domain" | sed 's/^\*\.*//')
+			clean=$(printf '%s' "$domain" | sed 's/^\*\.*//' | tr 'A-Z' 'a-z')
+			# запись kvas.list: домен, IP/CIDR или диапазон IP-IP
+			valid_domain "$clean" || valid_ip_or_cidr "$clean" ||
+				{ valid_ip_or_cidr "${clean%%-*}" && valid_ip_or_cidr "${clean#*-}"; } ||
+				json_error "invalid domain"
 			out=$($KVAS_BIN del "$clean" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "del failed: $out"

@@ -169,6 +169,51 @@ escape_sed() {
 	printf '%s' "$1" | sed -e 's/[][\/.^$*{}|]/\\&/g'
 }
 
+#-------------------------------------------------------------------------------
+#
+#	Точный поиск/удаление записи в списке (kvas.list, kvas.ipset AdGuard).
+#	Запись = первое поле строки; домен совпадает в формах "d" и "*.d"
+#	(и с суффиксом /<ipset> в файле AdGuard). Без регэкспов: раньше
+#	sed "/x.com/d" удалял и netflix.com, а "t.co" — microsoft.com.
+#	$1 - файл, $2 - домен / IP / CIDR (ведущие "*." или "." отбрасываются)
+#
+#-------------------------------------------------------------------------------
+_list_entry_awk='
+	{
+		f = $1; hit = 0
+		if (sfx != "" && length(f) > length(sfx) && substr(f, length(f) - length(sfx) + 1) == sfx)
+			f = substr(f, 1, length(f) - length(sfx))
+		if (f == e || f == "*." e || f == "." e) hit = 1
+	}
+	mode == "has" && hit { found = 1; exit }
+	mode == "del" { if (hit) found = 1; else print }
+	END { exit !found }'
+
+_list_entry_base() {
+	local e="${1#\*}"
+	printf '%s' "${e#.}"
+}
+
+list_has_entry() {
+	local file="$1" e
+	e=$(_list_entry_base "$2")
+	[ -f "$file" ] && [ -n "$e" ] || return 1
+	awk -v mode=has -v e="$e" -v sfx="/${IPSET_TABLE_NAME:-KVAS_LIST}" "$_list_entry_awk" "$file"
+}
+
+list_remove_entry() {
+	local file="$1" e tmp
+	e=$(_list_entry_base "$2")
+	[ -f "$file" ] && [ -n "$e" ] || return 1
+	tmp="${file}.tmp.$$"
+	if awk -v mode=del -v e="$e" -v sfx="/${IPSET_TABLE_NAME:-KVAS_LIST}" "$_list_entry_awk" "$file" > "$tmp"; then
+		mv -f "$tmp" "$file"
+		return 0
+	fi
+	rm -f "$tmp"
+	return 1
+}
+
 
 is_dns_server_online(){
 #---------------------------------------------------------------------------------

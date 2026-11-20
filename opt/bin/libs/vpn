@@ -2857,13 +2857,15 @@ cmd_add_one_host() {
 				fi
 			fi
 		else
-			# проверка на наличие домена в списке защиты доменов
-			if cat < "${KVAS_LIST_FILE}" | grep -qE "^${clear_host}" ; then
+			# проверка на наличие домена в списке защиты (точно: d или *.d)
+			if list_has_entry "${KVAS_LIST_FILE}" "${host}" ; then
 				[ "${wild}" = import ] || warning "Такой домен уже есть в защищенном списке!"
-				if [ "${clear_host}" != "${host}" ] ; then
-					warning "Производим замену ${clear_host} на ${host}"
+				# добавляют *.d, а в списке только d — расширяем запись
+				if [ "${clear_host}" != "${host}" ] && ! grep -qxF -- "${host}" "${KVAS_LIST_FILE}" ; then
+					warning "Производим замену на ${host}"
 					print_line
-					sed -i "/^${clear_host}$/d" "${KVAS_LIST_FILE}"
+					list_remove_entry "${KVAS_LIST_FILE}" "${host}"
+					list_remove_entry "${ADGUARD_IPSET_FILE}" "${host}"
 
 					if [ "${wild}" = import ]; then
 						host_add "${host}" "${reset}" "${wild}" | grep -q "ДОБАВЛЕН" && echo "1"
@@ -2909,11 +2911,10 @@ cmd_del_one_host() {
 		return 0
 	}
 
-	if cat < "${KVAS_LIST_FILE}" | grep -qe "${host_}$" ; then
+	if list_has_entry "${KVAS_LIST_FILE}" "${host_}" ; then
 		ready "Удаляем ${YELLOW}${host_}${NOCL} из списка защищенных..."
-		sed -i "/${host_////\\/}/d" "${KVAS_LIST_FILE}"
-
-		cmd_adguardhome_status | grep -q ВКЛЮЧЕН && sed -i "/${host_////\\/}/d" "${ADGUARD_IPSET_FILE}"
+		list_remove_entry "${KVAS_LIST_FILE}" "${host_}"
+		list_remove_entry "${ADGUARD_IPSET_FILE}" "${host_}"
 		cmd_kvas_init  &> /dev/null
 		[ $? = 0 ] && when_ok "УДАЛЕН" || when_bad "НЕ УДАЛЕН"
 
@@ -2963,14 +2964,11 @@ del_multy_hosts() {
 	else
 		for host_ in ${list_to_del}; do
 			ready "Удаляем ${YELLOW}${host_}${NOCL} из списка защищенных..."
-			if cat < "${KVAS_LIST_FILE}" | grep -qe "${host_}$" ; then
-				
-				if cmd_adguardhome_status | grep -q ВКЛЮЧЕН ; then 
-					sed -i "/${host_////\\/}/d" "${ADGUARD_IPSET_FILE}"
-				else 
-					sed -i "/${host_////\\/}/d" "${KVAS_LIST_FILE}"
-				fi
-				[ $? = 0 ] && when_ok "УДАЛЕН" || when_bad "НЕ УДАЛЕН"
+			# точное совпадение; из обоих файлов (раньше при AdGuard домен
+			# оставался в kvas.list)
+			if list_remove_entry "${KVAS_LIST_FILE}" "${host_}" ; then
+				list_remove_entry "${ADGUARD_IPSET_FILE}" "${host_}"
+				when_ok "УДАЛЕН"
 			else 
 				when_alert "НЕТ В СПИСКЕ"
 			fi
@@ -3213,10 +3211,6 @@ cmd_import_hosts() {
 	ready 'Импортируем хосты в список защищаемых доменов...'
 	clear_file_content "${user_list}"
 
-	# читаем существующий список один раз в память
-	local existing_hosts
-	existing_hosts=$(cat "${KVAS_LIST_FILE}" 2>/dev/null || true)
-
 	hosts_to_add_ubl=''
 	hosts_repeated_ubl=''
 	hosts_not_added=''
@@ -3235,7 +3229,8 @@ cmd_import_hosts() {
 		[ -z "${clear_host}" ] && { hosts_not_added="${hosts_not_added}${host}\n"; continue; }
 		echo "${clear_host}" | grep -q '\.' || { hosts_not_added="${hosts_not_added}${host}\n"; continue; }
 
-		if echo "${existing_hosts}" | grep -qE "^${clear_host}" ; then
+		# точно: d или *.d (раньше "^google.com" как регэксп считал дублем google.com.ua)
+		if list_has_entry "${KVAS_LIST_FILE}" "${clear_host}" ; then
 			hosts_repeated_ubl="${hosts_repeated_ubl}${host}\n"
 			continue
 		fi
