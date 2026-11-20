@@ -279,39 +279,91 @@ verify_password() {
 	esac
 }
 
-# Brute-force protection (global)
+# Brute-force protection.
+# Счётчики: по адресу клиента (SOCAT_PEERADDR от socat) и общий. Раньше был только
+# общий — любой хост LAN 5 ошибками блокировал вход владельцу. Общий потолок выше,
+# чтобы перебор со сменой IP всё равно упирался в лимит.
+# Проверка → проверка пароля → запись ошибки идут под одним локом (auth_lock):
+# иначе параллельные запросы все читали счётчик < MAX_FAILS и лимита не было.
 FAIL_COUNT=/tmp/kvas_fail_count
 FAIL_TIME=/tmp/kvas_fail_time
+AUTH_LOCK_DIR=/tmp/kvas_auth.lock
 MAX_FAILS=5
+MAX_FAILS_TOTAL=30
 LOCKOUT=300
 
-check_bruteforce() {
-	[ ! -f "$FAIL_COUNT" ] && return 0
-	local fails=$(cat "$FAIL_COUNT" 2>/dev/null)
-	[ -z "$fails" ] && return 0
-	[ "$fails" -lt "$MAX_FAILS" ] 2>/dev/null && return 0
-	local last=$(cat "$FAIL_TIME" 2>/dev/null || echo 0)
-	local now=$(date +%s 2>/dev/null || echo 0)
-	local elapsed=$((now - last))
-	if [ "$elapsed" -lt "$LOCKOUT" ]; then
-		echo $((LOCKOUT - elapsed))
-		return 1
+peer_id() {
+	case "$SOCAT_PEERADDR" in
+		''|*[!0-9.]*) echo unknown ;;
+		*) echo "$SOCAT_PEERADDR" ;;
+	esac
+}
+
+# Блокировка по паре файлов счётчика: печатает остаток секунд и возвращает 1.
+# Ошибки старше LOCKOUT забываются (окно), а не копятся бесконечно.
+lockout_wait() {
+	local count_file="$1" time_file="$2" max="$3" fails last now elapsed
+	fails=$(cat "$count_file" 2>/dev/null)
+	[ -n "$fails" ] || return 0
+	last=$(cat "$time_file" 2>/dev/null || echo 0)
+	now=$(date +%s 2>/dev/null || echo 0)
+	elapsed=$((now - last))
+	if [ "$elapsed" -ge "$LOCKOUT" ]; then
+		rm -f "$count_file" "$time_file"
+		return 0
 	fi
-	rm -f "$FAIL_COUNT" "$FAIL_TIME"
-	return 0
+	[ "$fails" -lt "$max" ] 2>/dev/null && return 0
+	echo $((LOCKOUT - elapsed))
+	return 1
+}
+
+check_bruteforce() {
+	local peer
+	peer=$(peer_id)
+	lockout_wait "$FAIL_COUNT.$peer" "$FAIL_TIME.$peer" "$MAX_FAILS" || return 1
+	lockout_wait "$FAIL_COUNT" "$FAIL_TIME" "$MAX_FAILS_TOTAL"
+}
+
+bump_fail() {
+	local now fails
+	now=$(date +%s 2>/dev/null || echo 0)
+	fails=$(cat "$1" 2>/dev/null || echo 0)
+	echo $((fails + 1)) > "$1"
+	echo "$now" > "$2"
 }
 
 record_fail() {
-	local now=$(date +%s 2>/dev/null || echo 0)
-	local fails=$(cat "$FAIL_COUNT" 2>/dev/null || echo 0)
-	fails=$((fails + 1))
-	echo "$fails" > "$FAIL_COUNT"
-	echo "$now" > "$FAIL_TIME"
+	local peer
+	peer=$(peer_id)
+	bump_fail "$FAIL_COUNT.$peer" "$FAIL_TIME.$peer"
+	bump_fail "$FAIL_COUNT" "$FAIL_TIME"
 }
 
 reset_fails() {
-	rm -f "$FAIL_COUNT" "$FAIL_TIME"
+	local peer
+	peer=$(peer_id)
+	rm -f "$FAIL_COUNT.$peer" "$FAIL_TIME.$peer"
 }
+
+# Сериализация попыток входа (flock в busybox роутера нет — mkdir-лок).
+# Владелец держит лок ~1-2 с; брошенным (CGI убит) считаем лок старше 30 с — по
+# возрасту самого лока, а не по времени ожидания: иначе при очереди запросов
+# ждущие сносили бы живой лок. Снос — атомарным mv, его выполнит только один.
+auth_lock() {
+	local born
+	while ! mkdir "$AUTH_LOCK_DIR" 2>/dev/null; do
+		born=$(date -r "$AUTH_LOCK_DIR" +%s 2>/dev/null) || continue
+		if [ $(( $(date +%s) - born )) -gt 30 ] &&
+			mv "$AUTH_LOCK_DIR" "$AUTH_LOCK_DIR.stale.$$" 2>/dev/null; then
+			rm -rf "$AUTH_LOCK_DIR.stale.$$"
+			continue
+		fi
+		sleep 1
+	done
+	trap 'auth_unlock' EXIT HUP INT TERM
+}
+
+auth_unlock() { rmdir "$AUTH_LOCK_DIR" 2>/dev/null; trap - EXIT HUP INT TERM; }
 
 
 
@@ -419,16 +471,25 @@ main() {
 			json_ok "password set"
 			;;
 		auth)
-			wait=$(check_bruteforce); check_rc=$?
-			[ "$check_rc" -ne 0 ] && printf '{"error":"too many attempts","wait":%s}\n' "${wait:-300}" && return
 			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
 			pass=$(query_param pass); [ -z "$pass" ] && pass=$(url_decode "$HTTP_X_KVAS_PASS")
 			[ -z "$pass" ] && json_error "pass required"
+			auth_lock
+			wait=$(check_bruteforce); check_rc=$?
+			if [ "$check_rc" -ne 0 ]; then
+				auth_unlock
+				printf '{"error":"too many attempts","wait":%s}\n' "${wait:-300}"
+				return
+			fi
 			if ! verify_password "$pass"; then
 				record_fail
+				# пауза под локом: не больше ~1 попытки в секунду со всех адресов
+				sleep 1
+				auth_unlock
 				json_error "wrong password"
 			fi
 			reset_fails
+			auth_unlock
 			token=$(mk_token)
 			printf '{"ok":true,"token":"%s"}\n' "$token"
 			;;

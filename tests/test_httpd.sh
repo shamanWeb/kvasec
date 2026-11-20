@@ -34,3 +34,22 @@ if grep -Fq 'Access-Control-Allow-Origin: *' "$HTTPD"; then
 fi
 
 grep -Fq 'path=${S:-/}' "$HTTPD"
+
+# Лимит строк заголовков: 60 строк → 431, а не бесконечный разбор.
+many=$(i=0; while [ "$i" -lt 60 ]; do printf 'X-H%s: v\\r\\n' "$i"; i=$((i + 1)); done)
+request "GET / HTTP/1.0\\r\\n${many}\\r\\n" | head -1 | tr -d '\r' | grep -Fx 'HTTP/1.0 431 Request Header Fields Too Large' >/dev/null
+
+# Таймаут заголовков (где shell умеет read -t): клиент, который молчит, отваливается.
+if command -v busybox >/dev/null 2>&1; then
+    mkfifo "$WORK/slow"
+    busybox sh -c "$(printf '%s' "$HANDLER" | sed 's/^HDR_TIMEOUT=.*/HDR_TIMEOUT=1/')" < "$WORK/slow" > /dev/null 2>&1 &
+    hpid=$!
+    # писатель держит FIFO открытым и молчит после первой строки
+    (printf 'GET / HTTP/1.0\r\n'; sleep 20) > "$WORK/slow" &
+    wpid=$!
+    i=0
+    while kill -0 "$hpid" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
+    alive=0; kill -0 "$hpid" 2>/dev/null && alive=1
+    kill "$hpid" "$wpid" 2>/dev/null || true
+    [ "$alive" -eq 0 ] || { echo 'header read timeout not applied' >&2; exit 1; }
+fi

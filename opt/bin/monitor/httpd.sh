@@ -54,9 +54,25 @@ T=""
 AP=""
 AC=""
 AN=""
-while IFS='' read -r L; do
-    L=$(echo "$L" | tr -d '\r')
+# Заголовки: не дольше HDR_TIMEOUT с на строку и не больше 50 строк — иначе
+# медленный/бесконечный клиент (slowloris) держал бы процесс на роутере вечно.
+# Таймаут только на чтение заголовков: время работы самого CGI не ограничено.
+HDR_TIMEOUT=10
+RT=""
+# busybox ash (роутер) умеет read -t; dash (тесты/CI) — нет
+(echo | read -r -t 1 _) 2>/dev/null && RT="-t $HDR_TIMEOUT"
+CR=$(printf '\r')
+N=0
+# shellcheck disable=SC2086  # $RT намеренно без кавычек: пусто или "-t N"
+while IFS='' read -r $RT L; do
+    L=${L%"$CR"}
     [ -z "$L" ] && break
+    N=$((N + 1))
+    if [ "$N" -gt 50 ]; then
+        log "request rejected: too many header lines"
+        printf "HTTP/1.0 431 Request Header Fields Too Large\r\nContent-Type: text/plain\r\n\r\nToo many headers"
+        exit 0
+    fi
     [ -z "$R" ] && R="$L"
     case "$L" in
         [Xx]-[Kk][Vv][Aa][Ss]-[Tt]oken:*) T=$(echo "${L#*:}" | sed 's/^[[:space:]]*//');;
@@ -124,7 +140,7 @@ HANDLER_EOF
 chmod +x /tmp/kvas-httpd-handler.sh
 
 log "starting socat listener on ${MONITOR_BIND}:${PORT}, allowed=${MONITOR_ALLOW_RANGE}"
-MONITOR_WEB_LOG="$LOG_FILE" socat TCP-LISTEN:"$PORT",bind="$MONITOR_BIND",range="$MONITOR_ALLOW_RANGE",reuseaddr,fork EXEC:"sh /tmp/kvas-httpd-handler.sh" >> "$LOG_FILE" 2>&1 &
+MONITOR_WEB_LOG="$LOG_FILE" socat TCP-LISTEN:"$PORT",bind="$MONITOR_BIND",range="$MONITOR_ALLOW_RANGE",reuseaddr,fork,max-children=16 EXEC:"sh /tmp/kvas-httpd-handler.sh" >> "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 sleep 1
 if kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then

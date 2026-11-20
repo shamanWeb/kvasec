@@ -13,6 +13,7 @@ sed -i \
     -e "s|^TOKEN_DIR=.*|TOKEN_DIR=$WORK/tokens|" \
     -e "s|^FAIL_COUNT=.*|FAIL_COUNT=$WORK/fail-count|" \
     -e "s|^FAIL_TIME=.*|FAIL_TIME=$WORK/fail-time|" \
+    -e "s|^AUTH_LOCK_DIR=.*|AUTH_LOCK_DIR=$WORK/auth.lock|" \
     -e "s|^KVAS_BIN=.*|KVAS_BIN=$WORK/kvas|" \
     "$WORK/manage.sh"
 
@@ -41,6 +42,10 @@ while [ "$i" -le 5 ]; do
 done
 run_api 'action=auth&pass=wrong-password-123' POST | grep -F 'too many attempts' >/dev/null
 
+# Блокировка — по адресу клиента: другой хост LAN не может запереть владельца.
+QUERY_STRING='action=auth&pass=wrong-password-123' REQUEST_METHOD=POST SOCAT_PEERADDR=192.168.1.77 \
+    sh "$WORK/manage.sh" | grep -F 'wrong password' >/dev/null
+
 # Токен — только 32 hex: путь к чужому файлу со свежим epoch (fail-time) не даёт входа,
 # а "просроченный" путь не приводит к rm -f произвольного файла.
 mkdir -p "$WORK/tokens"
@@ -50,7 +55,38 @@ QUERY_STRING='action=hosts' REQUEST_METHOD=GET HTTP_X_KVAS_TOKEN='../fail-time' 
 echo 1 > "$WORK/victim"
 run_api 'action=hosts&token=..%2Fvictim' GET | grep -F 'auth required' >/dev/null
 test -f "$WORK/victim"
-rm -f "$WORK/fail-count" "$WORK/fail-time"
+rm -f "$WORK"/fail-count* "$WORK"/fail-time*
+
+# Параллельный перебор с одного адреса не обходит лимит: попытки сериализованы
+# mkdir-локом. Проверка имеет смысл только там, где mkdir атомарен (на роутере — да;
+# на некоторых свежих ядрах — нет, тогда пропускаем, чтобы тест не мигал).
+mkdir_atomic() {
+    r=0 hits=0
+    while [ "$r" -lt 50 ]; do
+        for _ in 1 2 3 4; do (mkdir "$WORK/probe" 2>/dev/null && echo ok) & done
+        wait
+        rmdir "$WORK/probe"
+        r=$((r + 1))
+    done > "$WORK/probe.out"
+    hits=$(wc -l < "$WORK/probe.out")
+    rm -f "$WORK/probe.out"
+    [ "$hits" -eq 50 ]
+}
+if mkdir_atomic; then
+    i=1
+    while [ "$i" -le 10 ]; do
+        run_api 'action=auth&pass=wrong-password-123' POST > "$WORK/par.$i" &
+        i=$((i + 1))
+    done
+    wait
+    wrong=$(cat "$WORK"/par.* | grep -c 'wrong password' || true)
+    [ "$wrong" -le 5 ] || { echo "FAIL: параллельно принято $wrong неверных попыток (> 5)"; exit 1; }
+    cat "$WORK"/par.* | grep -F 'too many attempts' >/dev/null
+    test ! -d "$WORK/auth.lock"
+else
+    echo "skip: mkdir в этом окружении не атомарен — параллельная проверка лока пропущена"
+fi
+rm -f "$WORK"/fail-count* "$WORK"/fail-time* "$WORK"/par.*
 
 # Успешный вход по старому MD5 мигрирует файл на SHA-256.
 printf '%s' 'legacy-password-123' | md5sum | awk '{print $1}' > "$WORK/pass"
