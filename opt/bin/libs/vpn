@@ -1898,41 +1898,49 @@ show_interface_name_list_process(){
 #------------------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------------------
-# ИЗВЕСТНАЯ ПРОБЛЕМА (`kvas vpn gateway`): аргумент кладётся в _ip, а проверяется
-# addr_gateway (пуст) — с аргументом команда всегда падает; интерактивно ведёт в
-# switch_vpn_on с LAN/WAN-интерфейсом (см. проблему там), а cmd_kvas_init зовётся и
-# после неудачи (нет &&). _inface_gateway по `ip a | grep` может дать несколько строк.
+# `kvas vpn gateway [IP]`: шлюз внутри туннеля AmneziaWG. Раньше аргумент клался в _ip,
+# а проверялся addr_gateway (пуст) — с аргументом команда всегда падала; интерактивно
+# вела в switch_vpn_on с LAN/WAN-интерфейсом, а cmd_kvas_init звался и после неудачи.
 cmd_manual_gateway_set() {
 
-		local _ip=${1}
+		local addr_gateway="${1}"
 
-		[ -z "${_ip}" ] && {
+		[ -z "${addr_gateway}" ] && {
 			echo -en "${BLUE}Введите адрес шлюза :${NOCL} "
-			read -r addr_gateway 
-		}
-		
-		echo "${addr_gateway}" | grep -qE "${IP_FILTER}" || { 
-			error "Введен неправильный адрес шлюза!"; 
-			exit 1; 
+			read -r addr_gateway
 		}
 
-		local _inface_gateway=$(/opt/sbin/ip a | grep "${addr_gateway}" | sed 's/.* \(.*\)$/\1/')
+		[[ "$addr_gateway" =~ ^[Qq]$ ]] && {
+			print_line
+			echo -e "${RED}Процедура настройки прервана пользователем!${NOCL}"
+			print_line
+			return 0
+		}
+
+		echo "${addr_gateway}" | grep -qxE "${IP_FILTER}" || {
+			error "Введен неправильный адрес шлюза!";
+			exit 1;
+		}
+
+		# интерфейс, у которого этот адрес — свой или peer (точно; раньше grep по подстроке
+		# по всему `ip a` мог дать несколько строк)
+		local _inface_gateway=$(/opt/sbin/ip -o -4 addr show 2>/dev/null | awk -v a="${addr_gateway}" '
+			{ split($4, p, "/"); if (p[1] == a) { print $2; exit }
+			  for (i = 5; i < NF; i++) if ($i == "peer") { split($(i + 1), q, "/"); if (q[1] == a) { print $2; exit } } }')
 		
 		[ -z "${_inface_gateway}" ] && { 
 			error "Не удалось найти интерфейс с данным адресом. Проверьте правильность ввода адреса шлюза!"; 
 			exit 1; 
 		}
 
-		if [[ "$addr_gateway" =~ ^[Qq]$ ]] || [[ "$_inface_gateway" =~ ^[Qq]$ ]]; then
-			print_line
-#			Если нажали на q
-			echo -e "${RED}Процедура настройки прервана пользователем!${NOCL}"
-			print_line
-		else
-			ndm_gateway_change ${addr_gateway}
-			switch_vpn_on "${_inface_gateway}" "Gateway"
-			cmd_kvas_init "update"
-		fi
+		case "${_inface_gateway}" in
+			opkgtun*) : ;;
+			*) error "Шлюз ${addr_gateway} не на интерфейсе AmneziaWG (opkgtun): ${_inface_gateway:-не найден}."; exit 1 ;;
+		esac
+
+		ndm_gateway_change "${addr_gateway}" \
+			&& switch_vpn_on "${_inface_gateway}" "Gateway" \
+			&& cmd_kvas_init "update"
 
 }
 
@@ -1960,21 +1968,20 @@ cmd_interface_change() {
 }
 
 
-# ИЗВЕСТНАЯ ПРОБЛЕМА: ndm_interface_change (сброс KVAS_MARK, table 1001, запись
-# INFACE_ENT/INFACE_CLI) выполняется ДО проверки, что интерфейс opkgtun*. Для иного
-# интерфейса маршрутизация уже сброшена, конфиг указывает на него, а сторож (только
-# opkgtun) не восстанавливает туннель. Проверку надо делать первой.
 switch_vpn_on(){
 #	entware интерфейс
 	inface_entware=${1}
 	cli_inface=${2}
-#	Меняем интерфейс в файле ndm
-	ndm_interface_change "${inface_entware}" "${cli_inface}"
-	
+#	Проверка ДО ndm_interface_change: тот сбрасывает KVAS_MARK/table 1001 и пишет
+#	INFACE_ENT/INFACE_CLI — раньше для не-opkgtun интерфейса маршрутизация уже была
+#	снесена, конфиг указывал на него, а сторож (только opkgtun) туннель не возвращал.
 	case "${inface_entware}" in
-		opkgtun*) vpn_on "${inface_entware}" ;;
+		opkgtun*) : ;;
 		*) error "Поддерживается только туннель AmneziaWG (opkgtun)."; return 1 ;;
 	esac
+#	Меняем интерфейс в файле ndm
+	ndm_interface_change "${inface_entware}" "${cli_inface}"
+	vpn_on "${inface_entware}"
 	[ "${is_install_stage}" = no ] && cmd_kvas_init "no" &> /dev/null
 
 	#------------------------------------------------------
@@ -1989,7 +1996,8 @@ switch_vpn_on(){
 			bridge_vpn_access_add "${iface}" #&>/dev/null && when_ok "УСПЕШНО" || when_bad "ОШИБКА"
 		done
 	}
-
+	# явный успех: иначе код функции — от последнего `[ … ] && …` (нет гостевых сетей → 1)
+	return 0
 }
 
 # ------------------------------------------------------------------------------------------

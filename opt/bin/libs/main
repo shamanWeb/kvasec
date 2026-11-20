@@ -167,7 +167,7 @@ service_action(){
 	local _script _rc=1
 	for _script in "${INITD_DIR:-/opt/etc/init.d}"/S[0-9][0-9]"${_service}"; do
 		[ -x "${_script}" ] || continue
-		"${_script}" "${_action}" &> /dev/null && _rc=0
+		"${_script}" "${_action}" >/dev/null 2>&1 && _rc=0
 	done
 	return "${_rc}"
 

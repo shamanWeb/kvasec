@@ -115,3 +115,23 @@ printf '%s\n' '#server=/localnet/192.168.0.1' 'rev-server=10.0.0.0/8,10.0.0.1' '
 sh -c ". '$WORK/dd.sh'; dnsmasq_dns_change 1.1.1.1#53"
 printf '%s\n' '#server=/localnet/192.168.0.1' 'rev-server=10.0.0.0/8,10.0.0.1' 'server=/corp.lan/10.1.1.1' 'server=1.1.1.1#53' \
     | cmp - "$WORK/dm.conf" || { echo 'FAIL 7.6'; cat "$WORK/dm.conf"; exit 1; }
+
+# 7.2 switch_vpn_on: проверка интерфейса ДО ndm_interface_change (иначе маршрутизация
+# уже сброшена); kvas vpn gateway: аргумент учитывается, не-opkgtun — отказ без изменений
+{
+    echo "error() { :; }; print_line() { :; }; is_install_stage=yes"
+    echo "ndm_interface_change() { echo \"change \$*\" >> '$WORK/sv.log'; }; vpn_on() { echo \"on \$1\" >> '$WORK/sv.log'; }"
+    echo "ndm_gateway_change() { echo \"gw \$1\" >> '$WORK/sv.log'; }; cmd_kvas_init() { echo init >> '$WORK/sv.log'; }"
+    echo "get_guest_inface_list_from_config() { :; }"
+    grep '^IP_FILTER=' "$ROOT/opt/bin/libs/main"
+    sed -n '/^switch_vpn_on(){/,/^}/p; /^cmd_manual_gateway_set() {/,/^}/p' "$ROOT/opt/bin/libs/vpn"
+} | sed "s|/opt/sbin/ip |$WORK/fakeip |" > "$WORK/sv.sh"
+printf '#!/bin/sh\nprintf "%%s\\n" "7: opkgtun10    inet 10.8.1.3/32 scope global opkgtun10" "2: br0    inet 192.168.1.1/24 brd 192.168.1.255 scope global br0"\n' > "$WORK/fakeip"; chmod +x "$WORK/fakeip"
+RUNB="sh"; command -v busybox >/dev/null 2>&1 && RUNB="busybox sh"
+: > "$WORK/sv.log"
+$RUNB -c ". '$WORK/sv.sh'; switch_vpn_on eth3 GigabitEthernet1" || true
+[ ! -s "$WORK/sv.log" ] || { echo 'FAIL 7.2: не-opkgtun тронул маршрутизацию'; cat "$WORK/sv.log"; exit 1; }
+$RUNB -c ". '$WORK/sv.sh'; cmd_manual_gateway_set 192.168.1.1" >/dev/null 2>&1 || true
+[ ! -s "$WORK/sv.log" ] || { echo 'FAIL 7.2: gateway на br0 принят'; exit 1; }
+$RUNB -c ". '$WORK/sv.sh'; cmd_manual_gateway_set 10.8.1.3" >/dev/null 2>&1
+printf '%s\n' 'gw 10.8.1.3' 'change opkgtun10 Gateway' 'on opkgtun10' 'init' | cmp - "$WORK/sv.log" || { echo 'FAIL 7.2: gateway'; cat "$WORK/sv.log"; exit 1; }
