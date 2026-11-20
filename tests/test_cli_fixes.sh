@@ -41,7 +41,7 @@ grep -F "''|*[!0-9]*) num_inface=0 ;;" "$ROOT/opt/bin/libs/vpn" >/dev/null
     sed -n '/^add_host_to_adguard(){/,/^}/p' "$ROOT/opt/bin/libs/vpn"
 } > "$WORK/ag.sh"
 printf '%s\n' 'x.com' > "$WORK/kl"; printf '%s\n' 'netflix.com/KVAS_LIST' > "$WORK/ag"; : > "$WORK/dm"
-RUNB=sh; command -v busybox >/dev/null 2>&1 && RUNB="busybox sh"
+RUNB="sh"; command -v busybox >/dev/null 2>&1 && RUNB="busybox sh"
 $RUNB -c ". '$WORK/ag.sh'; add_host_to_adguard flix.com flix.com; add_host_to_adguard flix.com flix.com; add_host_to_adguard w.org '*w.org'"
 printf '%s\n' 'x.com' | cmp - "$WORK/kl" || { echo 'FAIL 7.8: kvas.list изменён'; exit 1; }
 printf '%s\n' 'netflix.com/KVAS_LIST' 'flix.com/KVAS_LIST' 'w.org/KVAS_LIST' | cmp - "$WORK/ag" || { echo 'FAIL 7.8: kvas.ipset'; cat "$WORK/ag"; exit 1; }
