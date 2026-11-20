@@ -130,6 +130,9 @@ valid_domain() {
 
 # MAC в нижнем регистре (нормализованный) либо пусто при некорректном вводе.
 normalize_mac() {
+	# многострочный ввод (%0A) — отказ: grep -Eo по строкам вернул бы два «валидных» MAC
+	case "$1" in *"
+"*) return 0 ;; esac
 	printf '%s' "$1" | tr 'A-F' 'a-f' | grep -Eo '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'
 }
 
@@ -550,11 +553,12 @@ main() {
 			domain=$(query_param domain)
 			[ -z "$domain" ] && json_error "domain required"
 			# Strip wildcard prefix: *.example.com → example.com for kvas del
-			clean=$(printf '%s' "$domain" | sed 's/^\*\.*//' | tr 'A-Z' 'a-z')
-			# запись kvas.list: домен, IP/CIDR или диапазон IP-IP
-			valid_domain "$clean" || valid_ip_or_cidr "$clean" ||
-				{ valid_ip_or_cidr "${clean%%-*}" && valid_ip_or_cidr "${clean#*-}"; } ||
-				json_error "invalid domain"
+			clean=$(printf '%s' "$domain" | sed 's/^\*\.*//')
+			# Только набор символов: удаляем то, что реально лежит в kvas.list (там бывают
+			# *.ru, _dmarc.x, заглавные — строгий valid_domain их отвергал). kvas del
+			# сравнивает точно, инъекции нет; ведущий '-' — запрет option injection.
+			case "$clean" in ''|-*|*[!A-Za-z0-9._/*-]*) json_error "invalid domain" ;; esac
+			case "$clean" in *[A-Za-z0-9]*) ;; *) json_error "invalid domain" ;; esac
 			out=$($KVAS_BIN del "$clean" 2>&1)
 			rc=$?
 			[ $rc -ne 0 ] && json_error "del failed: $out"

@@ -337,7 +337,7 @@ case "$action" in
 		print_devices_json "$sort" "$conntrack"
 		;;
 	action=data*)
-		ips=$(echo "$QUERY_STRING" | sed 's/.*ips=//; s/&.*//; s/%2C/,/g' | sed 's/%20/ /g')
+		ips=$(echo "&$QUERY_STRING" | sed -n 's/.*[?&]ips=\([^&]*\).*/\1/p' | sed 's/%2C/,/g; s/%20/ /g')
 		proto=$(echo "&$QUERY_STRING" | sed -n 's/.*[?&]proto=\([^&]*\).*/\1/p' 2>/dev/null)
 		port=$(echo "&$QUERY_STRING" | sed -n 's/.*[?&]port=\([^&]*\).*/\1/p' 2>/dev/null)
 		conntrack=$(echo "&$QUERY_STRING" | sed -n 's/.*[?&]conntrack=\([^&]*\).*/\1/p' 2>/dev/null)

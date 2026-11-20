@@ -72,6 +72,14 @@ mkdir_atomic() {
     rm -f "$WORK/probe.out"
     [ "$hits" -eq 50 ]
 }
+# Как на роутере — busybox mkdir (uutils coreutils mkdir не атомарен: 2 процесса
+# могут оба «создать» каталог). Обёртка в PATH для manage.sh и пробы.
+if command -v busybox >/dev/null 2>&1; then
+    mkdir -p "$WORK/bb"
+    printf '%s\n' '#!/bin/sh' 'exec busybox mkdir "$@"' > "$WORK/bb/mkdir"
+    chmod +x "$WORK/bb/mkdir"
+    PATH="$WORK/bb:$PATH"; export PATH
+fi
 if mkdir_atomic; then
     i=1
     while [ "$i" -le 10 ]; do

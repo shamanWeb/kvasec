@@ -64,11 +64,20 @@ RT=""
 (echo | read -r -t 1 _) 2>/dev/null && RT="-t $HDR_TIMEOUT"
 CR=$(printf '\r')
 N=0
+# + общий срок на все заголовки: по 9 с на строку × 50 строк держали бы
+# обработчик ~8 мин, а при max-children=16 один клиент занимал бы все слоты
+HDR_TOTAL=15
+HDR_START=$(date +%s)
 # shellcheck disable=SC2086  # $RT намеренно без кавычек: пусто или "-t N"
 while IFS='' read -r $RT L; do
     L=${L%"$CR"}
     [ -z "$L" ] && break
     N=$((N + 1))
+    if [ $(( $(date +%s) - HDR_START )) -gt "$HDR_TOTAL" ]; then
+        log "request rejected: header timeout"
+        printf "HTTP/1.0 408 Request Timeout\r\nContent-Type: text/plain\r\n\r\nTimeout"
+        exit 0
+    fi
     if [ "$N" -gt 50 ]; then
         log "request rejected: too many header lines"
         printf "HTTP/1.0 431 Request Header Fields Too Large\r\nContent-Type: text/plain\r\n\r\nToo many headers"

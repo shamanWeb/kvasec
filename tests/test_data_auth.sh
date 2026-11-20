@@ -22,3 +22,5 @@ data 'ips=1.2.3.4|.*' | grep -F 'invalid ips' >/dev/null
 data 'ips=1.2.3.4&port=53|.*' | grep -F 'invalid port' >/dev/null
 data 'ips=1.2.3.4&proto=-L' | grep -F 'invalid proto' >/dev/null
 data 'ips=1.2.3.4,5.6.7.8&port=443&proto=tcp&conntrack=0' | grep -F '"connections":' >/dev/null
+# без ips — прежний ответ «no ips specified», а не «invalid ips»
+QUERY_STRING="action=data&token=$token" sh "$WORK/data.sh" | grep -F 'no ips specified' >/dev/null
