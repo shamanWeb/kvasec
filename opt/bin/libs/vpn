@@ -1443,7 +1443,14 @@ dnsmasq_dns_change() {
 	dns_new=${1}; cmd=${2:-restart};
     dns_old=$(grep -m1 '^server=' "${DNSMASQ_CONFIG}" | cut -d'=' -f2)
 	ready "Замена DNS ${dns_old} на ${dns_new} в dnsmasq завершена"
-	sed -i "s/\(server=\).*/\1${dns_new}/"  "${DNSMASQ_CONFIG}"
+	# Только строки upstream-сервера: ^server=, и не server=/домен/… (правила для
+	# доменов). Раньше заменялось ВСЁ, где есть 'server=': комментарии, rev-server=,
+	# server=/localnet/… — все превращались в server=<новый DNS>.
+	if grep -q '^server=[^/]' "${DNSMASQ_CONFIG}"; then
+		sed -i "s|^server=[^/].*|server=${dns_new}|" "${DNSMASQ_CONFIG}"
+	else
+		echo "server=${dns_new}" >> "${DNSMASQ_CONFIG}"
+	fi
 	ipset_dns_change "${dns_new}"
 	set_config_value DNS_DEFAULT "${dns_new}"
 	/opt/etc/init.d/S56dnsmasq restart &> /dev/null

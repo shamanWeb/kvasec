@@ -90,3 +90,28 @@ awkg=$(grep -o "'{ x = \$3; gsub[^']*'" "$ROOT/opt/bin/libs/vpn" | sed "s/^'//; 
 # kvas test: правила считаются поцепочечно (iptables-save/-S по таблице обрываются на connndmmark)
 if grep -q 'save_iptables' "$ROOT/opt/bin/libs/check"; then echo 'FAIL: libs/check снова использует save_iptables'; exit 1; fi
 grep -F 'iptables -t mangle -S KVAS_MARK' "$ROOT/opt/bin/libs/check" >/dev/null
+
+# 7.4 service_action: выполняет переданное действие, только точный S<NN><имя>
+mkdir -p "$WORK/initd"
+for n in S56dnsmasq K56dnsmasq S56dnsmasq.bak S09dnscrypt-proxy2; do
+    printf '#!/bin/sh\necho "%s $1" >> "%s/svc.log"\n' "$n" "$WORK" > "$WORK/initd/$n"; chmod +x "$WORK/initd/$n"
+done
+sed -n '/^service_action(){/,/^}/p' "$ROOT/opt/bin/libs/main" > "$WORK/sa.sh"
+INITD_DIR="$WORK/initd" sh -c ". '$WORK/sa.sh'; service_action dnsmasq stop; service_action dnsmasq restart; service_action nosuch start" || true
+printf '%s\n' 'S56dnsmasq stop' 'S56dnsmasq restart' | cmp - "$WORK/svc.log" || { echo 'FAIL 7.4'; cat "$WORK/svc.log"; exit 1; }
+if INITD_DIR="$WORK/initd" sh -c ". '$WORK/sa.sh'; service_action nosuch start"; then echo 'FAIL 7.4: нет скрипта, а rc=0'; exit 1; fi
+# restart_all_services: «ОТКЛЮЧЕН» не должен гасить dnsmasq
+if sed -n '/^restart_all_services(){/,/^}/p' "$ROOT/opt/bin/main/setup" | grep -q 'ОТКЛЮЧЕН)'; then
+    echo 'FAIL 7.4: restart_all_services гасит dnsmasq при ОТКЛЮЧЕН'; exit 1
+fi
+
+# 7.6 dnsmasq_dns_change меняет только upstream server=, не комментарии и не server=/домен/
+printf '%s\n' '#server=/localnet/192.168.0.1' 'rev-server=10.0.0.0/8,10.0.0.1' 'server=/corp.lan/10.1.1.1' 'server=127.0.0.1#9153' > "$WORK/dm.conf"
+{
+    echo "DNSMASQ_CONFIG='$WORK/dm.conf'"
+    echo 'ready() { :; }; when_alert() { :; }; when_bad() { :; }; ipset_dns_change() { :; }; set_config_value() { :; }'
+    sed -n '/^dnsmasq_dns_change() {/,/^}/p' "$ROOT/opt/bin/libs/vpn" | sed 's|/opt/etc/init.d/S56dnsmasq restart|true|'
+} > "$WORK/dd.sh"
+sh -c ". '$WORK/dd.sh'; dnsmasq_dns_change 1.1.1.1#53"
+printf '%s\n' '#server=/localnet/192.168.0.1' 'rev-server=10.0.0.0/8,10.0.0.1' 'server=/corp.lan/10.1.1.1' 'server=1.1.1.1#53' \
+    | cmp - "$WORK/dm.conf" || { echo 'FAIL 7.6'; cat "$WORK/dm.conf"; exit 1; }

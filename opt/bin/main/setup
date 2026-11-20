@@ -165,7 +165,10 @@ cmd_pause_kvas(){
 
 restart_all_services(){
 
-	if cmd_adguardhome_status | grep -qE "(ВКЛЮЧЕН|ОТКЛЮЧЕН)" ; then
+	# AdGuard — резолвер ТОЛЬКО когда ВКЛЮЧЕН. Раньше условие ловило и «ОТКЛЮЧЕН»;
+	# пока service_action игнорировал действие, это было безвредно, а с рабочим
+	# stop погасило бы dnsmasq при выключенном AdGuard — LAN без DNS.
+	if cmd_adguardhome_status | grep -q "ВКЛЮЧЕН" ; then
 		service_action dnsmasq stop
 		service_action adguardhome restart 
 	else
