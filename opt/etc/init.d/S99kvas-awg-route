@@ -36,6 +36,8 @@ RPRIO=99
 # потому и нужен этот watcher). Пробуем app-путь, затем /opt/etc на всякий случай.
 NFHOOK_APP=/opt/apps/kvas/etc/ndm/netfilter.d/100-vpn-mark
 NFHOOK_ETC=/opt/etc/ndm/netfilter.d/100-vpn-mark
+NFHOOK_DNS=/opt/apps/kvas/etc/ndm/netfilter.d/100-dns-local
+DNS_PORT=9753
 
 # Соединение, открытое пока KVAS_MARK не было, остаётся без метки навсегда и ходит
 # мимо туннеля (JetBrains: «export control regulations»). Сброс — общий скрипт
@@ -79,10 +81,9 @@ watcher() {
       TABLES=$(ip rule 2>/dev/null | grep -iE 'fwmark (0xd1000|0xffffaaa)' | grep -oE 'lookup [0-9]+' | awk '{print $2}' | sort -u)
       [ -z "$TABLES" ] && TABLES="1001 4096"
       for T in $TABLES; do
-        # ВНИМАНИЕ: $5 — это имя интерфейса только для «default via X dev IF»; для
-        # «default dev IF scope link» (так строит ndm) $5 = "link" → каждый раз лишний
-        # replace + запись в лог. Надёжнее брать поле после "dev".
-        cur=$(ip route show table "$T" 2>/dev/null | awk '/^default/{print $5; exit}')
+        # интерфейс — поле после "dev" ($5 подходит только для «default via X dev IF»;
+        # для «default dev IF scope link», как строит ndm, $5 = "link" → лишний replace)
+        cur=$(ip route show table "$T" 2>/dev/null | awk '/^default/ { for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')
         if [ "$cur" != "$IFACE" ]; then
           ip route replace table "$T" default via "$IPGW" dev "$IFACE"
           echo "$(date) fix: table $T default '$cur' -> $IFACE" >>"$LOG"
@@ -90,11 +91,11 @@ watcher() {
       done
 
       # 2) ip rule fwmark 0xd1000 -> table 1001 (priority 99)
-      # ВНИМАНИЕ: проверяется только КОЛИЧЕСТВО правил, не priority: одно правило с
-      # чужим priority (напр. 1778 от старых сборок) останется, и system rule 104
-      # (lookup 4098) перехватит трафик раньше. Нужно проверять именно "^99:".
+      # Ровно одно правило И с priority 99: одно правило с чужим priority (напр. 1778
+      # от старых сборок) стоит ниже system rule 104 (lookup 4098), и тот перехватывает трафик.
       _nr=$(ip rule 2>/dev/null | grep -c "fwmark ${MARK}.*lookup ${RTABLE}")
-      if [ "$_nr" -ne 1 ]; then
+      _np=$(ip rule 2>/dev/null | grep -c "^${RPRIO}:.*fwmark ${MARK}.*lookup ${RTABLE}")
+      if [ "$_nr" -ne 1 ] || [ "$_np" -ne 1 ]; then
         # 0 — добавить; >1 — дубли (возможно с разными priority): снести все, оставить одно
         while ip rule del fwmark ${MARK}/${MARK} lookup ${RTABLE} 2>/dev/null; do :; done
         ip rule add fwmark ${MARK}/${MARK} lookup ${RTABLE} priority ${RPRIO} 2>/dev/null
@@ -104,10 +105,12 @@ watcher() {
       # 3) цепочка KVAS_MARK в mangle — при пропаже ИЛИ пустой цепочке пересоздать.
       # NDM при firewall-reload делает -F (flush rules, не -X delete chain): chain
       # существует, но пуста → старая проверка через -S >/dev/null не замечала.
-      # Проверяем число правил (норма ≥5) и наличие jump из PREROUTING.
+      # Целая цепочка заканчивается CONNMARK --save-mark (как проверяет ndm); плюс jump
+      # из PREROUTING. Хук сам очищает неполную цепочку и собирает заново.
       _km_rules=$(iptables -t mangle -S KVAS_MARK 2>/dev/null | grep -c "^-A")
+      _km_full=$(iptables -t mangle -S KVAS_MARK 2>/dev/null | grep -c -- "--save-mark")
       _km_jump=$(iptables -t mangle -S PREROUTING 2>/dev/null | grep -c "KVAS_MARK")
-      if [ "${_km_rules}" -lt 5 ] || [ "${_km_jump}" -eq 0 ]; then
+      if [ "${_km_full}" -eq 0 ] || [ "${_km_jump}" -eq 0 ]; then
         if   [ -x "$NFHOOK_APP" ]; then type=iptables table=mangle "$NFHOOK_APP" >/dev/null 2>&1
         elif [ -x "$NFHOOK_ETC" ]; then type=iptables table=mangle "$NFHOOK_ETC" >/dev/null 2>&1
         fi
@@ -115,6 +118,17 @@ watcher() {
         purge_unmarked_conns
       fi
       dedupe_rules mangle PREROUTING "-j KVAS_MARK"
+
+      # 3а) KVAS_DNS в nat: два DNAT на 127.0.0.1:${DNS_PORT} + jump из PREROUTING.
+      # После flush nat цепочка пуста — DNS LAN не уходит в kvas-dnsmasq (ipset не
+      # наполняется). nat PREROUTING на Keenetic выводится с обрывом на правиле NDM,
+      # но прыжки kvas стоят до него.
+      _kd_rules=$(iptables -t nat -S KVAS_DNS 2>/dev/null | grep -c "127.0.0.1:${DNS_PORT}")
+      _kd_jump=$(iptables -t nat -S PREROUTING 2>/dev/null | grep -c -- "-j KVAS_DNS")
+      if [ "${_kd_rules}" -lt 2 ] || [ "${_kd_jump}" -eq 0 ]; then
+        [ -x "$NFHOOK_DNS" ] && type=iptables table=nat "$NFHOOK_DNS" >/dev/null 2>&1
+        echo "$(date) fix: KVAS_DNS восстановлен (rules=${_kd_rules}, jumps=${_kd_jump})" >>"$LOG"
+      fi
 
       # 4) DoT-блок (DNS-over-TLS, порт 853) для LAN — форсируем DNS через роутер,
       #    чтобы браузеры не обходили dnsmasq. DoH-хостнеймы глушит dnsmasq-сниппет.
