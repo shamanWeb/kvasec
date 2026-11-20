@@ -3,7 +3,6 @@
 . /opt/apps/kvas/bin/libs/check
 . /opt/apps/kvas/bin/libs/hosts
 . /opt/apps/kvas/bin/libs/route
-. /opt/apps/kvas/bin/libs/tags
 . /opt/apps/kvas/bin/libs/update
 . /opt/apps/kvas/bin/libs/vpn
 . /opt/apps/kvas/bin/libs/monitor
@@ -99,7 +98,7 @@ case "${1}" in
 			done
 			# Тяжёлое — в фоне, чтобы команда возвращалась сразу:
 			#  - refresh_dnsmasq_ipset_table пересобирает ipset=/домен/ директивы из
-			#    ПОЛНОГО kvas.list (ловит домены, добавленные по тегам/импорту);
+			#    ПОЛНОГО kvas.list (ловит домены, добавленные импортом);
 			#  - main/ipset добирает IP-литералы/подсети, если они были в аргументах;
 			#  - перезапуск DNS подхватывает новые директивы (для авто-добавления
 			#    будущих IP домена). Текущие IP уже в ipset — доступ работает до рестарта.
@@ -121,10 +120,6 @@ case "${1}" in
 			[ -n "$_skip_first" ] && { _skip_first=; continue; }
 			_domains="$_domains${_domains:+ }$_arg"
 		done
-		if [ "$_domains" = "tags" ]; then
-			del_tag_section_to_protect_list
-			exit 0
-		fi
 		for _dom in $_domains; do
 			[ -z "$_dom" ] && continue
 			ready "Удаляем $_dom из списка защищенных..."
@@ -176,22 +171,6 @@ case "${1}" in
 			[ -f "$_b" ] && cp -f "$_b" "$_f" 2>/dev/null && echo "Восстановлен: $(basename $_f)"
 		done
 		_f="$KVAS_WEB_PASS"; _b="${BKP}/$(basename $_f)"; [ -f "$_b" ] && cp -f "$_b" "$_f" 2>/dev/null && echo "Восстановлен: $(basename $_f)"
-		;;
-
-	tags)
-		case "${2}" in
-			list) 			cmd_show_tags_domain_list "${3}" ;;
-			add)			cmd_add_domain_to_tag_list "${3}" "${4}" ;;
-			del)			cmd_del_domain_from_tag_list "${3}" "${4}" ;;
-			update)			cmd_update_tags_domain_list "${3}";;
-			# неинтерактивные — для WebUI
-			add-protect)	cmd_tags_add_protect "${3}"; _rc=$? ;;
-			del-protect)	cmd_tags_del_protect "${3}"; _rc=$? ;;
-			create)			shift 2; cmd_tags_create "$@"; _rc=$? ;;
-			delete)			cmd_tags_delete "${3}"; _rc=$? ;;
-			edit-save)		shift 2; cmd_tags_edit_save "$@"; _rc=$? ;;
-			*) 				cmd_show_tags_domain_list "${2}" ;;
-		esac
 		;;
 
 	# Расширенные настройки

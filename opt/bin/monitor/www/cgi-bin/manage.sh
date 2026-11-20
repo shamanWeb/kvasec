@@ -18,8 +18,6 @@ BLOCK_WATCH_PID=/tmp/kvas-block-watch.pid
 BLOCK_WATCH_EVENTS=/tmp/kvas-block-watch.events
 BLOCK_WATCH_LOCK_DIR=/tmp/kvas-block-watch.lock.d
 KVAS_LIST=/opt/etc/kvas.list
-TAGS_FILE=/opt/etc/tags.list
-TAGS_DEFAULT_FILE=/opt/apps/kvas/etc/conf/tags.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
 IOT_LOCKDOWN_LIST=/opt/etc/kvas-iot-lockdown.list
 IOT_LOCKDOWN_HOOK=/opt/etc/ndm/netfilter.d/090-iot-lockdown
@@ -439,25 +437,6 @@ check_updates() {
 	fi
 }
 
-# Имя закваски из URL: идёт в awk/sed/grep-регэкспы libs/tags и в CLI kvas,
-# поэтому строгий whitelist (все штатные имена tags.list ему соответствуют).
-valid_tag_name() {
-	[ -n "$1" ] && [ ${#1} -le 32 ] || return 1
-	case "$1" in -*|*[!A-Za-z0-9_-]*) return 1 ;; esac
-	return 0
-}
-
-# Строки секции [$2] — точное сравнение заголовка, без подстановки в код awk
-get_tag_domain_list_from_file() {
-	awk -v s="[$2]" '{ l = $0; sub(/^[ \t]+/, "", l); sub(/[ \t\r]+$/, "", l) }
-		l == s { flag = 1; next } /\[.*\]/ { flag = 0 } flag' "$1"
-}
-
-tag_exists() {
-	awk -v s="[$1]" '{ sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, "") } $0 == s { f = 1; exit } END { exit !f }' "$TAGS_FILE" 2>/dev/null
-}
-
-
 main() {
 	local action token pass hash stored kvaspkg kvaspkg_name kvaspkg_ver
 	local host_count first
@@ -466,9 +445,6 @@ main() {
 	action=$(query_param action)
 	token=$(query_param token)
 	[ -z "$token" ] && token="$HTTP_X_KVAS_TOKEN"
-
-	# Тот же файл, что у CLI (libs/tags): засеваем из пакетного шаблона при первом обращении
-	case "$action" in tags_*) [ -f "$TAGS_FILE" ] || cp -f "$TAGS_DEFAULT_FILE" "$TAGS_FILE" 2>/dev/null ;; esac
 
 	case "$action" in
 		auth_status)
@@ -1456,157 +1432,6 @@ main() {
 				else
 					json_error "route refresh failed, see /tmp/kvas-route-refresh.log"
 				fi
-			fi
-			;;
-		tags_list)
-			check_token "$token"
-			[ ! -f "$TAGS_FILE" ] && echo '{"ok":true,"tags":[]}' && return
-			printf '{"ok":true,"tags":['
-			tag=""
-			while IFS= read -r line; do
-				line_trimmed=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-				if [ -z "$line_trimmed" ] || echo "$line_trimmed" | grep -qE '^[[:space:]]*#'; then continue; fi
-			if echo "$line_trimmed" | grep -qE '^\['; then
-					if [ -n "$tag" ]; then
-						printf ']},'
-					fi
-					tag=$(echo "$line_trimmed" | tr -d '[]')
-					printf '{"name":%s,"domains":[' "$(json_str "$tag")"
-					dfirst=1
-				else
-					in_list="false"
-					[ -f "$KVAS_LIST" ] && grep -qxF "$line_trimmed" "$KVAS_LIST" 2>/dev/null && in_list="true"
-					[ "$dfirst" -eq 0 ] && printf ','
-					dfirst=0
-					printf '{"name":%s,"in_list":%s}' "$(json_str "$line_trimmed")" "$in_list"
-				fi
-			done < "$TAGS_FILE"
-		if [ -n "$tag" ]; then
-			printf ']}'
-		fi
-		printf ']}'
-			;;
-		tags_status)
-			check_token "$token"
-			tag=$(query_param tag)
-			[ -z "$tag" ] && json_error "tag required"
-			valid_tag_name "$tag" || json_error "invalid tag"
-			tag_exists "$tag" || json_error "tag not found"
-			domains=$(get_tag_domain_list_from_file "$TAGS_FILE" "$tag")
-			printf '{"ok":true,"tag":%s,"domains":[' "$(json_str "$tag")"
-			first=1
-			for d in $domains; do
-				[ "$first" -eq 0 ] && printf ','
-				first=0
-				in_list="false"
-				[ -f "$KVAS_LIST" ] && grep -qxF "$d" "$KVAS_LIST" 2>/dev/null && in_list="true"
-				printf '{"name":%s,"in_list":%s}' "$(json_str "$d")" "$in_list"
-			done
-			echo ']}'
-			;;
-		tags_add)
-			check_token "$token"
-			tag=$(query_param tag)
-			[ -z "$tag" ] && json_error "tag required"
-			valid_tag_name "$tag" || json_error "invalid tag"
-			tag_exists "$tag" || json_error "tag not found"
-			out=$($KVAS_BIN tags add-protect "$tag" 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "add failed: $out"
-			json_ok "added $tag"
-			;;
-		tags_create)
-			check_token "$token"
-			name=$(query_param name)
-			raw_domains=$(echo "$QUERY_STRING" | sed 's/.*domains=//; s/&.*//' 2>/dev/null)
-			raw_domains=$(printf '%s' "$raw_domains" | sed 's/%0D%0A/ /g; s/%0A/ /g; s/%0D/ /g; s/%20/ /g; s/+/ /g')
-			domains=$(echo "$raw_domains" | sed 's/  */ /g; s/^ //; s/ $//')
-			[ -z "$name" ] && json_error "name required"
-			[ -z "$domains" ] && json_error "domains required"
-			valid_tag_name "$name" || json_error "invalid name"
-			# $domains идёт в kvas БЕЗ кавычек (word-split) → валидируем каждый токен:
-			# запрещаем ведущий '-' (option injection) и спецсимволы
-			for _d in $domains; do
-				case "$_d" in -*|*[!a-zA-Z0-9.*_-]*) json_error "invalid domain" ;; esac
-			done
-			out=$($KVAS_BIN tags create "$name" $domains 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "create failed: $out"
-			json_ok "created $name"
-			;;
-		tags_del)
-			check_token "$token"
-			tag=$(query_param tag)
-			[ -z "$tag" ] && json_error "tag required"
-			valid_tag_name "$tag" || json_error "invalid tag"
-			tag_exists "$tag" || json_error "tag not found"
-			out=$($KVAS_BIN tags del-protect "$tag" 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "del failed: $out"
-			json_ok "removed $tag"
-			;;
-		tags_delete)
-			check_token "$token"
-			tag=$(query_param tag)
-			[ -z "$tag" ] && json_error "tag required"
-			valid_tag_name "$tag" || json_error "invalid tag"
-			tag_exists "$tag" || json_error "tag not found"
-			out=$($KVAS_BIN tags delete "$tag" 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "delete failed: $out"
-			json_ok "удалена закваска $tag"
-			;;
-		tags_edit_save)
-			check_token "$token"
-			tag=$(query_param tag)
-			[ -z "$tag" ] && json_error "tag required"
-			valid_tag_name "$tag" || json_error "invalid tag"
-			tag_exists "$tag" || json_error "tag not found"
-			raw_domains=$(echo "$QUERY_STRING" | sed 's/.*domains=//; s/&.*//' 2>/dev/null)
-			raw_domains=$(printf '%s' "$raw_domains" | sed 's/%0D%0A/ /g; s/%0A/ /g; s/%0D/ /g; s/%20/ /g; s/+/ /g')
-			domains=$(echo "$raw_domains" | sed 's/  */ /g; s/^ //; s/ $//')
-			for _d in $domains; do
-				case "$_d" in -*|*[!a-zA-Z0-9.*_-]*) json_error "invalid domain" ;; esac
-			done
-			out=$($KVAS_BIN tags edit-save "$tag" $domains 2>&1)
-			rc=$?
-			[ $rc -ne 0 ] && json_error "edit failed: $out"
-			json_ok "закваска $tag обновлена"
-			;;
-		tags_download)
-			check_token "$token"
-			[ ! -f "$TAGS_FILE" ] && json_error "no tags"
-			printf 'Content-Type: text/plain; charset=utf-8\n'
-			printf 'Content-Disposition: attachment; filename="tags.list"\n\n'
-			cat "$TAGS_FILE"
-			exit 0
-			;;
-		tags_upload)
-			check_token "$token"
-			replace=$(echo "$QUERY_STRING" | sed 's/.*replace=//; s/&.*//' 2>/dev/null)
-			[ "$replace" = "$QUERY_STRING" ] && replace="0"
-			[ "$replace" != "1" ] && replace="0"
-			[ ! -f "$TAGS_FILE" ] && touch "$TAGS_FILE"
-			upload_tmp=$(mktemp)
-			cat > "$upload_tmp"
-			if [ "$replace" = "1" ]; then
-				mv -f "$upload_tmp" "$TAGS_FILE"
-				json_ok "tags replaced"
-			else
-				# merge: append uploaded tags to existing, skip first line if it's a section header
-				merged_tmp=$(mktemp)
-				cat "$TAGS_FILE" > "$merged_tmp"
-				first=1
-				while IFS= read -r line; do
-					if [ $first -eq 1 ] && echo "$line" | grep -qE '^\['; then
-						continue
-					fi
-					first=0
-					echo "$line"
-				done < "$upload_tmp" >> "$merged_tmp"
-				mv -f "$merged_tmp" "$TAGS_FILE"
-				rm -f "$upload_tmp"
-				json_ok "tags merged"
 			fi
 			;;
 		*)

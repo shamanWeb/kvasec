@@ -3,7 +3,6 @@
 . /opt/apps/kvas/bin/libs/debug
 . /opt/apps/kvas/bin/libs/ndm
 . /opt/apps/kvas/bin/libs/adblock
-. /opt/apps/kvas/bin/libs/tags
 
 MINUS=10
 
@@ -2797,43 +2796,10 @@ cmd_add_one_host() {
 		host=$(echo "${1}" | sed 's/\*//;' | sed -n -E 's|^(https?://)?([^/]+).*|\2|p')
 	fi
 
-	# Если первый параметр пуст или равен 'tags', то 
-	# делаем запрос на выбор закваски и добавляем все доменные имена из закваски в список защиты
-	[ -z "${host}" ] || [ "${host}" = tags ] && {
-		add_tag_section_to_protect_list
-		return 0
+	[ -z "${host}" ] && {
+		error "Не задан домен или IP для добавления."
+		return 1
 	}
-
-	# Проверяем есть ли в введенной строке имя метки -tag или нет
-	has_tag=$([ -n "$(echo "${*}" | sed -n 's/.*-tag \([^ ]*\).*/\1/p')" ])
-
-	if [ "${has_tag}" ] ; then
-		tag_name=$(echo "${*}" | sed 's/.*\-tag \(.*\)/\1/')
-		# Помечаем доменное имя тегом 
-		cmd_add_domain_to_tag_list "${tag_name}" "${host}"
-	fi
-
-	
-	# Если  помимо этого домена существует еще доменные с одноименным тегом
-	# то делаем запрос на их доавление.
-	local _tmpfile=$(mktemp)
-	echo "${host}" | grep -qE "${IP_FILTER}" || {
-		_get_same_tag_domains_missing_in_protection_list "${host}" | sed '/^$/d' > "${_tmpfile}"
-	}
-	# Проверяем есть ли в этом списке домены
-	[ -s "${_tmpfile}" ] && {
-		[ -z "${tag_name}" ] && tag_name=$(_get_tagname_by_domain "${host}" | tail -1)
-		# Если есть, то спрашивем добавить ли их
-		read_ynq "Найдены доменные имена с тегом '${tag_name}',которых пока нет в списке защищенных доменнов.\nДобавить их в список?" answer
-		[[ "$answer" =~ [qn] ]] && return 1
-		if [[ "$answer" =~ [y] ]] ; then
-			print_line
-			cmd_import_hosts "${_tmpfile}"
-		fi
-		rm -f "${_tmpfile}"
-		return 0
-	}
-	
 
 	clear_host=$(echo "${host}" | sed 's/\*//')
 	
@@ -2904,11 +2870,9 @@ cmd_add_one_host() {
 cmd_del_one_host() {
 	local host_="${1}"
 
-	# Если первый параметр пуст или равен 'tags', то 
-	# делаем запрос на выбор закваски и добавляем все доменные имена из закваски в список защиты
-	[ -z "${host_}" ] || [ "${host_}" = tags ] && {
-		del_tag_section_to_protect_list
-		return 0
+	[ -z "${host_}" ] && {
+		error "Не задан домен или IP для удаления."
+		return 1
 	}
 
 	if list_has_entry "${KVAS_LIST_FILE}" "${host_}" ; then
@@ -3312,91 +3276,6 @@ cmd_export_hosts() {
 	echo "${HOSTS_LIST}" > "${backup_name}" && when_ok "СОХРАНЕНЫ" || when_bad "ОШИБКА"
 }
 
-
-
-
-# -------------------------------------------------------------------------------------------
-#
-#   Функция для добавления доменов в список для защиты
-#
-# ------------------------------------------------------------------------------------------
-add_tag_section_to_protect_list() {
-
-    local tag_selected answer domains
-    tag_select "добавления" tag_selected
-    [ -n "${tag_selected}" ] && {
-        print_line
-        echo -e "В защищенный список будут добавлены следующие домены:"
-        print_line
-
-		if [ "${tag_selected}" = ALL ] ; then
-			domains=$(cat < "${TAGS_FILE}" | sed 's/\(^.*\)#. *$/\1/g' | grep -Ev '#|\[' | tr -s '\n')
-		else
-			domains=$(get_tag_domain_list "${tag_selected}")
-		fi
-#set -xeu
-		grep_list_to_add=$(echo -e "${domains}" | sed '/^$/d' | sort -u | sed -e 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed 's/\(.*\)/^\1$/g' )
-		local exist_into_list=""
-
-		while IFS= read -r domain; do
-			grep -q "$domain" "${KVAS_LIST_FILE}" || exist_into_list="${exist_into_list}$(echo "${domain}\n" | sed 's/[\^]//; s/[\$]//')"
-		done <<EOF
-$grep_list_to_add
-EOF
-
-		exist_into_list=$(echo -e "${exist_into_list}" | sed '/^$/d' | sed '=' | sed 'N;s/\n/. /g')
-		echo "${exist_into_list}"
-		print_line
-		# read_ynq "Добавляем?" answer
-        # if [[ "$answer" =~ [qQ] ]] ; then
-        #     return 0
-        # elif [ "${answer}" = y ]; then
-		# print_line
-		local TMPFILE=$(mktemp)
-		echo -e "${exist_into_list}" | sed 's/^[0-9]\{1,3\}\. \(.*\)/\1/g' | sed '/^$/d' > "${TMPFILE}"
-		cmd_import_hosts "${TMPFILE}"
-		rm "${TMPFILE}"
-        # fi
-    }
-
-}
-
-
-# -------------------------------------------------------------------------------------------
-#
-#   Функция для удаления доменов из списка защиты
-#
-# ------------------------------------------------------------------------------------------
-del_tag_section_to_protect_list() {
-
-    # local section="$1"
-    local tag_selected answer
-    tag_select "удаления" tag_selected
-	[ -z "${tag_selected}" ] && return 1
-
-	print_line
-	if [ "${tag_selected}" = ALL ] ; then
-		domains=$(cat < "${TAGS_FILE}" | sed 's/\(^.*\)#. *$/\1/g' | grep -Ev '#|\[' | tr -s '\n')
-	else 
-		domains=$(get_tag_domain_list "${tag_selected}")
-	fi
-	grep_list_to_del=$(echo -e "${domains}" | sed '/^$/d' | sort -u | sed -e 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed 's/\(.*\)/^\1$/g' )
-	exist_into_list=$(grep -oE "${grep_list_to_del}" "${KVAS_LIST_FILE}" | sed '=' | sed 'N;s/\n/. /g')
-	
-	if [ -n "${exist_into_list}" ] ; then
-		echo -e "${exist_into_list}"
-		print_line
-		read_ynq "Удаляем?" answer
-		if [[ "$answer" =~ [qQ] ]] ; then
-			return 0 
-		elif [ "${answer}" = y ]; then
-			print_line
-			del_multy_hosts "$(echo -e "${exist_into_list}" | sed 's/^[0-9]\{1,3\}\.\().*\)//g')"
-		fi
-    else
-		echo -e "Домены для удаления не обнаружены в списке защиты."
-	fi
-}
 
 
 

@@ -269,7 +269,6 @@ stop_crypt(){
 restore_backups(){
 	restore_backup "${KVAS_LIST_FILE_BACKUP}" "${KVAS_LIST_FILE}" "защищенного списка"
 	restore_backup "${KVAS_CONFIG_BACKUP}" "${KVAS_CONF_FILE}" "конфигурации пакета KVASEC"
-	restore_backup "${TAGS_LIST_BACKUP}" "${TAGS_LIST_FILE}" "списка заквасок"
 
 	restore_backup "${ADGUARDHOME_CONFIG_BACKUP}" "${ADGUARDHOME_CONFIG}" "конфигурации AdGuardHome"
 	restore_backup "${ADGUARD_IPSET_FILE_BACKUP}" "${ADGUARD_IPSET_FILE}" "списка ipset для AdGuardHome"
@@ -295,7 +294,6 @@ save_backups(){
 	# Бэкап основных конфигов
 	backup_copy "${KVAS_CONF_FILE}" "${KVAS_CONFIG_BACKUP}"
 	backup_copy "${KVAS_LIST_FILE}" "${KVAS_LIST_FILE_BACKUP}"
-	backup_copy "${TAGS_LIST_FILE}" "${TAGS_LIST_BACKUP}"
 	backup_copy "${KVAS_WEB_PASS}" "${KVAS_WEB_PASS_BACKUP}"
 
 	# Бэкап остальных конфигов
@@ -507,10 +505,6 @@ cmd_install(){
 
 	ready 'Удаляем файлы предыдущих версий'
 	rm_previous_version_files && when_ok || when_bad
-	if [ -f /tmp/kvas_tags_backup/tags.list ]; then
-		cp -f /tmp/kvas_tags_backup/tags.list /opt/etc/tags.list 2>/dev/null || true
-		rm -f /tmp/kvas_tags_backup/tags.list 2>/dev/null || true
-	fi
 	# При обновлении НЕ удаляем бэкапы конфигов (save_backups сделал их до opkg remove)
 	[ "${update_mode}" = "true" ] || rm_dir /opt/etc/.kvas
 

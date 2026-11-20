@@ -339,9 +339,7 @@ on/off правит список и число правил (11 MAC×6 порт�
 - `route_guest_add`/`del`: `valid_ifname "$net"`.
 - `host_add`: очищенный домен в lower + `valid_domain` ДО `sed -i "s|^${clean}$|…"`
   (раньше без проверки → sed-инъекция/порча kvas.list).
-- `tags_create`/`tags_edit_save`: `$domains` идёт в kvas БЕЗ кавычек (word-split) —
-  per-token гвард `case "$_d" in -*|*[!a-zA-Z0-9.*_-]*) ... ` (option/arg injection);
-  плюс запрет ведущего `-` у `name`.
+- (закваски/`tags_*` удалены целиком 2026-11-20 — стандартного add/del/import достаточно.)
 - Мин. длина пароля панели 4→8 (`set_pass`/`change_pass`); тест обновлён.
 
 **data.sh**: `action=debug` и `action=test_data` (раскрывали `$PATH`, DNS-лог, срезы

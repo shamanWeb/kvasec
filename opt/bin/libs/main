@@ -37,7 +37,6 @@ save_iptables(){ /opt/sbin/iptables-save "$@"; }
 
 KVAS_CONF_FILE=/opt/etc/kvas.conf
 KVAS_LIST_FILE=/opt/etc/kvas.list
-TAGS_LIST_FILE=/opt/etc/tags.list
 ADGUARDHOME_CONFIG=/opt/etc/AdGuardHome/AdGuardHome.yaml
 ADGUARD_IPSET_FILE=/opt/etc/AdGuardHome/kvas.ipset
 DNSMASQ_IPSET_HOSTS=/opt/etc/dnsmasq.d/kvas.dnsmasq
@@ -51,8 +50,6 @@ ADBLOCK_PARENTAL_DNS_FILE=/opt/etc/dnsmasq.d/kvas-parental.dnsmasq
 
 KVAS_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/kvas.conf
 KVAS_LIST_FILE_BACKUP=${KVAS_BACKUP_PATH}/kvas.list
-TAGS_LIST_FILE=/opt/etc/tags.list
-TAGS_LIST_BACKUP=${KVAS_BACKUP_PATH}/tags.list
 ADGUARDHOME_CONFIG_BACKUP=${KVAS_BACKUP_PATH}/AdGuardHome.yaml
 ADGUARD_IPSET_FILE_BACKUP=${KVAS_BACKUP_PATH}/kvas.ipset
 DNSMASQ_IPSET_HOSTS_BACKUP=${KVAS_BACKUP_PATH}/kvas.dnsmasq
