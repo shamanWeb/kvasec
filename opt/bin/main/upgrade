@@ -124,7 +124,8 @@ select_release_from_list(){
 #	Функция выводит на экран доступные в репозитории версии пакетов KVASEC
 # 	и позволяет выбрать один из них в случае использования режима "отката"
 
-	url_list=$(gh_api "${release_url}" | jq -r '.[] | .assets | .[] | .browser_download_url')
+	# только пакеты: рядом лежат .sha256, их в меню отката не показываем
+	url_list=$(gh_api "${release_url}" | jq -r '.[] | .assets[] | select(.name | endswith(".ipk")) | .browser_download_url')
 	rel_list=$(echo "${url_list}" | cut -d'/' -f8)
 	num=1; total=$(echo "${rel_list}" | wc -l)
 
@@ -151,17 +152,22 @@ select_release_from_list(){
 				[qQ])					# если выбрали выход
 					print_error "Прервано пользователем!"
 					exit 0 ;;
-				[1-["${total}"])		# если выбрали один из номеров из списка
-					print_line
-					eval "${1}=$(echo "${url_list}" | sed -n "${num_release}p")"
-					break ;;
 				'')						# если просто нажали Enter (выбираем 1 позицию - крайний релиз)
 					print_line
 					eval "${1}=$(echo "${url_list}" | sed -n '1p')"
 					break ;;
-				*)						# при прочих вариантах - выводим сообщение об ошибке
+				*[!0-9]*)				# не число
 					print_line
 					echo -e "${RED}Введите цифру от 1 до ${total}.${NOCL}" ;;
+				*)						# номер из списка (не шаблон [1-N]: при N≥10 он ломался)
+					if [ "${num_release}" -lt 1 ] || [ "${num_release}" -gt "${total}" ]; then
+						print_line
+						echo -e "${RED}Введите цифру от 1 до ${total}.${NOCL}"
+					else
+						print_line
+						eval "${1}=$(echo "${url_list}" | sed -n "${num_release}p")"
+						break
+					fi ;;
 				esac
 		done
 	fi
