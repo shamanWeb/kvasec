@@ -1,9 +1,6 @@
 #!/bin/sh
 # Launch KVAS monitoring web UI
 PORT=${MONITOR_PORT:-8085}
-# Веб-UI — админ-доступ, не публичный сервис. Python-fallback тоже должен
-# слушать только LAN-интерфейс, а не 0.0.0.0 (иначе торчал бы на WAN).
-MONITOR_BIND=${MONITOR_BIND:-192.168.1.1}
 WWW_DIR=/opt/apps/kvas/bin/monitor/www
 PID_FILE=/var/run/kvas-monitor-web.pid
 HTTPD_SCRIPT=/opt/apps/kvas/bin/monitor/httpd.sh
@@ -81,28 +78,6 @@ start_socat_server() {
     return $rc
 }
 
-start_python_server() {
-    local pybin="$1"
-    command -v "$pybin" >/dev/null 2>&1 || return 1
-    log "starting python backend via $pybin on port $PORT"
-    cd "$WWW_DIR" || return 1
-    "$pybin" -c "
-import http.server, os
-os.chdir('${WWW_DIR}')
-http.server.test(HandlerClass=http.server.CGIHTTPRequestHandler, port=${PORT}, bind='${MONITOR_BIND}')
-" >> "$LOG_FILE" 2>&1 &
-    echo $! > "$PID_FILE"
-    sleep 1
-    if kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-        log "python backend started with pid $(cat "$PID_FILE")"
-        echo "OK $pybin $PORT"
-        return 0
-    fi
-    log "python backend failed to stay running"
-    rm -f "$PID_FILE"
-    return 1
-}
-
 if [ "$1" = "stop" ]; then
     log "stop requested"
     kill_port
@@ -115,17 +90,14 @@ kill_port
 # Pre-flight
 preflight
 
-# Try socat first
+# Только socat: python-fallback (CGIHTTPRequestHandler) был нерабочим — не
+# передавал заголовки X-KVAS-* (вход невозможен), CGI не печатают CGI-заголовки,
+# и не было ограничения по источнику (range=). Без socat панель не поднимаем.
 if command -v socat >/dev/null 2>&1 && [ -x "$HTTPD_SCRIPT" ]; then
     start_socat_server
     exit $?
 fi
 
-# Fallback: python
-log "socat unavailable, trying python fallback"
-start_python_server python3 && exit 0
-start_python_server python && exit 0
-
-log "no http server available"
-echo "ERROR: no HTTP server available. Install socat or python3"
+log "socat not available"
+echo "ERROR: socat not found. Install it: opkg install socat"
 exit 1
