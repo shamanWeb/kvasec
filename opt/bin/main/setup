@@ -287,6 +287,7 @@ restore_backups(){
 
 	restore_backup "${DNSCRYPT_CONFIG_BACKUP}" "${DNSCRYPT_CONFIG}" "конфигурации dnscrypt_proxy2"
 	restore_backup "${ADBLOCK_LIST_EXCEPTION_BACKUP}" "${ADBLOCK_LIST_EXCEPTION}" "списка хостов-исключений для блокировки рекламы"
+	restore_backup "${ADBLOCK_BLOCK_FILE_BACKUP}" "${ADBLOCK_BLOCK_FILE}" "списка родительского контроля"
 	restore_backup "${ADBLOCK_HOSTS_FILE_BACKUP}" "${ADBLOCK_HOSTS_FILE}" "списка хостов для блокировки рекламы"
 	restore_backup "${ADBLOCK_SOURCES_LIST_BACKUP}" "${ADBLOCK_SOURCES_LIST}" "списка источников хостов для блокировки рекламы"
 	restore_backup "${KVAS_WEB_PASS_BACKUP}" "${KVAS_WEB_PASS}" "пароля веб-интерфейса"
@@ -295,10 +296,9 @@ restore_backups(){
 
 
 # Сохраняем все значимые файлы конфигурации пакета KVASEC
-# ВНИМАНИЕ: в бэкап НЕ входит /opt/etc/adblock/block.list (родительский контроль), а
-# rm_package_files удаляет весь /opt/etc/adblock — `kvas upgrade` (uninstall → install)
-# теряет block.list. exception.list бэкапится, но восстанавливается только интерактивным
-# `kvas setup`, который upgrade без TTY пропускает.
+# Бэкап конфигов перед uninstall (rm_package_files удаляет весь /opt/etc/adblock).
+# block.list (родительский контроль) добавлен 2026-11-20 — раньше терялся. `kvas upgrade`
+# теперь ставит пакет поверх и uninstall не вызывает (кроме явного `full`).
 save_backups(){
 	# Создаем директорию для бэкапа
 	local backup_dir="${KVAS_BACKUP_PATH}"
@@ -321,6 +321,7 @@ save_backups(){
 	backup_copy "${ADBLOCK_HOSTS_FILE}" "${ADBLOCK_HOSTS_FILE_BACKUP}"
 	backup_copy "${ADBLOCK_SOURCES_LIST}" "${ADBLOCK_SOURCES_LIST_BACKUP}"
 	backup_copy "${ADBLOCK_LIST_EXCEPTION}" "${ADBLOCK_LIST_EXCEPTION_BACKUP}"
+	backup_copy "${ADBLOCK_BLOCK_FILE}" "${ADBLOCK_BLOCK_FILE_BACKUP}"
 
 
 	echo "Резервная копия сохранена в: ${backup_dir}"
@@ -534,13 +535,23 @@ cmd_install(){
 	ready 'Обновляем пакеты opkg'
 	{
 		opkg update >/dev/null 2>&1
-		opkg list-installed | grep -q 'nano' && opkg remove nano >/dev/null 2>&1
-		# ВНИМАНИЕ: dnsmasq-full удаляется ДО скачивания нового, а результат opkg update
-		# не проверяется: если репозиторий Entware недоступен (DPI/сбой), LAN остаётся без
-		# DNS (br0:53 DNAT'ится на 127.0.0.1:9753, которого больше нет). Переустанавливать
-		# только если пакета нет/он не тот, либо скачать заранее и --force-reinstall.
-		opkg list-installed | grep -q 'dnsmasq-full' && opkg remove dnsmasq-full --force-depends >/dev/null 2>&1
-		opkg install dnsmasq-full --force-maintainer >/dev/null 2>&1
+		# точное имя: grep 'nano' ловил и nano-full (удалял, чтобы тут же поставить снова)
+		opkg list-installed | grep -q '^nano ' && opkg remove nano >/dev/null 2>&1
+		# dnsmasq-full переустанавливается ради «чистого» dnsmasq.conf (--force-maintainer).
+		# Раньше пакет сначала удалялся, а новый качался из сети без проверки: при
+		# недоступном репозитории Entware (DPI/сбой) LAN оставалась без DNS (br0:53
+		# DNAT'ится на :9753, которого больше нет). Теперь пакет сначала СКАЧИВАЕТСЯ и
+		# ставится поверх (--force-reinstall, без удаления); не скачался — остаётся прежний.
+		if opkg list-installed | grep -q '^dnsmasq-full '; then
+			_dl_dir=/opt/tmp/kvas-dnsmasq-dl
+			rm -rf "${_dl_dir}"; mkdir -p "${_dl_dir}"
+			( cd "${_dl_dir}" && opkg download dnsmasq-full ) >/dev/null 2>&1
+			_pkg=$(ls "${_dl_dir}"/dnsmasq-full_*.ipk 2>/dev/null | head -1)
+			[ -n "${_pkg}" ] && opkg install --force-reinstall --force-maintainer "${_pkg}" >/dev/null 2>&1
+			rm -rf "${_dl_dir}"
+		else
+			opkg install dnsmasq-full --force-maintainer >/dev/null 2>&1
+		fi
 		opkg install iptables nano-full >/dev/null 2>&1
 	} && when_ok 'ГОТОВО' || when_bad 'ОШИБКА'
 

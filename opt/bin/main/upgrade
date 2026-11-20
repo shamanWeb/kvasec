@@ -6,7 +6,6 @@
 #--------------------------------------------------------------------------------------------------------------
 
 # по умолчанию включаем режим обновления KVASECа
-UPDATE_MODE=true
 
 #--------------------------------------------------------------------------------------------------------------
 # Аргументы запуска данного файла
@@ -279,7 +278,6 @@ has_no_internet_here && {
 # то не важно на каком он месте мы делаем полное удаление пакета
 if echo "${*}" | grep -q full ; then
 	remove_mode=full
-	UPDATE_MODE=false
 else
 	remove_mode=''
 fi
@@ -316,7 +314,7 @@ if echo "${*}" | grep -qv 'force' ; then
 	else
 	#	Если НЕ обнаружена предыдущая версия KVASECа
 	#	то это значит, что производим новую установку KVASECа
-		UPDATE_MODE=false
+		:
 	fi
 fi
 
@@ -366,45 +364,31 @@ verify_package "/opt/packages/${package_name}" || {
 }
 
 #--------------------------------------------------------------------------------------------------------------
-# если обнаружена предыдущая незавершенная установка пакета
-# (читаем флаг из конфига: раньше проба `kvas | grep …` сама запускала kvas без
-#  аргументов, а он при незавершённой настройке стартовал полный setup)
-if [ -f /opt/bin/kvas ] && [ -f /opt/etc/kvas.conf ] && ! grep -qE '^SETUP_FINISHED=.+' /opt/etc/kvas.conf ; then
-	ready 'Удаляем незавершенную ранее установку пакета ...'
-	kvas uninstall "${remove_mode}" yes &>/dev/null && when_ok || when_err
-else
-#	если все хорошо и обнаружена предыдущая версия пакета, то удаляем ее
-	if [ -f /opt/bin/kvas ]; then
-		# shellcheck disable=SC2034  # ver/rel нужны закомментированному сообщению ниже
-		ver=$(grep "APP_VERSION=" "${kvas_conf}" | cut -d'=' -f2)
-		# shellcheck disable=SC2034
-		rel=$(grep "APP_RELEASE=" "${kvas_conf}" | cut -d'=' -f2)
-		#ready "Удаляем предыдущую версию пакета  [${ver} ${rel}]..."
-		# ИЗВЕСТНАЯ ПРОБЛЕМА: сначала полное удаление, потом установка. Если opkg install
-		# ниже упадёт (лок opkg, нет места, зависимость) — kvas на роутере не останется,
-		# отката нет; uninstall к тому же стирает /opt/etc/adblock (block.list) и при
-		# наличии dnsmasq.conf-opkg возвращает «чистый» dnsmasq.conf. Правильно — как
-		# в install.sh: `opkg install --force-reinstall` поверх (postinst готов к upgrade).
-		kvas uninstall "${remove_mode}" yes # && when_ok || when_err
-	fi
+# Ставим ПОВЕРХ установленной версии, без предварительного `kvas uninstall`.
+# Раньше: uninstall → install. Если install падал (лок opkg, нет места, зависимость) —
+# kvas на роутере не оставалось; uninstall к тому же стирал /opt/etc/adblock (block.list
+# родительского контроля — так он потерялся 2026-11-09), а восстановление конфигов делал
+# только интерактивный `kvas setup`, который без TTY пропускается. postinst рассчитан на
+# обновление: конфиги не затирает, перегенерирует libs/ndm, делает kvas init и
+# перезапускает сторож. --force-downgrade — для отката на старую версию.
+# `kvas upgrade … full` — явный запрос «переустановка с удалением данных»: только тогда
+# сначала полностью удаляем (конфиги, списки) и после установки нужен `kvas setup`.
+if [ "${remove_mode}" = full ] && [ -f /opt/bin/kvas ]; then
+	ready 'Полностью удаляем установленную версию (режим full)...'
+	kvas uninstall full yes &>/dev/null && when_ok || when_err
 fi
 
-#--------------------------------------------------------------------------------------------------------------
 ready "Устанавливаем новую версию пакета [${version}]..."
-{
-	opkg update &> /dev/null
-	opkg install "/opt/packages/${package_name}"
+opkg update &> /dev/null
+if opkg install --force-reinstall --force-downgrade "/opt/packages/${package_name}" > /tmp/kvas-upgrade-opkg.log 2>&1; then
+	when_ok
+else
+	when_err
+	print_error "opkg не установил пакет — работает прежняя версия. Лог: /tmp/kvas-upgrade-opkg.log"
+	tail -5 /tmp/kvas-upgrade-opkg.log
+	exit 1
+fi
 
-} &>/dev/null && when_ok || when_err
-
-#--------------------------------------------------------------------------------------------------------------
-connect_home_nets(){
-	# подключаем одну гостевую сеть к KVASECу, если она имеется
-	/opt/sbin/ip a | grep global | grep -v br0 | grep -qE 'br[1-9]' &&  {
-		clear
-		kvas vpn net add
-	}
-}
 
 if ! [ -f /opt/bin/kvas ] ; then
 	print_line
@@ -424,26 +408,17 @@ else
 		echo "и выполнить команду 'kvas setup ${UPDATE_MODE}'"
 		rci_post '[{"opkg": {"dns-override": true}},{"system": {"configuration": {"save": true}}}]' &>/dev/null 
 	}
-		# 	если файл пакета найден после установки пакета,
-	# 	то запускаем установку и затем тестирование пакета.
-	# 	kvas setup интерактивен — запускаем ТОЛЬКО при наличии TTY, иначе
-	# 	зависнет на read (cron/скрипт/оборванный ssh). Базовую настройку
-	# 	(dnsmasq/routing/watcher) уже выполнил postinst.
-	if [ -t 0 ] ; then
-		kvas setup "${UPDATE_MODE}" && {
-			# подключаем гостевые сети, если они имется
-			connect_home_nets
-			print_line
-			echo 'Тестируем настройки...'
-#			В данном случае, чтобы не печатать линию после
-#			окончания тестирования дважды передаем параметр upgrade
-			kvas test upgrade
-		}
-	else
+	# Интерактивный `kvas setup` после обновления больше не нужен: пакет ставится поверх,
+	# конфиги на месте, базовую настройку сделал postinst. (setup к тому же удаляет и
+	# переустанавливает dnsmasq-full.) Если же первичная настройка не завершалась — просим.
+	if ! grep -qE '^SETUP_FINISHED=.+' /opt/etc/kvas.conf 2>/dev/null ; then
 		print_line
-		echo "Не-интерактивный режим: пропускаем интерактивный kvas setup."
-		echo "При необходимости запустите 'kvas setup' вручную в терминале."
+		echo "Первичная настройка пакета не завершена — запустите 'kvas setup' в терминале."
 		print_line
+	elif [ -t 0 ] ; then
+		print_line
+		echo 'Тестируем настройки...'
+		kvas test upgrade
 	fi
 fi
 
