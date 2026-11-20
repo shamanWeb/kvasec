@@ -195,7 +195,8 @@ vpn_check(){
 
 				ready "Правила маркировки трафика в iptable"
 				[ -x "/opt/etc/ndm/netfilter.d/100-vpn-mark" ] && /opt/etc/ndm/netfilter.d/100-vpn-mark 2>/dev/null
-				if [ -n "${VPN_IPTABLES_CHAIN}" ] && [ "$(save_iptables | grep -c "${VPN_IPTABLES_CHAIN}")" -ge 2 ]; then
+				# VPN_IPTABLES_CHAIN нигде не определён — проверяем саму цепочку KVAS_MARK (поцепочечно)
+				if [ "$(iptables -t mangle -S KVAS_MARK 2>/dev/null | grep -c '^-A')" -ge 2 ]; then
 					when_ok "ДОБАВЛЕНЫ"
 				else
 					when_bad "ОТСУТСТВУЮТ"
