@@ -58,3 +58,7 @@ tar -tvzf "$UNPACKED/data.tar.gz" ./opt/apps/kvas/etc/conf/kvas.help | grep -q '
 rm -f opt/etc/conf/kvas.help
 if ./build.sh 1.2.43 >/dev/null 2>&1; then echo 'FAIL: build ignored a missing tracked file' >&2; exit 1; fi
 git checkout -q -- opt/etc/conf/kvas.help
+
+# 2.8: копии сторожа в init.d (rc.unslung запускает все S*) обезвреживаются
+tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'for _old in /opt/etc/init.d/S99kvas-awg-route.*; do' >/dev/null
+tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F '[ -f "${_old}" ] && chmod -x "${_old}"' >/dev/null

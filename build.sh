@@ -264,6 +264,11 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     # Держит default/rule/KVAS_MARK при переподключении туннеля и сбросах NDM.
     # Для не-opkgtun интерфейсов демон сам сразу выходит — ставим всегда.
     chmod +x /opt/etc/init.d/S99kvas-awg-route 2>/dev/null
+    # rc.unslung запускает ВСЕ исполняемые /opt/etc/init.d/S* — ручные копии сторожа
+    # (S99kvas-awg-route.bak, .pre-…) стартовали бы вторым сторожем, без флага паузы.
+    for _old in /opt/etc/init.d/S99kvas-awg-route.*; do
+        [ -f "\${_old}" ] && chmod -x "\${_old}"
+    done
     /opt/etc/init.d/S99kvas-awg-route restart >/dev/null 2>&1 &
 
     # Сборщик истории DPI-интерференции для дашборда веб-монитора (раз в минуту).
