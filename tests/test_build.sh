@@ -26,12 +26,17 @@ tar -xOzf "$UNPACKED/control.tar.gz" ./control | grep -Fx 'Version: 1.2.42' >/de
 tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'APP_VERSION=1.2.42' >/dev/null
 tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F '/opt/apps/kvas/bin/monitor/launcher.sh stop' >/dev/null
 tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'kvas-block-watch.pid' >/dev/null
+tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'dns_log_trim.sh' >/dev/null
+tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'kvas-dns-log.dnsmasq' >/dev/null
+tar -xOzf "$UNPACKED/control.tar.gz" ./postrm | grep -F 'kvas-dns-log.dnsmasq' >/dev/null
 tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F '[b]lock_watch.sh' >/dev/null
 tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F 'kvas-bypass-check.pid' >/dev/null
 tar -xOzf "$UNPACKED/control.tar.gz" ./postinst | grep -F '[b]ypass_check.sh' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/kvas' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/monitor/bypass_check.sh' >/dev/null
-tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/monitor/block_watch.sh' >/dev/null
+tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/monitor/dns_log_trim.sh' >/dev/null
+tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/etc/conf/kvas-dns-log.dnsmasq' >/dev/null
+if tar -tzf "$UNPACKED/data.tar.gz" | grep -F 'block_watch' >/dev/null; then echo 'block_watch.sh still packaged'; exit 1; fi
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/apps/kvas/bin/main/parental_dns' >/dev/null
 tar -tzf "$UNPACKED/data.tar.gz" | grep -Fx './opt/etc/ndm/netfilter.d/100-vpn-mark' >/dev/null
 if tar -tzf "$UNPACKED/data.tar.gz" | grep -q '/libs/vless$'; then echo "FAIL: test_build.sh:37" >&2; exit 1; fi
@@ -68,4 +73,7 @@ tar -tzf "$UNPACKED/control.tar.gz" | grep -qx './prerm'
 tar -tzf "$UNPACKED/control.tar.gz" | grep -qx './postrm'
 tar -xOzf "$UNPACKED/control.tar.gz" ./prerm | grep -F 'S99kvas-awg-route stop' >/dev/null
 tar -xOzf "$UNPACKED/control.tar.gz" ./postrm | grep -F "opkg list-installed 2>/dev/null | grep -q '^kvas ' && exit 0" >/dev/null
-if tar -xOzf "$UNPACKED/control.tar.gz" ./postrm | grep -qE 'KVAS_DNS|dnsmasq.d'; then echo 'FAIL: postrm трогает DNS' >&2; exit 1; fi
+# Перехват DNS и конфиги dnsmasq kvas postrm не трогает (иначе LAN без DNS). Исключение —
+# drop-in журнала DNS: без обрезки по крону он рос бы в RAM; его снятие = рестарт dnsmasq
+# с тем же конфигом (как после перезагрузки).
+if tar -xOzf "$UNPACKED/control.tar.gz" ./postrm | grep -E 'KVAS_DNS|dnsmasq.d' | grep -vqF 'kvas-dns-log.dnsmasq'; then echo 'FAIL: postrm трогает DNS' >&2; exit 1; fi

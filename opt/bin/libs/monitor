@@ -7,18 +7,11 @@ MONITOR_WWW_DIR=/opt/apps/kvas/bin/monitor/www
 MONITOR_PORT=8085
 MONITOR_WEB_LOG=/tmp/kvas-monitor-web.log
 
-monitor__enable_dns_log() {
-	# DO NOT modify system dnsmasq.conf or restart dnsmasq
-	# This breaks VPN routing!
-	# Just ensure log file exists
-	: > "$MONITOR_DNS_LOG" 2>/dev/null
-}
-
-monitor__disable_dns_log() {
-	# DO NOT modify system dnsmasq.conf or restart dnsmasq
-	# This breaks VPN routing!
-	rm -f "$MONITOR_DNS_LOG" 2>/dev/null
-}
+# Журнал DNS ведёт dnsmasq постоянно (drop-in kvas-dns-log.dnsmasq, ставит postinst;
+# размер держит cron dns_log_trim.sh). Здесь его НЕ обнуляем и НЕ удаляем: dnsmasq
+# держит файл открытым — после rm писал бы в удалённый inode до своего рестарта.
+monitor__enable_dns_log() { :; }
+monitor__disable_dns_log() { :; }
 
 monitor__get_conntrack() {
 	local ips="$1"

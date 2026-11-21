@@ -16,6 +16,10 @@ MAX_DOMAINS=${BYPASS_MAX_DOMAINS:-40}
 MODE=${BYPASS_MODE:-mixed}
 BYPASS_DOMAIN=${BYPASS_DOMAIN:-}
 KVAS_CONF=${KVAS_CONF:-/opt/etc/kvas.conf}
+# Резолвим через kvas dnsmasq, как LAN-клиенты: системный resolv.conf роутера
+# смотрит на DNS провайдера, а тот для заблокированных доменов отдаёт заглушку.
+DNS_SERVER=${BYPASS_DNS_SERVER:-127.0.0.1}
+DNS_PORT=${BYPASS_DNS_PORT:-9753}
 TMP_FILE="${RESULT_FILE}.$$"
 
 # shellcheck source=adguard_querylog.sh
@@ -64,7 +68,7 @@ in_vpn_list() {
 resolve_ipv4() {
     local domain="$1" out
     if command -v dig >/dev/null 2>&1; then
-        out=$(dig +time=2 +tries=1 +short A "$domain" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+        out=$(dig +time=2 +tries=1 +short A "$domain" @"$DNS_SERVER" -p "$DNS_PORT" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
     else
         out=$(nslookup "$domain" 127.0.0.1 2>/dev/null | awk '/^Address: / {print $2} /^Address [0-9]+: / {print $3}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tail -1)
     fi
@@ -75,16 +79,13 @@ http_probe() {
     # Output is HTTP-code|curl-exit-code.  The latter lets the UI distinguish a
     # timeout, TCP refusal and TLS failure instead of calling every failure a
     # possible block.  A 4xx response still proves the resource was reached.
-    local domain="$1" iface="${2:-}" code rc
-    if [ -n "$iface" ]; then
-        code=$(curl -sS -L -r 0-0 --connect-timeout 4 --max-time 8 \
-            --interface "$iface" -o /dev/null -w '%{http_code}' "https://${domain}/" 2>/dev/null)
-        rc=$?
-    else
-        code=$(curl -sS -L -r 0-0 --connect-timeout 4 --max-time 8 \
-            -o /dev/null -w '%{http_code}' "https://${domain}/" 2>/dev/null)
-        rc=$?
-    fi
+    # $3 — адрес из kvas dnsmasq (--resolve): без него curl спросил бы DNS провайдера.
+    local domain="$1" iface="${2:-}" ip="${3:-}" code rc
+    set -- -sS -L -r 0-0 --connect-timeout 4 --max-time 8 -o /dev/null -w '%{http_code}'
+    [ -n "$ip" ] && set -- "$@" --resolve "${domain}:443:${ip}"
+    [ -n "$iface" ] && set -- "$@" --interface "$iface"
+    code=$(curl "$@" "https://${domain}/" 2>/dev/null)
+    rc=$?
     case "$code" in [1-5][0-9][0-9]) :;; *) code=000;; esac
     printf '%s|%s' "$code" "$rc"
 }
@@ -154,16 +155,46 @@ domain_filter() {
     '
 }
 
+# Собственные IPv4 роутера: его запросы (ipset-обход списка, эта же проверка)
+# не история устройств и вытеснили бы её из «последних 100».
+router_ips() {
+    printf '127.0.0.1\n'
+    ip -4 -o addr show 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4 }'
+}
+
+# Журнал dnsmasq (log-queries, ведётся постоянно в RAM — kvas-dns-log.dnsmasq):
+# домены, запрошенные устройствами, по времени последнего запроса (старые → новые).
+# Без собственных запросов роутера, *.arpa и доменов, которые dnsmasq сам
+# ответил 0.0.0.0/:: (adblock, DoH-блок): проверять их доступность бессмысленно.
+dnsmasq_query_domains() {
+    [ -s "$DNS_LOG" ] || return 0
+    tail -n "${BYPASS_DNS_LOG_LINES:-20000}" "$DNS_LOG" 2>/dev/null | \
+        awk -v self="$(router_ips | tr '\n' ' ')" '
+            BEGIN { n = split(self, a, " "); for (i = 1; i <= n; i++) me[a[i]] = 1 }
+            {
+                for (i = 1; i < NF; i++) {
+                    if ($i ~ /^query\[/ && $(i + 2) == "from") {
+                        d = tolower($(i + 1)); src = $(i + 3)
+                        if (!(src in me) && d !~ /\.arpa$/) last[d] = NR
+                        break
+                    }
+                    if ($(i + 1) == "is" && ($(i + 2) == "0.0.0.0" || $(i + 2) == "::")) {
+                        blocked[tolower($i)] = 1
+                        break
+                    }
+                }
+            }
+            END { for (d in last) if (!(d in blocked)) print last[d], d }
+        ' | sort -n | cut -d' ' -f2
+}
+
 observed_dns_domains() {
     if adguard_querylog_active; then
         # AdGuard owns DNS: its log is authoritative and a leftover dnsmasq
         # file must not add obsolete domains to the check.
         adguard_query_domains
     else
-        {
-        [ -s "$DNS_LOG" ] && tail -2000 "$DNS_LOG" 2>/dev/null | sed -n 's/.*query\[[^]]*\] \([^ ]*\) from.*/\1/p'
-        command -v logread >/dev/null 2>&1 && logread 2>/dev/null | grep 'dnsmasq.*query\[' | sed -n 's/.*query\[[^]]*\] \([^ ]*\) from.*/\1/p'
-        } | domain_filter
+        dnsmasq_query_domains | domain_filter
     fi
 }
 
@@ -214,7 +245,7 @@ while IFS= read -r domain; do
         detail="DNS не вернул IPv4-адрес"
     elif [ "$listed" = true ]; then
         if awg_is_up "$AWG_IFACE"; then
-            tunnel_probe=$(http_probe "$domain" "$AWG_IFACE")
+            tunnel_probe=$(http_probe "$domain" "$AWG_IFACE" "$ip")
             tunnel=${tunnel_probe%%|*}
             tunnel_rc=${tunnel_probe#*|}
             if [ "$tunnel" = "000" ]; then
@@ -231,13 +262,13 @@ while IFS= read -r domain; do
             detail="в VPN-списке, но AWG-туннель отключён"
         fi
     else
-        direct_probe=$(http_probe "$domain")
+        direct_probe=$(http_probe "$domain" "" "$ip")
         direct=${direct_probe%%|*}
         direct_rc=${direct_probe#*|}
         if [ "$direct" = "000" ]; then
             direct_detail=$(probe_failure_detail "$direct_rc" "напрямую")
             if awg_is_up "$AWG_IFACE"; then
-                tunnel_probe=$(http_probe "$domain" "$AWG_IFACE")
+                tunnel_probe=$(http_probe "$domain" "$AWG_IFACE" "$ip")
                 tunnel=${tunnel_probe%%|*}
                 tunnel_rc=${tunnel_probe#*|}
                 if [ "$tunnel" = "000" ]; then

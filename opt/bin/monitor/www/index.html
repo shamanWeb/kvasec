@@ -377,16 +377,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     </div>
     <div id="bypassCheckList" class="host-list" style="max-height:500px;margin-top:12px;"><div class="status">Нет результатов</div></div>
   </div>
-  <div class="card">
-    <h3>Последняя минута: подозрительные блокировки</h3>
-    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Watcher собирает только TCP-попытки без ответа. Это признак возможной блокировки, но сайт также может быть временно недоступен.</p>
-    <div class="card-row" style="gap:8px;flex-wrap:wrap;">
-      <button class="btn btn-sm success" onclick="blockWatchStart(this)">Включить</button>
-      <button class="btn btn-sm danger" onclick="blockWatchStop(this)">Выключить</button>
-      <span id="blockWatchStatus" class="status">Выключен</span>
-    </div>
-    <div id="blockWatchList" class="host-list" style="max-height:300px;margin-top:12px;"><div class="status">Нет событий</div></div>
-  </div>
 </div>
 
 <!-- ========== TAB: Мониторинг трафика ========== -->
@@ -570,7 +560,6 @@ function showMain() {
   loadAdguardStatus();
   loadAdblockStatus();
   fetchDevices();
-  blockWatchPoll();
   startDashboard();  // вкладка "Дашборд" открыта по умолчанию
   logMsg('log-info', 'Мониторинг трафика KVASEC');
 }
@@ -638,11 +627,11 @@ function switchTab(name) {
     // Проверка идёт в фоне на роутере: после перезагрузки страницы/смены вкладки
     // подхватываем её прогресс или последний результат, а не «ещё не запускалась».
     if (!bypassPollTimer) bypassCheckPoll(true);
-    blockWatchPoll();
-    if (!blockWatchTimer) blockWatchTimer = setInterval(blockWatchPoll, 3000);
-  } else if (blockWatchTimer) {
-    clearInterval(blockWatchTimer);
-    blockWatchTimer = null;
+    dpiPoll();
+    if (!bypassDpiTimer) bypassDpiTimer = setInterval(dpiPoll, 3000);
+  } else if (bypassDpiTimer) {
+    clearInterval(bypassDpiTimer);
+    bypassDpiTimer = null;
   }
   if (name === 'adblock') loadAdblockStatus();
   if (name === 'devices') loadDeviceModes();
@@ -901,7 +890,7 @@ function doRestore(btn) {
 /* ========== BYPASS MONITOR ========== */
 var bypassPollTimer = null;
 var bypassCheckMode = null;
-var blockWatchTimer = null;
+var bypassDpiTimer = null;
 
 function bypassCheckStop(btn) {
   apiPostBtn('/cgi-bin/manage.sh?action=bypass_check_stop', btn, function(d){
@@ -912,19 +901,6 @@ function bypassCheckStop(btn) {
   });
 }
 
-function blockWatchStart(btn) {
-  apiPostBtn('/cgi-bin/manage.sh?action=block_watch_start', btn, function(d){
-    if (!d.ok) { alert(d.error || 'Не удалось включить watcher'); return; }
-    if (blockWatchTimer) clearInterval(blockWatchTimer);
-    blockWatchPoll(); blockWatchTimer = setInterval(blockWatchPoll, 3000);
-  });
-}
-function blockWatchStop(btn) {
-  apiPostBtn('/cgi-bin/manage.sh?action=block_watch_stop', btn, function(d){
-    if (blockWatchTimer) { clearInterval(blockWatchTimer); blockWatchTimer = null; }
-    document.getElementById('blockWatchStatus').textContent = d.ok ? 'Выключен' : (d.error || 'Ошибка');
-  });
-}
 function fmtHsAge(sec) {
   if (sec === undefined || sec === null || sec < 0) return {t:'нет данных', c:'#8b949e'};
   if (sec < 180) return {t:sec + ' сек назад', c:'#3fb950'};
@@ -1049,36 +1025,6 @@ function loadDpiHistory() {
   });
 }
 
-function blockWatchPoll() {
-  dpiPoll();
-  api('/cgi-bin/manage.sh?action=block_watch_status', function(d){
-    var status = document.getElementById('blockWatchStatus'), list = document.getElementById('blockWatchList');
-    if (!d.ok) { status.textContent = d.error || 'Ошибка'; return; }
-    status.textContent = d.running ? 'Включен, окно 60 секунд' : 'Выключен';
-    list.innerHTML = '';
-    var rows = d.events || [];
-    if (!rows.length) { list.innerHTML = '<div class="status">Подозрительных TCP-попыток за последнюю минуту нет</div>'; return; }
-    rows.forEach(function(row){
-      var item = document.createElement('div'); item.style.cssText = 'padding:6px 8px;border-bottom:1px solid #30363d;display:flex;gap:8px;flex-wrap:wrap;';
-      var target = row.domain || row.destination;
-      var owner = !row.domain && row.owner ? ' (PTR: ' + row.owner + ')' : '';
-      var text = document.createElement('span'); text.style.color = '#f85149'; text.textContent = target + owner + ' — нет ответа, попыток: ' + row.attempts + ' (клиент ' + row.src + ')'; item.appendChild(text);
-      if (row.domain) {
-        var check = document.createElement('button');
-        check.className = 'btn btn-sm'; check.textContent = 'Проверить доступ';
-        check.onclick = function(){ bypassCheckStart('domain', check, row.domain); };
-        item.appendChild(check);
-        var action = document.createElement('button');
-        action.className = 'btn btn-sm ' + (row.in_vpn ? 'danger' : 'primary');
-        action.textContent = row.in_vpn ? 'Убрать из VPN' : 'Добавить *.domain в VPN';
-        action.onclick = function(){ if (row.in_vpn) bypassRemoveDomain(row.domain, action); else bypassAddDomain(row.domain, action); };
-        item.appendChild(action);
-      }
-      list.appendChild(item);
-    });
-  });
-}
-
 function bypassCheckStart(mode, btn, domain) {
   var label = mode === 'all' ? 'весь VPN-список' : (mode === 'domain' ? domain : 'последние 100 DNS-доменов');
   if (!confirm('Проверить ' + label + '? Проверка выполняется в фоне.')) return;
@@ -1157,7 +1103,7 @@ function renderBypassResults(rows) {
   el.innerHTML = '';
   if (!rows.length) {
     if (bypassCheckMode === 'dns') {
-      el.innerHTML = '<div class="status">История DNS пуста. Журнал DNS-запросов ведётся только пока включён сбор «Последняя минута: подозрительные блокировки» (карточка ниже). Включите его, походите по сайтам минуту и повторите проверку.</div>';
+      el.innerHTML = '<div class="status">История DNS пуста: устройства в сети ещё не делали DNS-запросов через роутер (журнал в памяти, после перезагрузки начинается заново). Откройте пару сайтов и повторите проверку.</div>';
     } else {
       el.innerHTML = '<div class="status">Нет доменов из VPN-списка и DNS-лога</div>';
     }

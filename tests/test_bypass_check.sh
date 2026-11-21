@@ -94,3 +94,39 @@ wait "$orphan_pid" || :
 grep -Fx 999999 "$WORK/orphan.pid" >/dev/null
 test -e "$WORK/orphan.lock"
 test ! -e "$WORK/orphan.json"
+
+# «Последние 100 DNS»: только запросы устройств (без 127.0.0.1 и адресов роутера),
+# без *.arpa и доменов, которые dnsmasq сам ответил 0.0.0.0/:: (adblock), порядок —
+# по последнему запросу. Резолв — через kvas dnsmasq, адрес передаётся curl (--resolve).
+cat > "$WORK/history.log" <<'LOG'
+Nov 21 10:00:00 dnsmasq[9]: 1 192.168.1.20/5000 query[A] old.example from 192.168.1.20
+Nov 21 10:00:01 dnsmasq[9]: 2 127.0.0.1/5001 query[A] router-own.example from 127.0.0.1
+Nov 21 10:00:02 dnsmasq[9]: 3 192.168.1.20/5002 query[A] ads.example from 192.168.1.20
+Nov 21 10:00:02 dnsmasq[9]: 3 192.168.1.20/5002 /opt/etc/adblock/ads.kvas.list ads.example is 0.0.0.0
+Nov 21 10:00:03 dnsmasq[9]: 4 192.168.1.20/5003 query[PTR] 1.1.168.192.in-addr.arpa from 192.168.1.20
+Nov 21 10:00:04 dnsmasq[9]: 5 192.168.1.30/5004 query[AAAA] new.example from 192.168.1.30
+Nov 21 10:00:04 dnsmasq[9]: 5 192.168.1.30/5004 reply new.example is 203.0.113.7
+Nov 21 10:00:05 dnsmasq[9]: 6 192.168.1.20/5005 query[A] OLD.example from 192.168.1.20
+Nov 21 10:00:06 dnsmasq[9]: 7 192.168.1.1/5006 query[A] router-lan.example from 192.168.1.1
+LOG
+mkdir -p "$WORK/histbin"; cp "$WORK/bin/curl" "$WORK/histbin/"
+printf '%s\n' '#!/bin/sh' "echo \"\$*\" >> '$WORK/dig.args'" 'echo 203.0.113.10' > "$WORK/histbin/dig"
+printf '%s\n' '#!/bin/sh' 'case "$*" in *addr*) echo "2: br0    inet 192.168.1.1/24 brd 192.168.1.255 scope global br0";; *) echo "10: opkgtun10: <UP>";; esac' > "$WORK/histbin/ip"
+printf '%s\n' '#!/bin/sh' "echo \"\$*\" >> '$WORK/curl.args'" 'echo 200' > "$WORK/histbin/curl"
+chmod +x "$WORK/histbin/"*
+PATH="$WORK/histbin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/empty.list" DNS_LOG="$WORK/history.log" BYPASS_RESULT_FILE="$WORK/history.json" BYPASS_PROGRESS_FILE="$WORK/history.progress" BYPASS_LOCK_FILE="$WORK/history.lock" BYPASS_PID_FILE="$WORK/history.pid" BYPASS_MODE=dns sh "$CHECKER"
+domains=$(grep -o '"domain":"[^"]*"' "$WORK/history.json" | cut -d'"' -f4 | tr '\n' ' ')
+[ "$domains" = "new.example old.example " ] || { echo "unexpected DNS history: $domains"; exit 1; }
+grep -F '@127.0.0.1 -p 9753' "$WORK/dig.args" >/dev/null
+grep -F -- '--resolve new.example:443:203.0.113.10' "$WORK/curl.args" >/dev/null
+
+# dns_log_trim.sh: обрезает на месте (тот же inode — dnsmasq держит файл открытым)
+# и только при превышении запаса.
+TRIM="$ROOT/opt/bin/monitor/dns_log_trim.sh"
+seq 1 120 > "$WORK/trim.log"; KVAS_DNS_LOG="$WORK/trim.log" KVAS_DNS_LOG_MAX_LINES=100 sh "$TRIM"
+[ "$(wc -l < "$WORK/trim.log")" -eq 120 ] || { echo "trimmed below threshold"; exit 1; }
+seq 1 130 > "$WORK/trim.log"; inode_before=$(ls -i "$WORK/trim.log" | cut -d' ' -f1)
+KVAS_DNS_LOG="$WORK/trim.log" KVAS_DNS_LOG_MAX_LINES=100 sh "$TRIM"
+[ "$(wc -l < "$WORK/trim.log")" -eq 100 ] || { echo "not trimmed"; exit 1; }
+[ "$(head -1 "$WORK/trim.log")" = 31 ] || { echo "kept wrong lines"; exit 1; }
+[ "$(ls -i "$WORK/trim.log" | cut -d' ' -f1)" = "$inode_before" ] || { echo "trim replaced the inode"; exit 1; }

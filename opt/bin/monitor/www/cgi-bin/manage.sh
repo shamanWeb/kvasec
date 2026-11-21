@@ -13,10 +13,6 @@ BYPASS_CHECK_PID=/tmp/kvas-bypass-check.pid
 BYPASS_CHECK_RESULT=/tmp/kvas-bypass-check.json
 BYPASS_CHECK_PROGRESS=/tmp/kvas-bypass-check.progress
 BYPASS_CHECK_LOG=/tmp/kvas-bypass-check.log
-BLOCK_WATCH_BIN=/opt/apps/kvas/bin/monitor/block_watch.sh
-BLOCK_WATCH_PID=/tmp/kvas-block-watch.pid
-BLOCK_WATCH_EVENTS=/tmp/kvas-block-watch.events
-BLOCK_WATCH_LOCK_DIR=/tmp/kvas-block-watch.lock.d
 KVAS_LIST=/opt/etc/kvas.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
 CONF_LOCK_DIR=/tmp/kvas_conf.lock
@@ -213,39 +209,6 @@ clear_stale_bypass_check() {
 	bypass_check_running && return 1
 	rm -f "$BYPASS_CHECK_PID" "$BYPASS_CHECK_LOCK"
 	rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null || true
-	return 0
-}
-
-block_watch_running() {
-	local pid
-	pid=$(cat "$BLOCK_WATCH_PID" 2>/dev/null)
-	case "$pid" in
-		''|*[!0-9]*) return 1 ;;
-	esac
-	[ -r "/proc/$pid/cmdline" ] && \
-		tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]lock_watch.sh' && \
-		kill -0 "$pid" 2>/dev/null
-}
-
-stop_block_watch() {
-	local pid
-	pid=$(cat "$BLOCK_WATCH_PID" 2>/dev/null)
-	case "$pid" in
-		''|*[!0-9]*) return 0 ;;
-	esac
-	if [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]lock_watch.sh'; then
-		kill "$pid" 2>/dev/null || true
-		for _ in 1 2 3; do
-			kill -0 "$pid" 2>/dev/null || break
-			sleep 1
-		done
-	fi
-}
-
-clear_stale_block_watch() {
-	block_watch_running && return 1
-	rm -f "$BLOCK_WATCH_PID"
-	rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null || true
 	return 0
 }
 
@@ -758,47 +721,6 @@ main() {
 			else
 				echo '{"ok":true,"running":false,"checked":[]}'
 			fi
-			;;
-		block_watch_start)
-			check_token "$token"
-			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
-			clear_stale_block_watch || json_error "watcher already running"
-			if ! mkdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; then json_error "watcher already running"; fi
-			if [ ! -x "$BLOCK_WATCH_BIN" ]; then rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; json_error "block watcher is not installed"; fi
-			BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" BLOCK_WATCH_LOCK_HELD=1 "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 &
-			printf '%s\n' "$!" > "$BLOCK_WATCH_PID"
-			json_ok "block watcher started"
-			;;
-		block_watch_stop)
-			check_token "$token"
-			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
-			stop_block_watch
-			clear_stale_block_watch
-			json_ok "block watcher stopped"
-			;;
-		block_watch_status)
-			check_token "$token"
-			watch_running=false
-			block_watch_running && watch_running=true
-			[ "$watch_running" = false ] && clear_stale_block_watch
-			printf '{"ok":true,"running":%s,"events":[' "$watch_running"
-			first=1
-			now=$(date +%s)
-			if [ -s "$BLOCK_WATCH_EVENTS" ]; then
-				awk -F'|' -v cutoff=$((now - 60)) -v map_cutoff=$((now - 600)) '
-					$1>=map_cutoff && $2=="map" { domain[$3]=$4 }
-					$1>=map_cutoff && $2=="ptr" { owner[$3]=$4 }
-					$1>=cutoff && $2=="fail" { key=$3"|"$4; count[key]++ }
-					END { for (key in count) { split(key,a,"|"); ip=substr(a[2],1,index(a[2],":")-1); print a[1]"|"a[2]"|"(domain[ip] ? domain[ip] : "")"|"(owner[ip] ? owner[ip] : "")"|"count[key] } }
-				' "$BLOCK_WATCH_EVENTS" | while IFS='|' read -r src destination domain owner attempts; do
-					in_vpn=false
-					if [ -n "$domain" ] && { grep -qxF "$domain" "$KVAS_LIST" 2>/dev/null || grep -qxF "*.${domain}" "$KVAS_LIST" 2>/dev/null; }; then in_vpn=true; fi
-					[ "$first" -eq 0 ] && printf ','
-					first=0
-					printf '{"src":%s,"destination":%s,"domain":%s,"owner":%s,"attempts":%s,"in_vpn":%s}' "$(json_str "$src")" "$(json_str "$destination")" "$(json_str "$domain")" "$(json_str "$owner")" "${attempts:-1}" "$in_vpn"
-				done
-			fi
-			echo ']}'
 			;;
 		tunnel_dpi)
 			# Индикатор DPI-интерференции (РКН/ТСПУ) на не-NDM AWG-туннеле.

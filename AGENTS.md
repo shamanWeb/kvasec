@@ -272,11 +272,22 @@ refresh` её пересоздаёт, так что фикс подхватыв�
 
 **Как наполняется**: вкладка «Мониторинг обхода» → «Проверить последние 100 DNS» читает
 журнал DNS-запросов (`bypass_check.sh` → `observed_dns_domains`). Источник: если активен
-AdGuard — его query-лог; иначе `/tmp/kvas-dns.log` (dnsmasq `log-queries`). **Лог DNS —
-opt-in и временный**: его создаёт/удаляет `block_watch.sh` (`enable/disable_dns_capture`),
-т.е. он существует ТОЛЬКО пока включён watcher «Последняя минута: подозрительные
-блокировки». Watcher выключен → лога нет → «последние 100 DNS» пусто (by design: постоянный
-`log-queries` писал бы во флеш).
+AdGuard — его query-лог; иначе `/tmp/kvas-dns.log`. **С 1.4.5 журнал постоянный**: drop-in
+`/opt/etc/dnsmasq.d/kvas-dns-log.dnsmasq` (`log-queries=extra`, `log-facility=/tmp/kvas-dns.log`,
+`log-async`) ставит postinst (рестарт dnsmasq — только если drop-in новый/изменился и dnsmasq
+запущен). Файл в RAM, не на флешке; размер держит cron `monitor/dns_log_trim.sh` (20000 строк,
+обрезка НА МЕСТЕ через `cat >` — dnsmasq держит файл открытым; `rm`/`mv` журнала запрещены, иначе
+dnsmasq пишет в удалённый inode до рестарта — поэтому `monitor__enable/disable_dns_log` пустые).
+postrm снимает drop-in и cron-строку. Журнал же даёт имена доменов мониторингу трафика (data.sh).
+
+В историю идут только запросы устройств: без `127.0.0.1`/адресов роутера (ipset-обход списка),
+`*.arpa` и доменов, которые dnsmasq сам ответил `0.0.0.0`/`::` (adblock, DoH-блок); порядок — по
+последнему запросу. Резолв в проверке — через kvas dnsmasq `127.0.0.1:9753` (`dig @… -p`) +
+`curl --resolve`: `resolv.conf` роутера смотрит на DNS провайдера, тот для заблокированных
+доменов отдаёт заглушку → ложный «через AWG не открылся».
+
+Сбор «Последняя минута: подозрительные блокировки» (`block_watch.sh`, conntrack UNREPLIED)
+удалён 2026-11-21 по решению владельца; postinst гасит его при обновлении со старых версий.
 
 ### Фикс: «призрак» AdGuard подавлял живой захват DNS
 
@@ -289,9 +300,7 @@ query-лог протухает, а код всё равно считал его
 **Фикс**: `adguard_querylog_active` теперь требует И живой процесс, И свежий лог
 (`find "$ADGUARD_QUERY_LOG" -mmin -${ADGUARD_QUERYLOG_FRESH_MIN:-60}`). Протухший AdGuard →
 считается неактивным → используется dnsmasq-захват.
-**Файлы**: `opt/bin/monitor/adguard_querylog.sh` (`adguard_querylog_active`);
-`opt/bin/monitor/www/index.html` (`bypassCheckMode` + понятное сообщение при пустой истории
-DNS с подсказкой включить watcher).
+**Файлы**: `opt/bin/monitor/adguard_querylog.sh` (`adguard_querylog_active`).
 
 ## Изоляция устройств от админки роутера (вкладка «Устройства», 2026-10-14)
 
