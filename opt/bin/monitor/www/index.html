@@ -28,7 +28,7 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 /* Cards */
 .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
 .card-pair { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
-.card-pair > .card { flex: 1 1 360px; margin-bottom: 0; }
+.card-pair > .card { flex: 1 1 320px; margin-bottom: 0; }
 .card-col { display: flex; flex-direction: column; align-items: stretch; gap: 8px; max-width: 320px; margin: 6px 0; }
 .card h3 { color: #c9d1d9; font-size: 14px; margin-bottom: 10px; }
 .card-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
@@ -154,29 +154,12 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <div class="legend" style="margin-top:10px;"><span><span class="sw" style="background:#58a6ff"></span>% битых пакетов</span></div>
     <canvas id="chart-dpi-loss" style="width:100%;height:110px;display:block;"></canvas>
   </div>
-
-  <div class="card">
-    <h3>Ротация порта туннеля <span style="font-size:12px;color:#8b949e;">(обход DPI-заморозки)</span></h3>
-    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Периодически меняет локальный порт AmneziaWG — для ТСПУ это новый поток, что сбрасывает поведенческую «заморозку» (туннель «поднят», но данные молча не идут). Цена — короткий разрыв ~1–2 с при каждой смене. По умолчанию каждые 10 минут.</p>
-    <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;">
-      <label>Статус:</label>
-      <span class="value" id="rotateStatus" style="color:#8b949e;">-</span>
-      <input type="number" id="rotateInterval" min="1" value="10" style="width:64px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;" title="интервал ротации, минут">
-      <span style="font-size:12px;color:#8b949e;">мин</span>
-      <button class="btn btn-sm success" onclick="rotateOn(this)">Включить</button>
-      <button class="btn btn-sm danger" onclick="rotateOff(this)">Выключить</button>
-    </div>
-    <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;">
-      <label>Текущий порт:</label><span class="value" id="rotatePort">-</span>
-    </div>
-    <div id="rotateMsg" class="msg"></div>
-  </div>
 </div>
 
 <!-- ========== TAB: Управление ========== -->
 <div id="tab-manage" class="tab-content">
 
-  <!-- Состояние и Действия — в одну строку; на узком экране переносятся друг под друга -->
+  <!-- Состояние, Действия, Ротация — в одну строку; на узком экране переносятся -->
   <div class="card-pair">
     <!-- System Status -->
     <div class="card">
@@ -200,6 +183,25 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
         <button class="btn btn-sm primary" onclick="doKvasInit(this)">Перезагрузка KVASEC — kvas init</button>
       </div>
       <div id="sysMsg" class="msg"></div>
+    </div>
+    <div class="card">
+      <h3>Ротация порта туннеля <span style="font-size:12px;color:#8b949e;">(обход DPI-заморозки)</span></h3>
+      <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Периодически меняет локальный порт AmneziaWG — для ТСПУ это новый поток, что сбрасывает поведенческую «заморозку» (туннель «поднят», но данные молча не идут). Цена — короткий разрыв ~1–2 с при каждой смене. По умолчанию каждые 10 минут.</p>
+      <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;">
+        <label>Статус:</label>
+        <span class="value" id="rotateStatus" style="color:#8b949e;">-</span>
+      </div>
+      <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;">
+        <label>Интервал:</label>
+        <input type="number" id="rotateInterval" min="1" value="10" style="width:64px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;" title="интервал ротации, минут">
+        <span style="font-size:12px;color:#8b949e;">мин</span>
+        <button class="btn btn-sm success" onclick="rotateOn(this)">Включить</button>
+        <button class="btn btn-sm danger" onclick="rotateOff(this)">Выключить</button>
+      </div>
+      <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;">
+        <label>Текущий порт:</label><span class="value" id="rotatePort">-</span>
+      </div>
+      <div id="rotateMsg" class="msg"></div>
     </div>
   </div>
 
