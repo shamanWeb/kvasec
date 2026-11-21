@@ -62,3 +62,35 @@ grep -F '"domain":"adguard.example"' "$WORK/adguard.json" >/dev/null
 # VPN list.  This is the path used by the "Проверить доступ" button.
 PATH="$WORK/bin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/empty.list" BYPASS_RESULT_FILE="$WORK/one.json" BYPASS_LOCK_FILE="$WORK/one.lock" BYPASS_MODE=domain BYPASS_DOMAIN=direct-blocked.example sh "$CHECKER"
 grep -F '"domain":"direct-blocked.example","in_vpn":false,"status":"direct_failed_awg_ok"' "$WORK/one.json" >/dev/null
+
+# «Остановить проверку»: SIGTERM (+ потомкам, как stop_bypass_check) завершает
+# прогон. Раньше ловушка TERM без exit лишь чистила файлы, и цикл шёл дальше.
+printf '%s\n' '#!/bin/sh' 'sleep 5; echo 200' > "$WORK/bin/slowcurl"
+mkdir -p "$WORK/slowbin"; cp "$WORK/bin/dig" "$WORK/bin/ip" "$WORK/slowbin/"; cp "$WORK/bin/slowcurl" "$WORK/slowbin/curl"
+chmod +x "$WORK/slowbin/curl"
+printf '%s\n' slow-one.example slow-two.example > "$WORK/slow.list"
+kill_tree() {
+    for _c in $(awk -v p="$1" '$4 == p { print $1 }' /proc/[0-9]*/stat 2>/dev/null); do
+        kill_tree "$_c"; kill "$_c" 2>/dev/null || true
+    done
+}
+PATH="$WORK/slowbin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/slow.list" BYPASS_RESULT_FILE="$WORK/slow.json" BYPASS_PROGRESS_FILE="$WORK/slow.progress" BYPASS_LOCK_FILE="$WORK/slow.lock" BYPASS_PID_FILE="$WORK/slow.pid" BYPASS_MODE=all sh "$CHECKER" &
+slow_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/slow.progress" ] && break; sleep 0.2; done
+kill "$slow_pid"; kill_tree "$slow_pid"
+for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$slow_pid" 2>/dev/null || break; sleep 0.2; done
+if kill -0 "$slow_pid" 2>/dev/null; then echo "checker survived SIGTERM"; kill -9 "$slow_pid"; exit 1; fi
+test ! -e "$WORK/slow.json"
+test ! -e "$WORK/slow.pid"
+grep -Fx '0|2' "$WORK/slow.progress" >/dev/null
+
+# Прогон, у которого новый старт забрал PID-файл, не трогает чужие PID/лок/результат.
+printf '%s\n' '#!/bin/sh' 'sleep 1; echo 200' > "$WORK/slowbin/curl"
+PATH="$WORK/slowbin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/slow.list" BYPASS_RESULT_FILE="$WORK/orphan.json" BYPASS_PROGRESS_FILE="$WORK/orphan.progress" BYPASS_LOCK_FILE="$WORK/orphan.lock" BYPASS_PID_FILE="$WORK/orphan.pid" BYPASS_MODE=all sh "$CHECKER" &
+orphan_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/orphan.pid" ] && break; sleep 0.1; done
+echo 999999 > "$WORK/orphan.pid"
+wait "$orphan_pid" || :
+grep -Fx 999999 "$WORK/orphan.pid" >/dev/null
+test -e "$WORK/orphan.lock"
+test ! -e "$WORK/orphan.json"

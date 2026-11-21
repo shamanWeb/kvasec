@@ -166,6 +166,15 @@ valid_ifname() {
 	return 0
 }
 
+# Потомки процесса по /proc/<pid>/stat (поле 4 — PPID); pgrep -P есть не везде.
+kill_descendants() {
+	local c
+	for c in $(awk -v p="$1" '$4 == p { print $1 }' /proc/[0-9]*/stat 2>/dev/null); do
+		kill_descendants "$c"
+		kill "$c" 2>/dev/null || true
+	done
+}
+
 # Kill only the checker that KVAS started.  The cmdline guard prevents a stale
 # PID file from ever signalling an unrelated router process.
 stop_bypass_check() {
@@ -176,6 +185,9 @@ stop_bypass_check() {
 	esac
 	if [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]ypass_check.sh'; then
 		kill "$pid" 2>/dev/null || true
+		# ash выполняет ловушку TERM только после текущей команды, а это curl
+		# с таймаутом до 8 с — гасим и потомков ($(...)-подоболочки, curl).
+		kill_descendants "$pid"
 		for _ in 1 2 3; do
 			kill -0 "$pid" 2>/dev/null || break
 			sleep 1
@@ -829,9 +841,9 @@ main() {
 			# История DPI-интерференции для графика (собирается cron-скриптом
 			# dpi_history.sh раз в минуту, кольцевой буфер 1440 точек = 24ч).
 			check_token "$token"
-			if [ -s /opt/tmp/dpi-history.jsonl ]; then
+			if [ -s /tmp/dpi-history.jsonl ]; then
 				printf '{"ok":true,"points":['
-				awk 'NR>1{printf ","} {printf "%s",$0}' /opt/tmp/dpi-history.jsonl
+				awk 'NR>1{printf ","} {printf "%s",$0}' /tmp/dpi-history.jsonl
 				printf ']}\n'
 			else
 				echo '{"ok":true,"points":[]}'

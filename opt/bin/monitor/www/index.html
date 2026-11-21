@@ -635,6 +635,9 @@ function switchTab(name) {
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('active', t.dataset.tab === name)});
   document.querySelectorAll('.tab-content').forEach(function(t){t.classList.toggle('active', t.id === 'tab-' + name)});
   if (name === 'bypass') {
+    // Проверка идёт в фоне на роутере: после перезагрузки страницы/смены вкладки
+    // подхватываем её прогресс или последний результат, а не «ещё не запускалась».
+    if (!bypassPollTimer) bypassCheckPoll(true);
     blockWatchPoll();
     if (!blockWatchTimer) blockWatchTimer = setInterval(blockWatchPoll, 3000);
   } else if (blockWatchTimer) {
@@ -1091,7 +1094,8 @@ function bypassCheckStart(mode, btn, domain) {
     document.getElementById('bypassCheckList').innerHTML = '<div class="status">Проверяем доступность…</div>';
     if (mode === 'domain') switchTab('bypass');
     if (bypassPollTimer) clearInterval(bypassPollTimer);
-    bypassCheckPoll();
+    // Без немедленного опроса: до exec bypass_check.sh статус ответил бы «не идёт»,
+    // и UI показал бы пустой список, перестав опрашивать.
     bypassPollTimer = setInterval(bypassCheckPoll, 1000);
   });
 }
@@ -1106,13 +1110,20 @@ function setBypassProgress(done, total, active, finished) {
   text.textContent = total > 0 ? 'Проверено: ' + done + ' из ' + total + ' (' + pct + '%)' : (finished ? 'DNS-домены для проверки не найдены' : 'Подготовка списка доменов…');
 }
 
-function bypassCheckPoll() {
+// resume=true — открытие вкладки: подхватить идущую проверку или показать последний
+// результат; если на роутере ничего нет, оставить «Проверка ещё не запускалась».
+function bypassCheckPoll(resume) {
   api('/cgi-bin/manage.sh?action=bypass_check_status', function(d){
     var status = document.getElementById('bypassCheckStatus');
-    if (!d.ok) { status.className = 'status status-err'; status.textContent = d.error || 'Ошибка проверки'; if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; } return; }
-    if (d.running) { status.className = 'status status-warn'; status.textContent = 'Проверка выполняется…'; setBypassProgress(d.done || 0, d.total || 0, true); return; }
+    if (!d.ok) { if (resume) return; status.className = 'status status-err'; status.textContent = d.error || 'Ошибка проверки'; if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; } return; }
+    if (d.running) {
+      status.className = 'status status-warn'; status.textContent = 'Проверка выполняется…'; setBypassProgress(d.done || 0, d.total || 0, true);
+      if (!bypassPollTimer) bypassPollTimer = setInterval(bypassCheckPoll, 1000);
+      return;
+    }
     if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; }
     var rows = d.checked || [];
+    if (resume && !rows.length) return;
     status.className = 'status status-ok';
     status.textContent = rows.length ? 'Проверено доменов: ' + rows.length : 'Нет доменов для проверки';
     setBypassProgress(rows.length, rows.length, true, true);

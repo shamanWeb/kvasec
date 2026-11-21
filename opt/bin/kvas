@@ -304,25 +304,25 @@ case "${1}" in
 					print_line
 					echo "Полные ошибки KVASEC:"
 					print_line
-					if [ -f /opt/tmp/kvas_errors.log ] && [ -s /opt/tmp/kvas_errors.log ]; then
-						tail -n "${4:-50}" /opt/tmp/kvas_errors.log
+					if [ -f /tmp/kvas_errors.log ] && [ -s /tmp/kvas_errors.log ]; then
+						tail -n "${4:-50}" /tmp/kvas_errors.log
 					else
 						echo "Лог-файл пуст."
 					fi
 				else
 					# Показываем из лог-файла (полные сообщения)
-					if [ -f /opt/tmp/kvas_errors.log ] && [ -s /opt/tmp/kvas_errors.log ]; then
+					if [ -f /tmp/kvas_errors.log ] && [ -s /tmp/kvas_errors.log ]; then
 						print_line
 						echo "Ошибки KVASEC:"
 						print_line
-						tail -n "${3:-20}" /opt/tmp/kvas_errors.log
+						tail -n "${3:-20}" /tmp/kvas_errors.log
 					else
 						syslog__show "${2}" 'KVASEC' 'Ошибки KVASEC:' "${3}"
 					fi
 				fi
 			;;
 			info)        syslog__show "${2}" 'KVASEC' 'Информационные сообщения KVASEC:' "${3}" ;;
-			clear)       : > /opt/tmp/kvas_errors.log 2>/dev/null; echo "Лог очищен." ;;
+			clear)       : > /tmp/kvas_errors.log 2>/dev/null; echo "Лог очищен." ;;
 			*)           syslog__show ''     'KVASEC' 'События KVASEC:'                  "${2}" ;;
 		esac
 	;;

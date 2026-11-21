@@ -14,8 +14,9 @@
 IFACE=$(sed -n 's/^INFACE_ENT=//p' /opt/etc/kvas.conf 2>/dev/null | tr -d ' \r')
 [ -z "${IFACE}" ] && IFACE=opkgtun10
 STAT="/sys/class/net/${IFACE}/statistics"
-HIST=/opt/tmp/dpi-history.jsonl
-PREV=/opt/tmp/dpi-history.prev
+# В /tmp (RAM) напрямую: пишется каждую минуту, а /opt/tmp до первой загрузки — на флешке.
+HIST=/tmp/dpi-history.jsonl
+PREV=/tmp/dpi-history.prev
 MAX=1440
 
 [ -d "${STAT}" ] || exit 0

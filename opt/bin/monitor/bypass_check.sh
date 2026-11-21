@@ -22,9 +22,25 @@ TMP_FILE="${RESULT_FILE}.$$"
 . "$(dirname "$0")/adguard_querylog.sh"
 
 umask 077
-trap 'rm -f "$TMP_FILE" "$LOCK_FILE" "$PID_FILE" "${TMP_FILE}.domains" "${TMP_FILE}.vpn" "${TMP_FILE}.dns"; rmdir "$LOCK_DIR" 2>/dev/null' EXIT HUP INT TERM
 printf '%s\n' "$$" > "$LOCK_FILE"
 printf '%s\n' "$$" > "$PID_FILE"
+
+# PID-файл и лок общие для всех прогонов. Пока прогон «наш» (в PID-файле наш $$),
+# он пишет прогресс/результат и снимает лок; прогон, у которого «Остановить» или
+# новый старт забрали PID-файл, ничего общего уже не трогает. Раньше старый прогон
+# при выходе удалял PID и лок НОВОГО — UI видел «не идёт» и пустой список.
+is_owner() { [ "$(cat "$PID_FILE" 2>/dev/null)" = "$$" ]; }
+cleanup() {
+    rm -f "$TMP_FILE" "${TMP_FILE}.domains" "${TMP_FILE}.vpn" "${TMP_FILE}.dns"
+    if is_owner; then
+        rm -f "$LOCK_FILE" "$PID_FILE"
+        rmdir "$LOCK_DIR" 2>/dev/null
+    fi
+}
+trap cleanup EXIT
+# Без exit ловушка на TERM лишь чистила файлы, и цикл шёл дальше: «Остановить
+# проверку» оставляла живой прогон (несколько параллельных после старт/стоп).
+trap 'exit 143' HUP INT TERM
 
 json_str() {
     if command -v jq >/dev/null 2>&1; then
@@ -173,6 +189,7 @@ esac
 
 total=$(wc -l < "${TMP_FILE}.domains" 2>/dev/null || echo 0)
 done_count=0
+is_owner || exit 0
 printf '%s|%s\n' "$done_count" "$total" > "$PROGRESS_FILE"
 
 printf '{"ok":true,"running":false,"checked":[' > "$TMP_FILE"
@@ -246,8 +263,10 @@ while IFS= read -r domain; do
     printf '{"domain":%s,"in_vpn":%s,"status":%s,"detail":%s,"http_code":%s,"direct_curl":%s,"awg_curl":%s}' \
         "$(json_str "$domain")" "$listed" "$(json_str "$status")" "$(json_str "$detail")" "$(json_str "$response_code")" "$(json_str "$direct_rc")" "$(json_str "$tunnel_rc")" >> "$TMP_FILE"
     done_count=$((done_count + 1))
+    is_owner || exit 0
     printf '%s|%s\n' "$done_count" "$total" > "$PROGRESS_FILE"
 done < "${TMP_FILE}.domains"
 printf ']}\n' >> "$TMP_FILE"
 rm -f "${TMP_FILE}.domains"
+is_owner || exit 0
 mv -f "$TMP_FILE" "$RESULT_FILE"

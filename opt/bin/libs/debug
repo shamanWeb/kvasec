@@ -822,7 +822,7 @@ syslog__show() {
 	
 	# Если есть лог-файл с полными ошибками — показываем подсказку
 	if [ "${facility}" = "error" ] || [ "${facility}" = "err" ]; then
-		if [ -f /opt/tmp/kvas_errors.log ] && [ -s /opt/tmp/kvas_errors.log ]; then
+		if [ -f /tmp/kvas_errors.log ] && [ -s /tmp/kvas_errors.log ]; then
 			echo ""
 			echo "Для просмотра полных ошибок: kvas log error detail"
 		fi
