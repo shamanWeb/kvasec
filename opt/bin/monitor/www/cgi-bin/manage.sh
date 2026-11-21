@@ -563,7 +563,11 @@ main() {
 			valid_domain "$clean" || json_error "invalid domain"
 			out=$($KVAS_BIN add "$clean" 2>&1)
 			rc=$?
-			[ $rc -ne 0 ] && json_error "add failed: $out"
+			# kvas add возвращает 1 и для «уже в списке» — тогда это не ошибка: в т.ч.
+			# x.com → *.x.com (иначе превратить запись в wildcard из UI было нельзя).
+			if [ $rc -ne 0 ] && ! grep -qxF -e "$clean" -e "*.$clean" "$KVAS_LIST" 2>/dev/null; then
+				json_error "add failed: $out"
+			fi
 			if $wildcard; then
 				# kvas add wrote clean entry; rename it to *.clean in kvas.list
 				sed -i "s|^${clean}$|*.${clean}|" "$KVAS_LIST" 2>/dev/null

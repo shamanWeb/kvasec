@@ -332,7 +332,8 @@ cat > "${CTRL}/postrm" <<'POSTRM'
 (
     sleep 30
     opkg list-installed 2>/dev/null | grep -q '^kvas ' && exit 0
-    ip rule del fwmark 0xd1000/0xd1000 lookup 1001 2>/dev/null
+    # дубли правила (гонка сторожей) — до 8 штук; цикл ограничен, без риска зависнуть
+    for _i in 1 2 3 4 5 6 7 8; do ip rule del fwmark 0xd1000/0xd1000 lookup 1001 2>/dev/null || break; done
     ip route flush table 1001 2>/dev/null
     for _r in $(iptables -w -t mangle -S PREROUTING 2>/dev/null | grep -n -- '-j KVAS_MARK' | cut -d: -f1 | sort -rn); do
         iptables -w -t mangle -D PREROUTING $((_r - 1)) 2>/dev/null

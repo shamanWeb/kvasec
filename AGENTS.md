@@ -421,6 +421,16 @@ conntrack) выключены по умолчанию — гейт `[ -f /opt/et
   «Устройствах». Подсети/IP вручную — `kvas route add|del|list`, гостевые сети (сегменты, напр.
   `ikev2`) — `kvas vpn guest add|del`. Уже заданные `route_*_ip` и `INFACE_GUEST_ENT` в kvas.conf
   работают как прежде; `route_by_list_ip` по-прежнему избыточен (home-правило покрывает LAN).
+- **Пауза** (`/opt/etc/kvas.paused`) проверяется в `ip4_mark_vpn_network` (ndm): иначе kvas init при
+  загрузке (S96kvas), route refresh, postinst и хук 100-vpn-mark возвращали маршрутизацию — пауза
+  держалась только для сторожа. Перехват DNS пауза не снимает.
+- **Лок цепочек ndm** (`/tmp/kvas-ndm-chain.lock`) хранит PID держателя: мёртвый держатель — лок
+  снимается сразу; без PID/зависший — по возрасту 120 с.
+- **purge_unmarked** не трогает: адреса роутера, `route_excluded_ip` (IP, CIDR, диапазон a-b) и
+  подсети интерфейсов без прыжка в KVAS_MARK (их трафик законно без метки). Прыжки читаются из
+  `iptables -S PREROUTING` (mangle); обрыв дампа на ndmmark → запасной вариант br0. В awk — без `^`
+  (busybox без math). Тест под локальным `busybox sh` не показателен: его встроенный `ip`
+  игнорирует заглушку и видит интерфейсы ПК.
 - План и статус аудита — локальный `docs/audit-2026-11.md` (вне git).
 
 ## Формат ipk
