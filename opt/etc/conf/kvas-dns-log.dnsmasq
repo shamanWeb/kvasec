@@ -1,0 +1,6 @@
+# kvas: журнал DNS-запросов — в RAM (/tmp), не на флешку. Нужен «Проверить последние
+# 100 DNS» и мониторингу трафика (имена доменов). Размер держит cron:
+# /opt/apps/kvas/bin/monitor/dns_log_trim.sh. Ставится postinst, применяется рестартом dnsmasq.
+log-queries=extra
+log-facility=/tmp/kvas-dns.log
+log-async=25

@@ -82,7 +82,7 @@ log_warning() { :; }; error() { echo "ERR $*" >&2; }; get_local_inface() { echo 
 ip4__chain__exclude_source_by_config() { :; }; ip4__ipset__fill_destination_excluded() { :; }
 ip4__route__add_table() { :; }; ip4__rule__add_mark_to_table() { :; }; ip4__ipset__create() { :; }
 EOS
-} | sed "s|/opt/sbin/iptables-save|$WORK/bin/iptables-save|g; s|/opt/sbin/iptables|$WORK/bin/iptables|g; s|/tmp/kvas-ndm-chain.lock|$WORK/chain.lock|g" > "$WORK/lib.sh"
+} | sed "s|/opt/sbin/iptables-save|$WORK/bin/iptables-save|g; s|/opt/sbin/iptables|$WORK/bin/iptables|g; s|/tmp/kvas-ndm-chain.lock|$WORK/chain.lock|g; s|/opt/etc/kvas.paused|$WORK/paused|g" > "$WORK/lib.sh"
 
 run() { $RUN -c ". '$WORK/lib.sh'; $1"; }
 count() { grep -cF -- "$2" "$ST/$1" 2>/dev/null || true; }
@@ -144,3 +144,19 @@ if [ "$RUN" = "busybox sh" ]; then
     [ "$(grep -c -- '--save-mark' "$ST/mangle/KVAS_MARK")" -eq 1 ] || { echo 'FAIL 6: параллельная сборка задвоила'; cat "$ST/mangle/KVAS_MARK"; exit 1; }
     [ ! -d "$WORK/chain.lock" ] || { echo 'FAIL 6: лок не снят'; exit 1; }
 fi
+
+# 7) брошенный лок (держатель убит) — снимается сразу по мёртвому PID, без ожидания
+mkdir "$WORK/chain.lock"; echo 999999 > "$WORK/chain.lock/pid"
+t0=$(date +%s)
+run 'ip4__mark__create_chain'
+[ $(( $(date +%s) - t0 )) -lt 5 ] || { echo 'FAIL 7: ждали брошенный лок'; exit 1; }
+[ ! -d "$WORK/chain.lock" ] || { echo 'FAIL 7: лок не снят'; exit 1; }
+
+# 8) kvas pause: ip4_mark_vpn_network не собирает маршрутизацию (kvas init при загрузке,
+#    route refresh, хук 100-vpn-mark раньше отменяли паузу)
+: > "$ST/mangle/KVAS_MARK"; : > "$ST/mangle/PREROUTING"; touch "$WORK/paused"
+run 'ip4__add_routing_for_ip_from_config() { :; }; ip4__add_routing_by_list_for_net_from_config() { :; }; ip4_mark_vpn_network'
+[ ! -s "$ST/mangle/KVAS_MARK" ] && [ "$(count mangle/PREROUTING '-j KVAS_MARK')" -eq 0 ] || { echo 'FAIL 8: на паузе собрана маршрутизация'; exit 1; }
+rm -f "$WORK/paused"
+run 'ip4__add_routing_for_ip_from_config() { :; }; ip4__add_routing_by_list_for_net_from_config() { :; }; ip4_mark_vpn_network'
+grep -q -- '--save-mark' "$ST/mangle/KVAS_MARK" || { echo 'FAIL 8: без паузы маршрутизация не собрана'; exit 1; }

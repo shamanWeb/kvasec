@@ -23,11 +23,13 @@
 # Метка kvas 1.1.x = 0xd1000 -> table 1001. Для НЕ-opkgtun интерфейсов демон
 # сразу выходит (штатный NDM-механизм kvas работает сам).
 # ---------------------------------------------------------------------------
-LOG=/opt/tmp/kvas-awg-route.log
+# Файлы, которые пишутся постоянно — сразу в /tmp (RAM), а не в /opt/tmp: симлинк
+# /opt/tmp -> /tmp делает S96kvas только при загрузке, до неё /opt/tmp — папка на флешке.
+LOG=/tmp/kvas-awg-route.log
 CONF=/opt/etc/kvas.conf
 IFEQ=/opt/etc/inface_equals
-PIDF=/opt/tmp/kvas-awg-route.pid
-LOCK=/opt/tmp/kvas-awg-route.lock
+PIDF=/tmp/kvas-awg-route.pid
+LOCK=/tmp/kvas-awg-route.lock
 # Флаг паузы (kvas pause): на флеше — переживает перезагрузку; с ним сторож не стартует,
 # иначе за ≤10 с вернул бы ip rule/default/KVAS_MARK, а после ребута — отменил паузу.
 PAUSED=/opt/etc/kvas.paused

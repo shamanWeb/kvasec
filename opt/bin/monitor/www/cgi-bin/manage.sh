@@ -13,10 +13,6 @@ BYPASS_CHECK_PID=/tmp/kvas-bypass-check.pid
 BYPASS_CHECK_RESULT=/tmp/kvas-bypass-check.json
 BYPASS_CHECK_PROGRESS=/tmp/kvas-bypass-check.progress
 BYPASS_CHECK_LOG=/tmp/kvas-bypass-check.log
-BLOCK_WATCH_BIN=/opt/apps/kvas/bin/monitor/block_watch.sh
-BLOCK_WATCH_PID=/tmp/kvas-block-watch.pid
-BLOCK_WATCH_EVENTS=/tmp/kvas-block-watch.events
-BLOCK_WATCH_LOCK_DIR=/tmp/kvas-block-watch.lock.d
 KVAS_LIST=/opt/etc/kvas.list
 KVAS_CONF_FILE=/opt/etc/kvas.conf
 CONF_LOCK_DIR=/tmp/kvas_conf.lock
@@ -160,10 +156,13 @@ valid_ip_or_cidr() {
 	return 0
 }
 
-# Имя интерфейса/сегмента (buk, sstp0, oc0, …) — только безопасный набор символов.
-valid_ifname() {
-	case "$1" in ''|*[!A-Za-z0-9_.+-]*) return 1 ;; esac
-	return 0
+# Потомки процесса по /proc/<pid>/stat (поле 4 — PPID); pgrep -P есть не везде.
+kill_descendants() {
+	local c
+	for c in $(awk -v p="$1" '$4 == p { print $1 }' /proc/[0-9]*/stat 2>/dev/null); do
+		kill_descendants "$c"
+		kill "$c" 2>/dev/null || true
+	done
 }
 
 # Kill only the checker that KVAS started.  The cmdline guard prevents a stale
@@ -176,6 +175,9 @@ stop_bypass_check() {
 	esac
 	if [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]ypass_check.sh'; then
 		kill "$pid" 2>/dev/null || true
+		# ash выполняет ловушку TERM только после текущей команды, а это curl
+		# с таймаутом до 8 с — гасим и потомков ($(...)-подоболочки, curl).
+		kill_descendants "$pid"
 		for _ in 1 2 3; do
 			kill -0 "$pid" 2>/dev/null || break
 			sleep 1
@@ -201,39 +203,6 @@ clear_stale_bypass_check() {
 	bypass_check_running && return 1
 	rm -f "$BYPASS_CHECK_PID" "$BYPASS_CHECK_LOCK"
 	rmdir "$BYPASS_CHECK_LOCK_DIR" 2>/dev/null || true
-	return 0
-}
-
-block_watch_running() {
-	local pid
-	pid=$(cat "$BLOCK_WATCH_PID" 2>/dev/null)
-	case "$pid" in
-		''|*[!0-9]*) return 1 ;;
-	esac
-	[ -r "/proc/$pid/cmdline" ] && \
-		tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]lock_watch.sh' && \
-		kill -0 "$pid" 2>/dev/null
-}
-
-stop_block_watch() {
-	local pid
-	pid=$(cat "$BLOCK_WATCH_PID" 2>/dev/null)
-	case "$pid" in
-		''|*[!0-9]*) return 0 ;;
-	esac
-	if [ -r "/proc/$pid/cmdline" ] && tr '\000' ' ' < "/proc/$pid/cmdline" | grep -q '[b]lock_watch.sh'; then
-		kill "$pid" 2>/dev/null || true
-		for _ in 1 2 3; do
-			kill -0 "$pid" 2>/dev/null || break
-			sleep 1
-		done
-	fi
-}
-
-clear_stale_block_watch() {
-	block_watch_running && return 1
-	rm -f "$BLOCK_WATCH_PID"
-	rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null || true
 	return 0
 }
 
@@ -594,7 +563,11 @@ main() {
 			valid_domain "$clean" || json_error "invalid domain"
 			out=$($KVAS_BIN add "$clean" 2>&1)
 			rc=$?
-			[ $rc -ne 0 ] && json_error "add failed: $out"
+			# kvas add возвращает 1 и для «уже в списке» — тогда это не ошибка: в т.ч.
+			# x.com → *.x.com (иначе превратить запись в wildcard из UI было нельзя).
+			if [ $rc -ne 0 ] && ! grep -qxF -e "$clean" -e "*.$clean" "$KVAS_LIST" 2>/dev/null; then
+				json_error "add failed: $out"
+			fi
 			if $wildcard; then
 				# kvas add wrote clean entry; rename it to *.clean in kvas.list
 				sed -i "s|^${clean}$|*.${clean}|" "$KVAS_LIST" 2>/dev/null
@@ -747,47 +720,6 @@ main() {
 				echo '{"ok":true,"running":false,"checked":[]}'
 			fi
 			;;
-		block_watch_start)
-			check_token "$token"
-			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
-			clear_stale_block_watch || json_error "watcher already running"
-			if ! mkdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; then json_error "watcher already running"; fi
-			if [ ! -x "$BLOCK_WATCH_BIN" ]; then rmdir "$BLOCK_WATCH_LOCK_DIR" 2>/dev/null; json_error "block watcher is not installed"; fi
-			BLOCK_WATCH_LOCK_DIR="$BLOCK_WATCH_LOCK_DIR" BLOCK_WATCH_LOCK_HELD=1 "$BLOCK_WATCH_BIN" >/tmp/kvas-block-watch.log 2>&1 &
-			printf '%s\n' "$!" > "$BLOCK_WATCH_PID"
-			json_ok "block watcher started"
-			;;
-		block_watch_stop)
-			check_token "$token"
-			[ "$REQUEST_METHOD" = "POST" ] || json_error "POST required"
-			stop_block_watch
-			clear_stale_block_watch
-			json_ok "block watcher stopped"
-			;;
-		block_watch_status)
-			check_token "$token"
-			watch_running=false
-			block_watch_running && watch_running=true
-			[ "$watch_running" = false ] && clear_stale_block_watch
-			printf '{"ok":true,"running":%s,"events":[' "$watch_running"
-			first=1
-			now=$(date +%s)
-			if [ -s "$BLOCK_WATCH_EVENTS" ]; then
-				awk -F'|' -v cutoff=$((now - 60)) -v map_cutoff=$((now - 600)) '
-					$1>=map_cutoff && $2=="map" { domain[$3]=$4 }
-					$1>=map_cutoff && $2=="ptr" { owner[$3]=$4 }
-					$1>=cutoff && $2=="fail" { key=$3"|"$4; count[key]++ }
-					END { for (key in count) { split(key,a,"|"); ip=substr(a[2],1,index(a[2],":")-1); print a[1]"|"a[2]"|"(domain[ip] ? domain[ip] : "")"|"(owner[ip] ? owner[ip] : "")"|"count[key] } }
-				' "$BLOCK_WATCH_EVENTS" | while IFS='|' read -r src destination domain owner attempts; do
-					in_vpn=false
-					if [ -n "$domain" ] && { grep -qxF "$domain" "$KVAS_LIST" 2>/dev/null || grep -qxF "*.${domain}" "$KVAS_LIST" 2>/dev/null; }; then in_vpn=true; fi
-					[ "$first" -eq 0 ] && printf ','
-					first=0
-					printf '{"src":%s,"destination":%s,"domain":%s,"owner":%s,"attempts":%s,"in_vpn":%s}' "$(json_str "$src")" "$(json_str "$destination")" "$(json_str "$domain")" "$(json_str "$owner")" "${attempts:-1}" "$in_vpn"
-				done
-			fi
-			echo ']}'
-			;;
 		tunnel_dpi)
 			# Индикатор DPI-интерференции (РКН/ТСПУ) на не-NDM AWG-туннеле.
 			# RX drops на opkgtunNN = пакеты, испорченные/отброшенные на пути —
@@ -829,9 +761,9 @@ main() {
 			# История DPI-интерференции для графика (собирается cron-скриптом
 			# dpi_history.sh раз в минуту, кольцевой буфер 1440 точек = 24ч).
 			check_token "$token"
-			if [ -s /opt/tmp/dpi-history.jsonl ]; then
+			if [ -s /tmp/dpi-history.jsonl ]; then
 				printf '{"ok":true,"points":['
-				awk 'NR>1{printf ","} {printf "%s",$0}' /opt/tmp/dpi-history.jsonl
+				awk 'NR>1{printf ","} {printf "%s",$0}' /tmp/dpi-history.jsonl
 				printf ']}\n'
 			else
 				echo '{"ok":true,"points":[]}'
@@ -1026,140 +958,6 @@ main() {
 				json_error "не удалось выключить ротацию"
 			fi
 			;;
-		route_status)
-			check_token "$token"
-			route_full=$(grep "^route_full_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2 | tr '+' ' ')
-			route_list=$(grep "^route_by_list_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2 | tr '+' ' ')
-			route_exclude=$(grep "^route_excluded_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2 | tr '+' ' ')
-			route_guest=$(grep "^INFACE_GUEST_ENT=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-			# Get device names from DHCP for descriptions
-			devs=$(curl -s "127.0.0.1:79/rci/show/ip/dhcp/bindings" 2>/dev/null | jq -r '.lease[] | "\(.ip)|\(.name)"' 2>/dev/null)
-			_resolve_names() {
-				local result=""
-				for _ip in $1; do
-					_name=$(echo "$devs" | grep -F "${_ip}|" | head -1 | cut -d'|' -f2)
-					[ -n "$_name" ] && result="$result $_ip ($_name)" || result="$result $_ip"
-				done
-				echo "$result" | sed 's/^ //'
-			}
-			route_full=$(_resolve_names "$route_full")
-			route_list=$(_resolve_names "$route_list")
-			route_exclude=$(_resolve_names "$route_exclude")
-			printf '{"ok":true,"full":%s,"list":%s,"exclude":%s,"guest_nets":%s}\n' \
-				"$(json_str "$route_full")" "$(json_str "$route_list")" "$(json_str "$route_exclude")" "$(json_str "$route_guest")"
-			;;
-		route_list)
-			check_token "$token"
-			route_full=$(grep "^route_full_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2 | tr '+' ' ')
-			route_list=$(grep "^route_by_list_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2 | tr '+' ' ')
-			route_exclude=$(grep "^route_excluded_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2 | tr '+' ' ')
-			printf '{"ok":true,"routes":['
-			first=1
-			for ip in $route_full; do
-				[ -z "$ip" ] && continue
-				[ "$first" -eq 0 ] && printf ','
-				first=0
-				printf '{"type":"full","ip":"%s"}' "$ip"
-			done
-			for ip in $route_list; do
-				[ -z "$ip" ] && continue
-				[ "$first" -eq 0 ] && printf ','
-				first=0
-				printf '{"type":"list","ip":"%s"}' "$ip"
-			done
-			for ip in $route_exclude; do
-				[ -z "$ip" ] && continue
-				[ "$first" -eq 0 ] && printf ','
-				first=0
-				printf '{"type":"exclude","ip":"%s"}' "$ip"
-			done
-			echo ']}'
-			;;
-		route_add)
-			check_token "$token"
-			type=$(echo "$QUERY_STRING" | sed 's/.*type=//; s/&.*//' 2>/dev/null)
-			ip=$(echo "$QUERY_STRING" | sed 's/.*ip=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
-			[ -z "$ip" ] && json_error "ip required"
-			valid_ip_or_cidr "$ip" || json_error "invalid ip"
-			case "$type" in
-				full) key="route_full_ip" ;;
-				list) key="route_by_list_ip" ;;
-				exclude) key="route_excluded_ip" ;;
-				*) json_error "type must be full, list, or exclude" ;;
-			esac
-			conf_list_edit "$key" + add "$ip"; rc=$?
-			if [ "$rc" -eq 1 ]; then
-				json_ok "already exists"
-			elif [ "$rc" -ne 0 ]; then
-				json_error "cannot write kvas.conf"
-			else
-				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
-					json_ok "added $ip to $type"
-				else
-					json_error "route refresh failed, see /tmp/kvas-route-refresh.log"
-				fi
-			fi
-			;;
-		route_del)
-			check_token "$token"
-			type=$(echo "$QUERY_STRING" | sed 's/.*type=//; s/&.*//' 2>/dev/null)
-			ip=$(echo "$QUERY_STRING" | sed 's/.*ip=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
-			[ -z "$ip" ] && json_error "ip required"
-			valid_ip_or_cidr "$ip" || json_error "invalid ip"
-			case "$type" in
-				full) key="route_full_ip" ;;
-				list) key="route_by_list_ip" ;;
-				exclude) key="route_excluded_ip" ;;
-				*) json_error "type must be full, list, or exclude" ;;
-			esac
-			conf_list_edit "$key" + del "$ip"; rc=$?
-			if [ "$rc" -eq 1 ]; then
-				json_ok "not found"
-			elif [ "$rc" -ne 0 ]; then
-				json_error "cannot write kvas.conf"
-			else
-				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
-					json_ok "removed $ip from $type"
-				else
-					json_error "route refresh failed, see /tmp/kvas-route-refresh.log"
-				fi
-			fi
-			;;
-		route_refresh)
-			check_token "$token"
-			out=$($KVAS_BIN route refresh 2>&1)
-			json_ok "routes refreshed"
-			;;
-		route_devices)
-			check_token "$token"
-			_tmpdev="/tmp/kvas_route_devices.$$"
-			: > "$_tmpdev"
-			# DHCP bindings (приоритет — реальные имена)
-			curl -s "127.0.0.1:79/rci/show/ip/dhcp/bindings" 2>/dev/null | \
-				jq -r '.lease[] | "\(.ip)|\(.name)"' 2>/dev/null >> "$_tmpdev"
-			# ARP-соседи (только IPv4)
-			if command -v ip >/dev/null 2>&1; then
-				ip neigh show 2>/dev/null | grep -E 'REACHABLE|STALE|DELAY' | \
-					awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print $1 "|" ($5 ? $5 : "arp")}' >> "$_tmpdev"
-			elif [ -f /proc/net/arp ]; then
-				tail -n +2 /proc/net/arp 2>/dev/null | awk '$2 != "0x0" {print $1 "|arp"}' >> "$_tmpdev"
-			fi
-			# Активные IP из conntrack — только частные диапазоны (RFC 1918)
-			_priv_re='src=(10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+)'
-			if command -v conntrack >/dev/null 2>&1; then
-				conntrack -L 2>/dev/null | grep -oE "$_priv_re" | cut -d= -f2 | sort -u | \
-					awk '{print $1 "|conntrack"}' >> "$_tmpdev"
-			elif [ -f /proc/net/nf_conntrack ]; then
-				grep -oE "$_priv_re" /proc/net/nf_conntrack 2>/dev/null | cut -d= -f2 | sort -u | \
-					awk '{print $1 "|conntrack"}' >> "$_tmpdev"
-			fi
-			unset _priv_re
-			# Вывод с дедупликацией (оставляем первую запись — у DHCP приоритет)
-			printf '{"ok":true,"devices":['
-			awk -F'|' "$AWK_JESC"'!seen[$1]++{if(f++) printf ","; printf "{\"ip\":\"%s\",\"name\":\"%s\"}", jesc($1), jesc($2)}' "$_tmpdev" 2>/dev/null
-			rm -f "$_tmpdev"
-			echo ']}'
-			;;
 		device_modes)
 			check_token "$token"
 			route_full=$(grep "^route_full_ip=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
@@ -1351,116 +1149,6 @@ main() {
 				json_error "правило не снялось (проверьте /opt/etc/ndm/netfilter.d/090-iot-lockdown)"
 			fi
 			json_ok "isolation ${state}"
-			;;
-		route_guest_networks)
-			check_token "$token"
-			_tmp="/tmp/kvas_guest_nets.$$"
-			tunnel_iface=$(grep "^INFACE_ENT=" "$KVAS_CONF_FILE" 2>/dev/null | cut -d= -f2)
-			internet_iface=$(/opt/sbin/ip route 2>/dev/null | grep default | awk '{print $5}' | head -1)
-			# Get interface list from ip addr
-			/opt/sbin/ip -o -f inet addr show 2>/dev/null | awk '{
-				iface = $2; sub(/@.*/, "", iface)
-				ip = $4; sub(/\/.*/, "", ip)
-				print iface "|" ip
-			}' | sort -u > "$_tmp"
-			# Query Keenetic API for VPN server pools
-			api_tags=$(curl -s "127.0.0.1:79/rci/show/tags/" 2>/dev/null)
-			_iface_prefix_by_pool() {
-				local pool_ip="$1"
-				[ -z "$pool_ip" ] && return
-				local iface
-				iface=$(/opt/sbin/ip -o addr show to "$pool_ip" 2>/dev/null | awk '{print $2}' | sed 's/@.*//' | head -1)
-				[ -z "$iface" ] && return
-				echo "$iface" | sed 's/[0-9]*$//'
-			}
-			if echo "$api_tags" | grep -qF 'vpn-oc' 2>/dev/null; then
-				oc_ip=$(curl -s "127.0.0.1:79/rci/oc-server" 2>/dev/null | jq -r '.config."pool-start"' 2>/dev/null)
-				if [ -n "$oc_ip" ]; then
-					prefix=$(_iface_prefix_by_pool "$oc_ip")
-					[ -z "$prefix" ] && prefix="oc"
-					echo "${prefix}+|$oc_ip" >> "$_tmp"
-				fi
-			fi
-			if echo "$api_tags" | grep -qF 'sstp' 2>/dev/null; then
-				sstp_ip=$(curl -s "127.0.0.1:79/rci/sstp-server" 2>/dev/null | jq -r '.config."pool-start"' 2>/dev/null)
-				if [ -n "$sstp_ip" ]; then
-					prefix=$(_iface_prefix_by_pool "$sstp_ip")
-					[ -z "$prefix" ] && prefix="sstp"
-					echo "${prefix}+|$sstp_ip" >> "$_tmp"
-				fi
-			fi
-			if echo "$api_tags" | grep -qF 'ipsec-l2tp' 2>/dev/null; then
-				l2tp_ip=$(curl -s "127.0.0.1:79/rci/crypto/l2tp-server" 2>/dev/null | jq -r '."pool-start"' 2>/dev/null)
-				if [ -n "$l2tp_ip" ]; then
-					prefix=$(_iface_prefix_by_pool "$l2tp_ip")
-					[ -z "$prefix" ] && prefix="l2tp"
-					echo "${prefix}+|$l2tp_ip" >> "$_tmp"
-				fi
-			fi
-			if echo "$api_tags" | grep -qF 'ipsec-xauth' 2>/dev/null; then
-				ikev2_ip=$(curl -s "127.0.0.1:79/rci/crypto/virtual-ip-server-ikev2" 2>/dev/null | jq -r '."pool-start"' 2>/dev/null)
-				[ -n "$ikev2_ip" ] && echo "xfrms+|$ikev2_ip" >> "$_tmp"
-			fi
-			printf '{"ok":true,"networks":['
-			sep=""
-			while IFS='|' read -r iface ip; do
-				case "$iface" in
-					lo|Bridge0|br0|ezcfg0|eth*|GigabitEthernet*|Port*|AccessPoint*|WifiMaster*|WifiStation*) continue ;;
-				esac
-				[ "$iface" = "$internet_iface" ] && continue
-				[ "$iface" = "$tunnel_iface" ] && continue
-				case "$iface" in
-					br*)        desc="Гостевая сеть" ;;
-					oc*)        desc="VPN-сервер OpenConnect" ;;
-					sstp*)      desc="VPN-сервер SSTP" ;;
-					l2tp*)      desc="VPN-сервер L2TP/IPsec" ;;
-					xfrms*)     desc="VPN-сервер IKEv2/IPsec" ;;
-					nwg*)       desc="WireGuard" ;;
-					t2s*)       desc="KVAS прокси" ;;
-					*)          desc="" ;;
-				esac
-				[ -z "$desc" ] && desc="$iface"
-				printf '%s{"id":"%s","name":%s}' "$sep" "$iface" "$(json_str "$desc")"
-				sep=","
-			done < "$_tmp"
-			rm -f "$_tmp"
-			echo ']}'
-			;;
-		route_guest_add)
-			check_token "$token"
-			net=$(echo "$QUERY_STRING" | sed 's/.*net=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
-			[ -z "$net" ] && json_error "net required"
-			valid_ifname "$net" || json_error "invalid interface"
-			conf_list_edit INFACE_GUEST_ENT , add "$net"; rc=$?
-			if [ "$rc" -eq 1 ]; then
-				json_ok "already added"
-			elif [ "$rc" -ne 0 ]; then
-				json_error "cannot write kvas.conf"
-			else
-				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
-					json_ok "added $net"
-				else
-					json_error "route refresh failed, see /tmp/kvas-route-refresh.log"
-				fi
-			fi
-			;;
-		route_guest_del)
-			check_token "$token"
-			net=$(echo "$QUERY_STRING" | sed 's/.*net=//; s/&.*//; s/+/ /g; s/%2B/+/gi; s/%2F/\//gi; s/%20/ /g' 2>/dev/null)
-			[ -z "$net" ] && json_error "net required"
-			valid_ifname "$net" || json_error "invalid interface"
-			conf_list_edit INFACE_GUEST_ENT , del "$net"; rc=$?
-			if [ "$rc" -eq 1 ]; then
-				json_ok "not found"
-			elif [ "$rc" -ne 0 ]; then
-				json_error "cannot write kvas.conf"
-			else
-				if $KVAS_BIN route refresh >> /tmp/kvas-route-refresh.log 2>&1; then
-					json_ok "removed $net"
-				else
-					json_error "route refresh failed, see /tmp/kvas-route-refresh.log"
-				fi
-			fi
 			;;
 		*)
 			json_error "unknown action"

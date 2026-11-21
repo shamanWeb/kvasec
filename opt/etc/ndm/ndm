@@ -494,22 +494,29 @@ ip4__chain__delete_jump() {
 
 # Сборку KVAS_MARK/KVAS_DNS сериализуем: её одновременно запускают хук NDM, сторож и
 # kvas init — каждый видел «цепочка неполна» и дописывал свой комплект (после установки
-# пакета было 18 правил вместо 9). mkdir-лок; брошенный (процесс убит) — по возрасту
-# самого лока, снос атомарным mv. Внутри лока целостность проверяется заново.
+# пакета было 18 правил вместо 9). mkdir-лок с PID держателя: держатель убит (NDM
+# прервал хук, kill во время kvas init) — лок снимается сразу, а не ждёт таймаута, пока
+# KVAS_MARK/KVAS_DNS пусты. Без PID (окно между mkdir и записью) или живой, но
+# зависший держатель — по возрасту лока (120 с). Снос атомарным mv. Внутри лока
+# целостность проверяется заново.
 KVAS_CHAIN_LOCK=/tmp/kvas-ndm-chain.lock
 ndm_chain_lock() {
-	local born
+	local born pid
 	while ! mkdir "${KVAS_CHAIN_LOCK}" 2>/dev/null; do
+		pid=$(cat "${KVAS_CHAIN_LOCK}/pid" 2>/dev/null)
 		born=$(date -r "${KVAS_CHAIN_LOCK}" +%s 2>/dev/null) || continue
-		if [ $(( $(date +%s) - born )) -gt 60 ] &&
-			mv "${KVAS_CHAIN_LOCK}" "${KVAS_CHAIN_LOCK}.stale.$$" 2>/dev/null; then
-			rm -rf "${KVAS_CHAIN_LOCK}.stale.$$"
-			continue
+		if { [ -n "${pid}" ] && ! kill -0 "${pid}" 2>/dev/null; } ||
+			[ $(( $(date +%s) - born )) -gt 120 ]; then
+			if mv "${KVAS_CHAIN_LOCK}" "${KVAS_CHAIN_LOCK}.stale.$$" 2>/dev/null; then
+				rm -rf "${KVAS_CHAIN_LOCK}.stale.$$"
+				continue
+			fi
 		fi
 		sleep 1
 	done
+	echo $$ > "${KVAS_CHAIN_LOCK}/pid"
 }
-ndm_chain_unlock() { rmdir "${KVAS_CHAIN_LOCK}" 2>/dev/null; }
+ndm_chain_unlock() { rm -f "${KVAS_CHAIN_LOCK}/pid"; rmdir "${KVAS_CHAIN_LOCK}" 2>/dev/null; }
 
 ip4__mark__create_chain() {
 	ndm_chain_lock
@@ -941,6 +948,10 @@ ip4__add_routing_for_ip_from_config() {
 }
 
 ip4_mark_vpn_network() {
+	# kvas pause: маршрутизацию в туннель не собираем. Иначе её возвращали kvas init при
+	# загрузке (S96kvas), route refresh, postinst обновления и хук 100-vpn-mark — пауза
+	# «переживала перезагрузку» только для сторожа. Перехват DNS паузой не снимается.
+	[ -f /opt/etc/kvas.paused ] && return 0
 	{
 		ip4__mark__create_chain
 

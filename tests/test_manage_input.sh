@@ -62,3 +62,12 @@ alive=0; kill -0 "$mpid" 2>/dev/null && alive=1
 kill "$mpid" "$wpid" 2>/dev/null || true
 [ "$alive" -eq 0 ] || { echo 'FAIL: host_import висит в ожидании EOF'; exit 1; }
 grep -F '"total":2' "$WORK/import.out" >/dev/null || { echo "FAIL: host_import: $(cat "$WORK/import.out")"; exit 1; }
+
+# host_add: домен уже в списке (kvas add → 1) — не ошибка; x.com → *.x.com работает.
+sed -i "s|^KVAS_LIST=.*|KVAS_LIST=$WORK/kvas.list|" "$WORK/manage.sh"
+printf '%s\n' 'x.example' > "$WORK/kvas.list"
+printf '%s\n' '#!/bin/sh' 'exit 1' > "$WORK/kvas"
+api 'action=host_add&domain=*.x.example' | grep -F '"ok":true' >/dev/null || { echo 'FAIL host_add: уже в списке → ошибка'; exit 1; }
+grep -qx '\*\.x\.example' "$WORK/kvas.list" || { echo 'FAIL host_add: не стал wildcard'; cat "$WORK/kvas.list"; exit 1; }
+# нет в списке и kvas add упал — ошибка
+api 'action=host_add&domain=y.example' | grep -F 'add failed' >/dev/null || { echo 'FAIL host_add: настоящая ошибка проглочена'; exit 1; }

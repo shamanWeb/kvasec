@@ -124,9 +124,9 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     mkdir -p /opt/etc/ndm/watch.d /opt/etc/dnsmasq.d /opt/etc/adblock /opt/var/log
     chown root:root /opt/etc/ndm/watch.d 2>/dev/null
 
-    # A shell script that is running during opkg upgrade keeps executing its
-    # deleted old inode. Stop the temporary block watcher, otherwise its lock
-    # remains and prevents the new package version from starting it.
+    # Сбор «Последняя минута» (block_watch) удалён в 1.4.5. При обновлении с
+    # прежних версий гасим его, если он запущен, и убираем его drop-in dnsmasq
+    # (журнал DNS теперь постоянный — kvas-dns-log.dnsmasq ниже).
     watch_pid_file=/tmp/kvas-block-watch.pid
     watch_lock_dir=/tmp/kvas-block-watch.lock.d
     watch_dns_conf=/opt/etc/dnsmasq.d/kvas-monitor-dns.dnsmasq
@@ -169,10 +169,24 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
                 ;;
         esac
     fi
-    rm -f "\${watch_pid_file}" /tmp/kvas-block-watch.events /tmp/kvas-dns.log
+    rm -f "\${watch_pid_file}" /tmp/kvas-block-watch.events /tmp/kvas-block-watch.log
     rmdir "\${watch_lock_dir}" 2>/dev/null || true
+    _dns_restart=""
     if [ -f "\${watch_dns_conf}" ]; then
         rm -f "\${watch_dns_conf}"
+        _dns_restart=1
+    fi
+    # Постоянный журнал DNS в RAM (/tmp/kvas-dns.log) для «последних 100 DNS» и
+    # мониторинга трафика. log-* — стартовые опции: нужен рестарт dnsmasq, только
+    # если drop-in новый/изменился и dnsmasq запущен (при AdGuard он остановлен —
+    # его не поднимаем, иначе конфликт за порт).
+    if ! cmp -s /opt/apps/kvas/etc/conf/kvas-dns-log.dnsmasq /opt/etc/dnsmasq.d/kvas-dns-log.dnsmasq; then
+        cp -f /opt/apps/kvas/etc/conf/kvas-dns-log.dnsmasq /opt/etc/dnsmasq.d/kvas-dns-log.dnsmasq
+        _dns_restart=1
+    fi
+    if [ -n "\${_dns_restart}" ] && pidof dnsmasq >/dev/null 2>&1; then
+        [ -f /tmp/kvas-dns.log ] || : > /tmp/kvas-dns.log
+        chown nobody /tmp/kvas-dns.log 2>/dev/null
         [ -x /opt/etc/init.d/S56dnsmasq ] && /opt/etc/init.d/S56dnsmasq restart >/dev/null 2>&1
     fi
 
@@ -277,8 +291,14 @@ if [ "\$1" = "configure" ] || [ -z "\$1" ]; then
     chmod +x /opt/apps/kvas/bin/monitor/dpi_history.sh 2>/dev/null
     if [ -f /opt/etc/crontab ] && ! grep -q 'dpi_history.sh' /opt/etc/crontab; then
         echo '* * * * * root /opt/apps/kvas/bin/monitor/dpi_history.sh' >> /opt/etc/crontab
-        [ -x /opt/etc/init.d/S10cron ] && /opt/etc/init.d/S10cron restart >/dev/null 2>&1
+        _cron_restart=1
     fi
+    # Ограничение журнала DNS (иначе растёт в RAM без предела).
+    if [ -f /opt/etc/crontab ] && ! grep -q 'dns_log_trim.sh' /opt/etc/crontab; then
+        echo '* * * * * root /opt/apps/kvas/bin/monitor/dns_log_trim.sh' >> /opt/etc/crontab
+        _cron_restart=1
+    fi
+    [ -n "\${_cron_restart}" ] && [ -x /opt/etc/init.d/S10cron ] && /opt/etc/init.d/S10cron restart >/dev/null 2>&1
 
     # Web UI: если был включён, обязательно останавливаем старый socat/handler
     # перед стартом. Иначе «kvas monitor web» видит занятый порт и после upgrade
@@ -312,7 +332,8 @@ cat > "${CTRL}/postrm" <<'POSTRM'
 (
     sleep 30
     opkg list-installed 2>/dev/null | grep -q '^kvas ' && exit 0
-    ip rule del fwmark 0xd1000/0xd1000 lookup 1001 2>/dev/null
+    # дубли правила (гонка сторожей) — до 8 штук; цикл ограничен, без риска зависнуть
+    for _i in 1 2 3 4 5 6 7 8; do ip rule del fwmark 0xd1000/0xd1000 lookup 1001 2>/dev/null || break; done
     ip route flush table 1001 2>/dev/null
     for _r in $(iptables -w -t mangle -S PREROUTING 2>/dev/null | grep -n -- '-j KVAS_MARK' | cut -d: -f1 | sort -rn); do
         iptables -w -t mangle -D PREROUTING $((_r - 1)) 2>/dev/null
@@ -322,7 +343,14 @@ cat > "${CTRL}/postrm" <<'POSTRM'
     for _p in tcp udp; do
         while iptables -w -D FORWARD -i br0 -p $_p --dport 853 -j REJECT 2>/dev/null; do :; done
     done
-    [ -f /opt/etc/crontab ] && sed -i '/dpi_history.sh/d' /opt/etc/crontab
+    [ -f /opt/etc/crontab ] && sed -i '/dpi_history.sh/d; /dns_log_trim.sh/d' /opt/etc/crontab
+    # Журнал DNS без обрезки рос бы в RAM — снимаем drop-in (рестарт dnsmasq
+    # с тем же конфигом без log-*, DNS-перехват не трогаем).
+    if [ -f /opt/etc/dnsmasq.d/kvas-dns-log.dnsmasq ]; then
+        rm -f /opt/etc/dnsmasq.d/kvas-dns-log.dnsmasq
+        pidof dnsmasq >/dev/null 2>&1 && [ -x /opt/etc/init.d/S56dnsmasq ] && /opt/etc/init.d/S56dnsmasq restart >/dev/null 2>&1
+        rm -f /tmp/kvas-dns.log
+    fi
     rm -f /opt/etc/kvas.paused
     logger -t kvas "postrm: пакет удалён — маршрутизация kvas убрана (DNS оставлен; полная уборка: kvas uninstall)"
 ) </dev/null >/dev/null 2>&1 &

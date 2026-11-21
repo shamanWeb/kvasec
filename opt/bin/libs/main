@@ -1474,22 +1474,18 @@ ready_status(){
 # ------------------------------------------------------------------------------------------
 when_error()(ready_status "${1}" "${2}" ERROR 0)
 
+# kvas_errors.log — в /tmp (RAM): log_warning зовут хуки ndm при каждой пересборке netfilter.
 log_warning(){
 	logger -t "${APP_NAME_DESC}" "[W] ${1}"
-	# Пишем в лог-файл для детальной диагностики
-	mkdir -p /opt/tmp
-	echo "[W] ${1}" >> /opt/tmp/kvas_errors.log
+	echo "[W] ${1}" >> /tmp/kvas_errors.log
 }
 log_error(){
 	logger -p err -t "${APP_NAME_DESC}" "[E] ${1}"
-	# Создаем директорию если нет
-	mkdir -p /opt/tmp
-	# Пишем полное сообщение в лог-файл
 	local _ts=$(date '+%Y-%m-%d %H:%M:%S')
-	echo "[$_] ${1}" >> /opt/tmp/kvas_errors.log
+	echo "[${_ts}] [E] ${1}" >> /tmp/kvas_errors.log
 	# Ограничиваем размер лога (500 строк)
-	local _lines=$(wc -l < /opt/tmp/kvas_errors.log 2>/dev/null || echo 0)
-	[ "$_lines" -gt 500 ] && tail -n 300 /opt/tmp/kvas_errors.log > /opt/tmp/kvas_errors.log.tmp && mv /opt/tmp/kvas_errors.log.tmp /opt/tmp/kvas_errors.log
+	local _lines=$(wc -l < /tmp/kvas_errors.log 2>/dev/null || echo 0)
+	[ "$_lines" -gt 500 ] && tail -n 300 /tmp/kvas_errors.log > /tmp/kvas_errors.log.tmp && mv /tmp/kvas_errors.log.tmp /tmp/kvas_errors.log
 }
 log_alert(){
 	header=${2:-${APP_NAME_DESC}}

@@ -186,7 +186,8 @@ vpn_check(){
 
 		ready "Таблица VPN маршрутов id=1001"
 		[ -x "/opt/etc/ndm/fs.d/100-vpn" ] && /opt/etc/ndm/fs.d/100-vpn start 2>/dev/null
-		if /opt/sbin/ip route show table 1001 2>/dev/null | grep -qv 'default'; then
+		# маршрут в туннель — «default … dev»; «unreachable default» (fail-closed) не в счёт
+		if /opt/sbin/ip route show table 1001 2>/dev/null | grep -q '^default .*dev '; then
 			when_ok "ЗАПОЛНЕНА"
 
 			ready "Таблица VPN маршрутов id=1001 в правилах маркировки "
