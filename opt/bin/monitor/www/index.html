@@ -355,14 +355,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 <!-- ========== TAB: Мониторинг обхода ========== -->
 <div id="tab-bypass" class="tab-content">
   <div class="card">
-    <h3>DPI-интерференция на туннеле <span id="dpiLed" style="font-size:12px;">—</span></h3>
-    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Испорченные/отброшенные пакеты на туннельном интерфейсе — прямой след DPI (РКН/ТСПУ), который портит трафик на пути. Рост потерь = активная блокировка или троттлинг. В норме — ноль или единичные.</p>
-    <div class="card-row"><label>Потери сейчас:</label><span class="value" id="dpiRate">-</span></div>
-    <div class="card-row"><label>Доля битых пакетов:</label><span class="value" id="dpiLoss">-</span></div>
-    <div class="card-row"><label>Handshake:</label><span class="value" id="dpiHandshake">-</span></div>
-    <div class="card-row"><label>Всего дропов:</label><span class="value" id="dpiTotal">-</span></div>
-  </div>
-  <div class="card">
     <h3>Мониторинг обхода блокировок</h3>
     <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Проверка запускается только вручную. Она показывает этап сбоя: DNS, TCP, TLS или HTTP. Для домена, который не открылся напрямую, но открылся через AWG, будет предложено добавить wildcard в VPN-список.</p>
     <div class="card-row" style="gap:8px;flex-wrap:wrap;">
@@ -627,11 +619,6 @@ function switchTab(name) {
     // Проверка идёт в фоне на роутере: после перезагрузки страницы/смены вкладки
     // подхватываем её прогресс или последний результат, а не «ещё не запускалась».
     if (!bypassPollTimer) bypassCheckPoll(true);
-    dpiPoll();
-    if (!bypassDpiTimer) bypassDpiTimer = setInterval(dpiPoll, 3000);
-  } else if (bypassDpiTimer) {
-    clearInterval(bypassDpiTimer);
-    bypassDpiTimer = null;
   }
   if (name === 'adblock') loadAdblockStatus();
   if (name === 'devices') loadDeviceModes();
@@ -890,7 +877,6 @@ function doRestore(btn) {
 /* ========== BYPASS MONITOR ========== */
 var bypassPollTimer = null;
 var bypassCheckMode = null;
-var bypassDpiTimer = null;
 
 function bypassCheckStop(btn) {
   apiPostBtn('/cgi-bin/manage.sh?action=bypass_check_stop', btn, function(d){
@@ -909,10 +895,8 @@ function fmtHsAge(sec) {
 }
 
 function setDpiUI(suffix, d) {
-  // suffix '' -> bypass (dpiLed/dpiRate...), 'dash' -> dashboard (dashDpiLed...)
-  var ids = suffix === 'dash'
-    ? {led:'dashDpiLed', rate:'dashDpiRate', loss:'dashDpiLoss', hs:'dashDpiHandshake', tot:'dashDpiTotal'}
-    : {led:'dpiLed', rate:'dpiRate', loss:'dpiLoss', hs:'dpiHandshake', tot:'dpiTotal'};
+  // DPI-карточка только на дашборде (dashDpi*); suffix оставлен для подписи «/мин».
+  var ids = {led:'dashDpiLed', rate:'dashDpiRate', loss:'dashDpiLoss', hs:'dashDpiHandshake', tot:'dashDpiTotal'};
   var eLed = document.getElementById(ids.led), eRate = document.getElementById(ids.rate),
       eLoss = document.getElementById(ids.loss), eHs = document.getElementById(ids.hs), eTot = document.getElementById(ids.tot);
   if (!eLed) return;
@@ -937,8 +921,7 @@ function setDpiUI(suffix, d) {
 
 function dpiPoll() {
   api('/cgi-bin/manage.sh?action=tunnel_dpi', function(d){
-    setDpiUI('', d);      // карточка на вкладке "Мониторинг обхода"
-    setDpiUI('dash', d);  // дашборд
+    setDpiUI('dash', d);
   });
 }
 
