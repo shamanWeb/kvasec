@@ -29,7 +29,9 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
 .card-pair { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .card-pair > .card { flex: 1 1 320px; margin-bottom: 0; }
-.card-col { display: flex; flex-direction: column; align-items: stretch; gap: 8px; max-width: 320px; margin: 6px 0; }
+.card-pair > .card.card-narrow { flex: 0 1 220px; }
+.card-col { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin: 6px 0; }
+.card-col .btn { width: 100%; text-align: center; }
 .card h3 { color: #c9d1d9; font-size: 14px; margin-bottom: 10px; }
 .card-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
 .card-row label { color: #8b949e; min-width: 80px; font-size: 12px; }
@@ -159,7 +161,7 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 <!-- ========== TAB: Управление ========== -->
 <div id="tab-manage" class="tab-content">
 
-  <!-- Состояние, Действия, Ротация — в одну строку; на узком экране переносятся -->
+  <!-- Состояние, Ротация, Действия — в одну строку; на узком экране переносятся -->
   <div class="card-pair">
     <!-- System Status -->
     <div class="card">
@@ -171,18 +173,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
       <div class="card-row"><label>Обновления:</label><span class="value" id="sysUpdate">-</span>
         <button class="btn btn-sm" onclick="doCheckUpdate(this)" style="margin-left:8px;">Проверить</button>
       </div>
-    </div>
-    <!-- System Actions -->
-    <div class="card">
-      <h3>Действия</h3>
-      <div class="card-col">
-        <button class="btn btn-sm primary" onclick="doUpgrade(this)">Установить обновление</button>
-        <button class="btn btn-sm" onclick="doUpdate(this)">Обновить списки</button>
-        <button class="btn btn-sm" onclick="doBackup(this)">Бэкап</button>
-        <button class="btn btn-sm" onclick="doRestore(this)">Восстановить</button>
-        <button class="btn btn-sm primary" onclick="doKvasInit(this)">Перезагрузка KVASEC — kvas init</button>
-      </div>
-      <div id="sysMsg" class="msg"></div>
     </div>
     <div class="card">
       <h3>Ротация порта туннеля <span style="font-size:12px;color:#8b949e;">(обход DPI-заморозки)</span></h3>
@@ -202,6 +192,18 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
         <label>Текущий порт:</label><span class="value" id="rotatePort">-</span>
       </div>
       <div id="rotateMsg" class="msg"></div>
+    </div>
+    <!-- System Actions -->
+    <div class="card card-narrow">
+      <h3>Действия</h3>
+      <div class="card-col">
+        <button class="btn btn-sm primary" onclick="doUpgrade(this)">Установить обновление</button>
+        <button class="btn btn-sm" onclick="doUpdate(this)">Обновить списки</button>
+        <button class="btn btn-sm" onclick="doBackup(this)">Бэкап</button>
+        <button class="btn btn-sm" onclick="doRestore(this)">Восстановить</button>
+        <button class="btn btn-sm primary" onclick="doKvasInit(this)" title="kvas init — пересоздать маршрутизацию и перезапустить службы">Перезапуск KVASEC</button>
+      </div>
+      <div id="sysMsg" class="msg"></div>
     </div>
   </div>
 
