@@ -319,8 +319,8 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Проверка запускается только вручную. Она показывает этап сбоя: DNS, TCP, TLS или HTTP. Для домена, который не открылся напрямую, но открылся через AWG, будет предложено добавить wildcard в VPN-список.</p>
     <div class="card-row" style="gap:8px;flex-wrap:wrap;">
       <button class="btn btn-sm primary" id="bypassCheckBtn" onclick="bypassCheckStart('all',this)">Проверить весь VPN-список</button>
-      <button class="btn btn-sm" onclick="bypassCheckStart('dns',this)">Проверить последние 100 DNS</button>
-	  <button class="btn btn-sm danger" onclick="bypassCheckStop(this)">Остановить проверку</button>
+      <button class="btn btn-sm" id="bypassCheckDnsBtn" onclick="bypassCheckStart('dns',this)">Проверить последние 100 DNS</button>
+      <button class="btn btn-sm danger" id="bypassStopBtn" onclick="bypassCheckStop(this)" disabled>Остановить проверку</button>
       <span id="bypassCheckStatus" class="status">Проверка ещё не запускалась</span>
     </div>
     <div id="bypassProgress" style="display:none;margin-top:10px;max-width:520px;">
@@ -837,8 +837,17 @@ function doRestore(btn) {
 var bypassPollTimer = null;
 var bypassCheckMode = null;
 
+// Кнопки следуют состоянию проверки: пока идёт — запуск недоступен, «Остановить»
+// активна; закончилась/остановлена — наоборот.
+function setBypassRunning(running) {
+  document.getElementById('bypassCheckBtn').disabled = running;
+  document.getElementById('bypassCheckDnsBtn').disabled = running;
+  document.getElementById('bypassStopBtn').disabled = !running;
+}
+
 function bypassCheckStop(btn) {
   apiPostBtn('/cgi-bin/manage.sh?action=bypass_check_stop', btn, function(d){
+    if (d.ok) setBypassRunning(false);
     if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; }
     document.getElementById('bypassProgress').style.display = 'none';
     document.getElementById('bypassCheckStatus').textContent = d.ok ? 'Проверка остановлена' : (d.error || 'Не удалось остановить проверку');
@@ -976,6 +985,7 @@ function bypassCheckStart(mode, btn, domain) {
   apiPostBtn(url, btn, function(d){
     var status = document.getElementById('bypassCheckStatus');
     if (!d.ok) { status.className = 'status status-err'; status.textContent = d.error || 'Не удалось запустить проверку'; return; }
+    setBypassRunning(true);
     status.className = 'status status-warn';
     status.textContent = 'Проверка выполняется…';
     setBypassProgress(0, 0, true);
@@ -1003,13 +1013,15 @@ function setBypassProgress(done, total, active, finished) {
 function bypassCheckPoll(resume) {
   api('/cgi-bin/manage.sh?action=bypass_check_status', function(d){
     var status = document.getElementById('bypassCheckStatus');
-    if (!d.ok) { if (resume) return; status.className = 'status status-err'; status.textContent = d.error || 'Ошибка проверки'; if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; } return; }
+    if (!d.ok) { if (resume) return; status.className = 'status status-err'; status.textContent = d.error || 'Ошибка проверки'; if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; } setBypassRunning(false); return; }
     if (d.running) {
+      setBypassRunning(true);
       status.className = 'status status-warn'; status.textContent = 'Проверка выполняется…'; setBypassProgress(d.done || 0, d.total || 0, true);
       if (!bypassPollTimer) bypassPollTimer = setInterval(bypassCheckPoll, 1000);
       return;
     }
     if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; }
+    setBypassRunning(false);
     var rows = d.checked || [];
     if (resume && !rows.length) return;
     status.className = 'status status-ok';
