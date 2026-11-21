@@ -517,8 +517,31 @@ function showMain() {
   loadAdguardStatus();
   loadAdblockStatus();
   fetchDevices();
-  startDashboard();  // вкладка "Дашборд" открыта по умолчанию
+  switchTab(savedTab());  // последняя открытая вкладка (по умолчанию — «Дашборд»)
+  if (!tabRefreshTimer) tabRefreshTimer = setInterval(refreshActiveTab, 5 * 60 * 1000);
   logMsg('log-info', 'Мониторинг трафика KVASEC');
+}
+
+// Автообновление данных открытой вкладки раз в 5 минут. Пропускаем, если вкладка
+// браузера скрыта или пользователь печатает в поле этой вкладки — не сбиваем ввод.
+var tabRefreshTimer = null;
+function activeTabName() {
+  var t = document.querySelector('.tab.active');
+  return t ? t.dataset.tab : 'dashboard';
+}
+function refreshActiveTab() {
+  if (document.hidden) return;
+  var name = activeTabName();
+  var f = document.activeElement;
+  if (f && /^(INPUT|TEXTAREA|SELECT)$/.test(f.tagName) && f.type !== 'checkbox' &&
+      f.closest && f.closest('#tab-' + name)) return;
+  if (name === 'dashboard') { loadDpiHistory(); loadRotateStatus(); }
+  else if (name === 'manage') { loadSystemStatus(); loadRotateStatus(); loadHosts(true); }
+  else if (name === 'devices') loadDeviceModes();
+  else if (name === 'parental') loadParentalList();
+  else if (name === 'adblock') { loadAdblockStatus(); loadAdguardStatus(); }
+  else if (name === 'bypass') { if (!bypassPollTimer) bypassCheckPoll(true); }
+  else if (name === 'monitor') fetchDevices();
 }
 
 var dashboardTimer = null, dashboardHistTimer = null;
@@ -577,7 +600,17 @@ function changePassword() {
 }
 
 /* ========== TABS ========== */
+// Активная вкладка переживает перезагрузку страницы: #имя в адресе + localStorage.
+var TAB_KEY = 'kvas_tab';
+function savedTab() {
+  var name = (location.hash || '').replace(/^#/, '');
+  if (!name) { try { name = localStorage.getItem(TAB_KEY) || ''; } catch (e) { name = ''; } }
+  return document.getElementById('tab-' + name) ? name : 'dashboard';
+}
+
 function switchTab(name) {
+  try { localStorage.setItem(TAB_KEY, name); } catch (e) {}
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('active', t.dataset.tab === name)});
   document.querySelectorAll('.tab-content').forEach(function(t){t.classList.toggle('active', t.id === 'tab-' + name)});
   if (name === 'bypass') {
@@ -617,14 +650,18 @@ function doCheckUpdate(btn) {
 }
 
 /* ========== HOSTS ========== */
-function loadHosts() {
+// quiet — фоновое автообновление: без спиннера и прогресса, сохраняем прокрутку и поиск.
+function loadHosts(quiet) {
   if (document.getElementById('kvasListDl'))
     document.getElementById('kvasListDl').href = '#';
   var el = document.getElementById('hostList');
-  el.innerHTML = '<div style="color:#8b949e;font-size:11px;padding:4px 0;"><span class="spinner"></span> Загрузка списка...</div>';
-  showProgress(0, 'Загрузка списка доменов');
+  var scroll = el.scrollTop;
+  if (!quiet) {
+    el.innerHTML = '<div style="color:#8b949e;font-size:11px;padding:4px 0;"><span class="spinner"></span> Загрузка списка...</div>';
+    showProgress(0, 'Загрузка списка доменов');
+  }
   api('/cgi-bin/manage.sh?action=hosts', function(d){
-    hideProgress();
+    if (!quiet) hideProgress();
     if (!d.ok) { el.innerHTML = '<div class="status status-err">' + esc(d.error||'error') + '</div>'; return; }
     if (!d.hosts || !d.hosts.length) { el.innerHTML = '<div class="status" style="color:#8b949e;">Список пуст</div>'; return; }
     el.innerHTML = '';
@@ -640,6 +677,8 @@ function loadHosts() {
       div.querySelector('.del').onclick = function(){ hostDel(h); };
       el.appendChild(div);
     });
+    if (document.getElementById('hostSearch').value) filterHosts();
+    if (quiet) el.scrollTop = scroll;
   });
 }
 
