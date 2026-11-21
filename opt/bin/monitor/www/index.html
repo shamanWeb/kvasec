@@ -197,11 +197,11 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <div class="card card-narrow">
       <h3>Действия</h3>
       <div class="card-col">
-        <button class="btn btn-sm primary" onclick="doUpgrade(this)">Установить обновление</button>
-        <button class="btn btn-sm" onclick="doUpdate(this)">Обновить списки</button>
-        <button class="btn btn-sm" onclick="doBackup(this)">Бэкап</button>
-        <button class="btn btn-sm" onclick="doRestore(this)">Восстановить</button>
-        <button class="btn btn-sm primary" onclick="doKvasInit(this)" title="kvas init — пересоздать маршрутизацию и перезапустить службы">Перезапуск KVASEC</button>
+        <button class="btn btn-sm primary" onclick="doUpgrade(this)" title="Скачать последнюю версию KVASEC с GitHub (с проверкой SHA-256) и установить поверх текущей. Списки и настройки сохраняются, веб-интерфейс перезапустится.">Установить обновление</button>
+        <button class="btn btn-sm" onclick="doUpdate(this)" title="Заново получить IP-адреса доменов из списка и пересобрать правила маршрутизации (kvas update + kvas init). Помогает, если сайт из списка перестал открываться через туннель.">Обновить списки</button>
+        <button class="btn btn-sm" onclick="doBackup(this)" title="Сохранить копию настроек в /opt/kvas_backup_&lt;дата&gt;: список доменов, kvas.conf, конфиги dnsmasq, dnscrypt и AdGuard, пароль веб-панели.">Бэкап</button>
+        <button class="btn btn-sm" onclick="doRestore(this)" title="Вернуть настройки из самого свежего бэкапа /opt/kvas_backup_*. Текущие файлы перезаписываются. Чтобы применить их, затем нажмите «Перезапуск KVASEC».">Восстановить</button>
+        <button class="btn btn-sm primary" onclick="doKvasInit(this)" title="kvas init: пересоздать правила маршрутизации и таблицу туннеля, заново наполнить список IP. Туннель не переподключается. Помогает, если обход перестал работать целиком.">Перезапуск KVASEC</button>
       </div>
       <div id="sysMsg" class="msg"></div>
     </div>
@@ -805,7 +805,7 @@ function doUpdate(btn) {
 }
 
 function doKvasInit(btn) {
-  if (!confirm('Перезагрузить KVASEC (kvas init)?')) return;
+  if (!confirm('Перезапустить KVASEC (kvas init)?')) return;
   apiBtn('/cgi-bin/manage.sh?action=kvas_init', btn, function(d){
     var el = document.getElementById('sysMsg');
     if (d.ok) { el.className = 'msg ok'; el.textContent = d.msg; loadSystemStatus(); }
