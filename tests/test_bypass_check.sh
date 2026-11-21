@@ -20,9 +20,9 @@ chmod +x "$WORK/bin/dig" "$WORK/bin/ip" "$WORK/bin/curl"
 
 PATH="$WORK/bin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/kvas.list" DNS_LOG="$WORK/dns.log" BYPASS_RESULT_FILE="$WORK/result.json" BYPASS_PROGRESS_FILE="$WORK/progress" BYPASS_LOCK_FILE="$WORK/lock" BYPASS_PID_FILE="$WORK/pid" BYPASS_MAX_DOMAINS=10 sh "$CHECKER"
 
-grep -F '"domain":"vpn-ok.example","in_vpn":true,"status":"ok"' "$WORK/result.json" >/dev/null
-grep -F '"domain":"vpn-failed.example","in_vpn":true,"status":"awg_failed"' "$WORK/result.json" >/dev/null
-grep -F '"domain":"direct-blocked.example","in_vpn":false,"status":"direct_failed_awg_ok"' "$WORK/result.json" >/dev/null
+grep -F '"domain":"vpn-ok.example","in_vpn":true,"vpn_entry":"vpn-ok.example","status":"ok"' "$WORK/result.json" >/dev/null
+grep -F '"domain":"vpn-failed.example","in_vpn":true,"vpn_entry":"vpn-failed.example","status":"awg_failed"' "$WORK/result.json" >/dev/null
+grep -F '"domain":"direct-blocked.example","in_vpn":false,"vpn_entry":"","status":"direct_failed_awg_ok"' "$WORK/result.json" >/dev/null
 test ! -e "$WORK/lock"
 test ! -e "$WORK/pid"
 grep -Fx '4|4' "$WORK/progress" >/dev/null
@@ -42,7 +42,7 @@ grep -F '"domain":"ipv6-query.example"' "$WORK/dns.json" >/dev/null
 # HTTP-level denials are reported separately from failed network connections.
 printf '%s\n' forbidden.example > "$WORK/forbidden.list"
 PATH="$WORK/bin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/forbidden.list" DNS_LOG="$WORK/dns.log" BYPASS_RESULT_FILE="$WORK/forbidden.json" BYPASS_LOCK_FILE="$WORK/forbidden.lock" BYPASS_MODE=all sh "$CHECKER"
-grep -F '"domain":"forbidden.example","in_vpn":true,"status":"http_denied"' "$WORK/forbidden.json" >/dev/null
+grep -F '"domain":"forbidden.example","in_vpn":true,"vpn_entry":"forbidden.example","status":"http_denied"' "$WORK/forbidden.json" >/dev/null
 grep -F '"http_code":"403"' "$WORK/forbidden.json" >/dev/null
 
 # A failed request exposes its network stage; it must not be indistinguishable
@@ -61,7 +61,7 @@ grep -F '"domain":"adguard.example"' "$WORK/adguard.json" >/dev/null
 # A watcher event can request one exact domain without reading or modifying the
 # VPN list.  This is the path used by the "Проверить доступ" button.
 PATH="$WORK/bin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/empty.list" BYPASS_RESULT_FILE="$WORK/one.json" BYPASS_LOCK_FILE="$WORK/one.lock" BYPASS_MODE=domain BYPASS_DOMAIN=direct-blocked.example sh "$CHECKER"
-grep -F '"domain":"direct-blocked.example","in_vpn":false,"status":"direct_failed_awg_ok"' "$WORK/one.json" >/dev/null
+grep -F '"domain":"direct-blocked.example","in_vpn":false,"vpn_entry":"","status":"direct_failed_awg_ok"' "$WORK/one.json" >/dev/null
 
 # «Остановить проверку»: SIGTERM (+ потомкам, как stop_bypass_check) завершает
 # прогон. Раньше ловушка TERM без exit лишь чистила файлы, и цикл шёл дальше.
@@ -130,3 +130,41 @@ KVAS_DNS_LOG="$WORK/trim.log" KVAS_DNS_LOG_MAX_LINES=100 sh "$TRIM"
 [ "$(wc -l < "$WORK/trim.log")" -eq 100 ] || { echo "not trimmed"; exit 1; }
 [ "$(head -1 "$WORK/trim.log")" = 31 ] || { echo "kept wrong lines"; exit 1; }
 [ "$(ls -i "$WORK/trim.log" | cut -d' ' -f1)" = "$inode_before" ] || { echo "trim replaced the inode"; exit 1; }
+
+# Классификация: поддомен wildcard-записи — «в VPN» (как ipset=/x/ в dnsmasq) с самой
+# записью в vpn_entry; имя только с NODATA-IPv4 не проверяется; сертификат не для этого
+# имени (curl 60) — ответ сервера, а не блокировка; 403 напрямую + 200 через AWG — геоблок.
+printf '%s\n' '*.wild.example' > "$WORK/class.list"
+cat > "$WORK/class.log" <<'LOG'
+Nov 21 10:00:00 dnsmasq[9]: 1 192.168.1.20/5000 query[A] sub.wild.example from 192.168.1.20
+Nov 21 10:00:01 dnsmasq[9]: 2 192.168.1.20/5001 query[A] nodata.example from 192.168.1.20
+Nov 21 10:00:01 dnsmasq[9]: 2 192.168.1.20/5001 reply nodata.example is NODATA-IPv4
+Nov 21 10:00:02 dnsmasq[9]: 3 192.168.1.20/5002 query[A] certboth.example from 192.168.1.20
+Nov 21 10:00:03 dnsmasq[9]: 4 192.168.1.20/5003 query[A] certawg.example from 192.168.1.20
+Nov 21 10:00:04 dnsmasq[9]: 5 192.168.1.20/5004 query[A] geo.example from 192.168.1.20
+Nov 21 10:00:05 dnsmasq[9]: 6 192.168.1.20/5005 query[A] cf.example from 192.168.1.20
+LOG
+mkdir -p "$WORK/classbin"; cp "$WORK/histbin/dig" "$WORK/histbin/ip" "$WORK/classbin/"
+cat > "$WORK/classbin/curl" <<'CURL'
+#!/bin/sh
+case "$*" in
+  *sub.wild.example*) echo 200 ;;
+  *certboth.example*) echo 000; exit 60 ;;
+  *certawg.example*) case "$*" in *--interface*) echo 000; exit 60 ;; *) echo 000; exit 28 ;; esac ;;
+  *geo.example*) case "$*" in *--interface*) echo 200 ;; *) echo 403 ;; esac ;;
+  *cf.example*) echo 403 ;;
+  *) echo 200 ;;
+esac
+CURL
+chmod +x "$WORK/classbin/curl"
+PATH="$WORK/classbin:$PATH" KVAS_CONF="$WORK/kvas.conf" KVAS_LIST="$WORK/class.list" DNS_LOG="$WORK/class.log" BYPASS_RESULT_FILE="$WORK/class.json" BYPASS_PROGRESS_FILE="$WORK/class.progress" BYPASS_LOCK_FILE="$WORK/class.lock" BYPASS_PID_FILE="$WORK/class.pid" BYPASS_MODE=dns sh "$CHECKER"
+python3 - "$WORK/class.json" <<'PY'
+import json, sys
+r = {x["domain"]: x for x in json.load(open(sys.argv[1]))["checked"]}
+assert "nodata.example" not in r, r.keys()
+assert r["sub.wild.example"]["in_vpn"] is True and r["sub.wild.example"]["vpn_entry"] == "*.wild.example", r["sub.wild.example"]
+assert r["certboth.example"]["status"] == "no_web", r["certboth.example"]
+assert r["certawg.example"]["status"] == "direct_failed_awg_ok", r["certawg.example"]
+assert r["geo.example"]["status"] == "geo_blocked_awg_ok", r["geo.example"]
+assert r["cf.example"]["status"] == "http_denied", r["cf.example"]
+PY

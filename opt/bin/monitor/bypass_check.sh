@@ -59,16 +59,25 @@ valid_domain() {
     printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z0-9.-]*[A-Za-z0-9]$'
 }
 
-in_vpn_list() {
-    local domain="$1"
-    [ -f "$KVAS_LIST" ] || return 1
-    grep -Eq "^([*][.]?)?${domain}$" "$KVAS_LIST" 2>/dev/null
+# Запись kvas.list, под которую попадает домен (как в dnsmasq: ipset=/x/ ловит x и
+# все его поддомены; ведущие «*»/«*.» снимаются). Печатает запись как в списке —
+# её и удаляет «Убрать из VPN». Раньше сравнивалось только точное имя: поддомены
+# *.facebook.com считались «не в VPN», проверялись напрямую и предлагались к добавлению.
+vpn_entry() {
+    [ -f "$KVAS_LIST" ] || return 0
+    awk -v d="$1" '
+        BEGIN { d = tolower(d) }
+        { e = $0; sub(/#.*/, "", e); gsub(/[ \t\r]/, "", e); if (e == "") next
+          h = tolower(e); sub(/^\*\.?/, "", h); if (h == "") next
+          if (d == h || (length(d) > length(h) && substr(d, length(d) - length(h)) == "." h)) { print e; exit } }
+    ' "$KVAS_LIST" 2>/dev/null
 }
 
 resolve_ipv4() {
     local domain="$1" out
     if command -v dig >/dev/null 2>&1; then
-        out=$(dig +time=2 +tries=1 +short A "$domain" @"$DNS_SERVER" -p "$DNS_PORT" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+        # 3 с × 2 попытки: при 2 с × 1 под нагрузкой dnscrypt часть имён ложно «не резолвилась».
+        out=$(dig +time=3 +tries=2 +short A "$domain" @"$DNS_SERVER" -p "$DNS_PORT" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
     else
         out=$(nslookup "$domain" 127.0.0.1 2>/dev/null | awk '/^Address: / {print $2} /^Address [0-9]+: / {print $3}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tail -1)
     fi
@@ -89,6 +98,11 @@ http_probe() {
     case "$code" in [1-5][0-9][0-9]) :;; *) code=000;; esac
     printf '%s|%s' "$code" "$rc"
 }
+
+# curl 60/51: TCP и TLS прошли, но сертификат не для этого имени — сервер ответил,
+# это служебный адрес CDN/API (или подмена сертификата, если напрямую так, а через
+# AWG — нормальный ответ). Блокировкой само по себе не является.
+cert_mismatch() { case "$1" in 51|60) return 0 ;; esac; return 1; }
 
 probe_failure_detail() {
     # curl exit codes are stable in both curl and the Entware curl package.
@@ -164,8 +178,9 @@ router_ips() {
 
 # Журнал dnsmasq (log-queries, ведётся постоянно в RAM — kvas-dns-log.dnsmasq):
 # домены, запрошенные устройствами, по времени последнего запроса (старые → новые).
-# Без собственных запросов роутера, *.arpa и доменов, которые dnsmasq сам
-# ответил 0.0.0.0/:: (adblock, DoH-блок): проверять их доступность бессмысленно.
+# Без собственных запросов роутера, *.arpa, доменов, которые dnsmasq сам
+# ответил 0.0.0.0/:: (adblock, DoH-блок), и имён без IPv4 (только NODATA-IPv4/
+# NXDOMAIN — напр. зонды *-netseer-ipaddr-assoc.fbcdn.net): проверять нечего.
 dnsmasq_query_domains() {
     [ -s "$DNS_LOG" ] || return 0
     tail -n "${BYPASS_DNS_LOG_LINES:-20000}" "$DNS_LOG" 2>/dev/null | \
@@ -178,13 +193,16 @@ dnsmasq_query_domains() {
                         if (!(src in me) && d !~ /\.arpa$/) last[d] = NR
                         break
                     }
-                    if ($(i + 1) == "is" && ($(i + 2) == "0.0.0.0" || $(i + 2) == "::")) {
-                        blocked[tolower($i)] = 1
+                    if ($(i + 1) == "is") {
+                        n2 = tolower($i); v = $(i + 2)
+                        if (v == "0.0.0.0" || v == "::") blocked[n2] = 1
+                        else if (v ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) hasip[n2] = 1
+                        else if (v == "NODATA-IPv4" || v == "NXDOMAIN") noaddr[n2] = 1
                         break
                     }
                 }
             }
-            END { for (d in last) if (!(d in blocked)) print last[d], d }
+            END { for (d in last) if (!(d in blocked) && !((d in noaddr) && !(d in hasip))) print last[d], d }
         ' | sort -n | cut -d' ' -f2
 }
 
@@ -225,11 +243,16 @@ printf '%s|%s\n' "$done_count" "$total" > "$PROGRESS_FILE"
 
 printf '{"ok":true,"running":false,"checked":[' > "$TMP_FILE"
 first=1
+# Статусы (UI группирует их): ok / http_client_error / no_web — сервер отвечает;
+# direct_failed_awg_ok / geo_blocked_awg_ok — напрямую нет, через AWG да (кандидат в
+# VPN-список); awg_failed / awg_unavailable — в списке, но через туннель не работает;
+# direct_failed — нет ни так, ни так (VPN не поможет); dns_failed; http_* — HTTP-отказы.
 while IFS= read -r domain; do
     [ -n "$domain" ] || continue
     valid_domain "$domain" || continue
+    entry=$(vpn_entry "$domain")
     listed=false
-    in_vpn_list "$domain" && listed=true
+    [ -n "$entry" ] && listed=true
     ip=$(resolve_ipv4 "$domain")
     status=""
     detail=""
@@ -248,51 +271,80 @@ while IFS= read -r domain; do
             tunnel_probe=$(http_probe "$domain" "$AWG_IFACE" "$ip")
             tunnel=${tunnel_probe%%|*}
             tunnel_rc=${tunnel_probe#*|}
-            if [ "$tunnel" = "000" ]; then
-                status="awg_failed"
-                tunnel_detail=$(probe_failure_detail "$tunnel_rc" "через AWG")
-                detail="в VPN-списке, но ${tunnel_detail}"
-            else
+            if [ "$tunnel" != "000" ]; then
                 response_code="$tunnel"
                 status=$(http_result_status "$tunnel")
                 detail=$(http_result_detail "$tunnel" "через AWG")
+            elif cert_mismatch "$tunnel_rc"; then
+                status="no_web"
+                detail="через AWG сервер отвечает, но сертификат не для этого имени — служебный адрес, не сайт"
+            else
+                status="awg_failed"
+                tunnel_detail=$(probe_failure_detail "$tunnel_rc" "через AWG")
+                detail="в VPN-списке (${entry}), но ${tunnel_detail}"
             fi
         else
             status="awg_unavailable"
-            detail="в VPN-списке, но AWG-туннель отключён"
+            detail="в VPN-списке (${entry}), но AWG-туннель отключён"
         fi
     else
         direct_probe=$(http_probe "$domain" "" "$ip")
         direct=${direct_probe%%|*}
         direct_rc=${direct_probe#*|}
-        if [ "$direct" = "000" ]; then
-            direct_detail=$(probe_failure_detail "$direct_rc" "напрямую")
-            if awg_is_up "$AWG_IFACE"; then
-                tunnel_probe=$(http_probe "$domain" "$AWG_IFACE" "$ip")
-                tunnel=${tunnel_probe%%|*}
-                tunnel_rc=${tunnel_probe#*|}
-                if [ "$tunnel" = "000" ]; then
-                    status="direct_failed"
-                    tunnel_detail=$(probe_failure_detail "$tunnel_rc" "через AWG")
-                    detail="${direct_detail}; ${tunnel_detail}"
-                else
-                    status="direct_failed_awg_ok"
-                    detail="${direct_detail}; через AWG доступен (HTTP ${tunnel})"
+        case "$direct" in
+            403|451)
+                # Отказ напрямую при ответе через AWG — геоблокировка по IP (напр.
+                # JetBrains); при таком же отказе через AWG — Cloudflare/антибот.
+                response_code="$direct"
+                status=$(http_result_status "$direct")
+                detail=$(http_result_detail "$direct" "напрямую")
+                if awg_is_up "$AWG_IFACE"; then
+                    tunnel_probe=$(http_probe "$domain" "$AWG_IFACE" "$ip")
+                    tunnel=${tunnel_probe%%|*}
+                    tunnel_rc=${tunnel_probe#*|}
+                    case "$tunnel" in
+                        2[0-9][0-9]|3[0-9][0-9])
+                            status="geo_blocked_awg_ok"
+                            detail="напрямую HTTP ${direct}, через AWG HTTP ${tunnel} — похоже на геоблокировку" ;;
+                    esac
                 fi
-            else
-                status="direct_failed"
-                detail="${direct_detail}; AWG-туннель отключён"
-            fi
-        else
-            response_code="$direct"
-            status=$(http_result_status "$direct")
-            detail=$(http_result_detail "$direct" "напрямую")
-        fi
+                ;;
+            000)
+                direct_detail=$(probe_failure_detail "$direct_rc" "напрямую")
+                if awg_is_up "$AWG_IFACE"; then
+                    tunnel_probe=$(http_probe "$domain" "$AWG_IFACE" "$ip")
+                    tunnel=${tunnel_probe%%|*}
+                    tunnel_rc=${tunnel_probe#*|}
+                    if [ "$tunnel" != "000" ]; then
+                        status="direct_failed_awg_ok"
+                        detail="${direct_detail}; через AWG доступен (HTTP ${tunnel})"
+                    elif cert_mismatch "$direct_rc" && cert_mismatch "$tunnel_rc"; then
+                        status="no_web"
+                        detail="сервер отвечает, но HTTPS-сертификат не для этого имени — служебный адрес CDN/API, не сайт"
+                    elif cert_mismatch "$tunnel_rc"; then
+                        status="direct_failed_awg_ok"
+                        detail="${direct_detail}; через AWG сервер отвечает (сертификат не для этого имени)"
+                    else
+                        status="direct_failed"
+                        tunnel_detail=$(probe_failure_detail "$tunnel_rc" "через AWG")
+                        detail="${direct_detail}; ${tunnel_detail}"
+                    fi
+                else
+                    status="direct_failed"
+                    detail="${direct_detail}; AWG-туннель отключён"
+                fi
+                ;;
+            *)
+                response_code="$direct"
+                status=$(http_result_status "$direct")
+                detail=$(http_result_detail "$direct" "напрямую")
+                ;;
+        esac
     fi
     [ "$first" -eq 0 ] && printf ',' >> "$TMP_FILE"
     first=0
-    printf '{"domain":%s,"in_vpn":%s,"status":%s,"detail":%s,"http_code":%s,"direct_curl":%s,"awg_curl":%s}' \
-        "$(json_str "$domain")" "$listed" "$(json_str "$status")" "$(json_str "$detail")" "$(json_str "$response_code")" "$(json_str "$direct_rc")" "$(json_str "$tunnel_rc")" >> "$TMP_FILE"
+    printf '{"domain":%s,"in_vpn":%s,"vpn_entry":%s,"status":%s,"detail":%s,"http_code":%s,"direct_curl":%s,"awg_curl":%s}' \
+        "$(json_str "$domain")" "$listed" "$(json_str "$entry")" "$(json_str "$status")" "$(json_str "$detail")" "$(json_str "$response_code")" "$(json_str "$direct_rc")" "$(json_str "$tunnel_rc")" >> "$TMP_FILE"
     done_count=$((done_count + 1))
     is_owner || exit 0
     printf '%s|%s\n' "$done_count" "$total" > "$PROGRESS_FILE"

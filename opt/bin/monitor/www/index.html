@@ -327,7 +327,13 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
       <div class="progress-bar"><div class="progress-fill" id="bypassProgressFill"></div></div>
       <div class="progress-text" id="bypassProgressText"></div>
     </div>
-    <div id="bypassCheckList" class="host-list" style="max-height:500px;margin-top:12px;"><div class="status">Нет результатов</div></div>
+    <div class="card-row" style="margin-top:10px;">
+      <span id="bypassSummary" class="status"></span>
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#8b949e;cursor:pointer;margin-left:auto;">
+        <input type="checkbox" id="bypassOnlyProblems" checked onchange="renderBypassResults(bypassLastRows)" style="accent-color:#58a6ff;"> Только проблемы
+      </label>
+    </div>
+    <div id="bypassCheckList" class="host-list" style="max-height:70vh;margin-top:6px;"><div class="status">Нет результатов</div></div>
   </div>
 </div>
 
@@ -851,7 +857,7 @@ function bypassCheckStop(btn) {
     if (bypassPollTimer) { clearInterval(bypassPollTimer); bypassPollTimer = null; }
     document.getElementById('bypassProgress').style.display = 'none';
     document.getElementById('bypassCheckStatus').textContent = d.ok ? 'Проверка остановлена' : (d.error || 'Не удалось остановить проверку');
-    if (d.ok) document.getElementById('bypassCheckList').innerHTML = '<div class="status">Нет результатов</div>';
+    if (d.ok) { document.getElementById('bypassCheckList').innerHTML = '<div class="status">Нет результатов</div>'; document.getElementById('bypassSummary').textContent = ''; }
   });
 }
 
@@ -990,6 +996,7 @@ function bypassCheckStart(mode, btn, domain) {
     status.textContent = 'Проверка выполняется…';
     setBypassProgress(0, 0, true);
     document.getElementById('bypassCheckList').innerHTML = '<div class="status">Проверяем доступность…</div>';
+    document.getElementById('bypassSummary').textContent = '';
     if (mode === 'domain') switchTab('bypass');
     if (bypassPollTimer) clearInterval(bypassPollTimer);
     // Без немедленного опроса: до exec bypass_check.sh статус ответил бы «не идёт»,
@@ -1031,30 +1038,51 @@ function bypassCheckPoll(resume) {
   });
 }
 
-function bypassStatusText(row) {
-  if (row.status === 'awg_failed') return 'В VPN-списке, но через AWG недоступен';
-  if (row.status === 'direct_failed_awg_ok') return 'Напрямую недоступен, AWG помогает';
-  if (row.status === 'direct_failed') return 'Недоступен';
-  if (row.status === 'dns_failed') return 'Ошибка DNS';
-  if (row.status === 'awg_unavailable') return 'AWG-туннель отключён';
-  if (row.status === 'http_denied') return 'Сайт или CDN отклонил запрос';
-  if (row.status === 'http_rate_limited') return 'Сайт ограничил запросы';
-  if (row.status === 'http_restricted') return 'Ограничение HTTP 451';
-  if (row.status === 'http_server_error') return 'Ошибка сервера сайта';
-  if (row.status === 'http_client_error') return 'Ответ сайта с ошибкой 4xx';
-  if (row.status === 'http_unexpected') return 'Неожиданный HTTP-ответ';
-  return 'Доступен';
-}
+// Группы результатов: порядок = приоритет в списке. act — можно помочь VPN-списком,
+// vpn — в списке, но через туннель не работает, fail — недоступен совсем,
+// http — сайт ответил отказом, ok — сервер отвечает (в т.ч. 404 у API: у них нет
+// главной страницы, это не сбой).
+var BYPASS_GROUPS = {
+  direct_failed_awg_ok: ['act', 'Напрямую недоступен, AWG помогает', '#f85149'],
+  geo_blocked_awg_ok:   ['act', 'Похоже на геоблокировку, AWG помогает', '#f85149'],
+  awg_failed:           ['vpn', 'В VPN-списке, но через AWG недоступен', '#f85149'],
+  awg_unavailable:      ['vpn', 'AWG-туннель отключён', '#f85149'],
+  direct_failed:        ['fail', 'Недоступен ни напрямую, ни через AWG', '#d29922'],
+  dns_failed:           ['fail', 'Ошибка DNS', '#d29922'],
+  http_denied:          ['http', 'Сайт или CDN отклонил запрос', '#d29922'],
+  http_restricted:      ['http', 'Ограничение HTTP 451', '#d29922'],
+  http_rate_limited:    ['http', 'Сайт ограничил запросы', '#d29922'],
+  http_server_error:    ['http', 'Ошибка сервера сайта', '#d29922'],
+  http_unexpected:      ['http', 'Неожиданный HTTP-ответ', '#d29922'],
+  http_client_error:    ['ok', 'Доступен (ответ API)', '#3fb950'],
+  no_web:               ['ok', 'Служебный адрес, не сайт', '#8b949e'],
+  ok:                   ['ok', 'Доступен', '#3fb950']
+};
+var BYPASS_ORDER = ['act', 'vpn', 'fail', 'http', 'ok'];
+var BYPASS_GROUP_NAMES = {act: 'AWG поможет', vpn: 'не работает через VPN', fail: 'недоступно', http: 'отказ сайта', ok: 'доступно'};
+var bypassLastRows = [];
 
-function bypassStatusColor(status) {
-  if (status === 'ok') return '#3fb950';
-  if (status === 'http_denied' || status === 'http_rate_limited' || status === 'http_client_error' || status === 'http_server_error') return '#d29922';
-  return '#f85149';
+function bypassGroup(row) { return (BYPASS_GROUPS[row.status] || ['http', row.status, '#d29922'])[0]; }
+function bypassStatusText(row) { return (BYPASS_GROUPS[row.status] || ['', 'Неизвестный результат'])[1]; }
+function bypassStatusColor(status) { return (BYPASS_GROUPS[status] || ['', '', '#d29922'])[2]; }
+
+// Основной домен для «Добавить в VPN»: scontent-hel3-1.cdninstagram.com → cdninstagram.com
+// (запись *.x ловит все поддомены). Для co.uk / com.ru и т.п. — три последних метки.
+function bypassBaseDomain(d) {
+  var p = d.split('.');
+  if (p.length <= 2) return d;
+  var sld = p[p.length - 2];
+  var n = (p[p.length - 1].length === 2 && /^(com|net|org|co|gov|edu|ac|or|ne|go)$/.test(sld)) ? 3 : 2;
+  return p.slice(-n).join('.');
 }
 
 function renderBypassResults(rows) {
+  bypassLastRows = rows || [];
+  rows = bypassLastRows;
   var el = document.getElementById('bypassCheckList');
+  var sum = document.getElementById('bypassSummary');
   el.innerHTML = '';
+  sum.textContent = '';
   if (!rows.length) {
     if (bypassCheckMode === 'dns') {
       el.innerHTML = '<div class="status">История DNS пуста: устройства в сети ещё не делали DNS-запросов через роутер (журнал в памяти, после перезагрузки начинается заново). Откройте пару сайтов и повторите проверку.</div>';
@@ -1063,7 +1091,15 @@ function renderBypassResults(rows) {
     }
     return;
   }
-  rows.forEach(function(row){
+  var counts = {};
+  rows.forEach(function(r){ var g = bypassGroup(r); counts[g] = (counts[g] || 0) + 1; });
+  sum.textContent = BYPASS_ORDER.filter(function(g){ return counts[g]; })
+    .map(function(g){ return BYPASS_GROUP_NAMES[g] + ': ' + counts[g]; }).join(' · ');
+  var only = document.getElementById('bypassOnlyProblems').checked;
+  var shown = rows.filter(function(r){ return !only || bypassGroup(r) !== 'ok'; })
+    .sort(function(a, b){ return BYPASS_ORDER.indexOf(bypassGroup(a)) - BYPASS_ORDER.indexOf(bypassGroup(b)); });
+  if (!shown.length) { el.innerHTML = '<div class="status" style="color:#3fb950;">Проблем не найдено — все проверенные домены доступны.</div>'; return; }
+  shown.forEach(function(row){
     var item = document.createElement('div');
     item.style.cssText = 'display:flex;gap:8px;align-items:center;padding:7px 8px;border-bottom:1px solid #30363d;flex-wrap:wrap;';
     var domain = document.createElement('code');
@@ -1072,17 +1108,23 @@ function renderBypassResults(rows) {
     var result = document.createElement('span');
     result.textContent = bypassStatusText(row) + (row.detail ? ' — ' + row.detail : '');
     result.style.cssText = 'font-size:12px;color:' + bypassStatusColor(row.status) + ';flex:2;';
-    item.appendChild(domain); item.appendChild(result);
+    // Колонка кнопок фиксированной ширины в каждой строке — иначе текст статуса
+    // сдвигается там, где кнопки нет.
+    var actions = document.createElement('span');
+    actions.style.cssText = 'flex:0 0 240px;display:flex;justify-content:flex-end;';
+    item.appendChild(domain); item.appendChild(result); item.appendChild(actions);
     if (row.in_vpn) {
+      var entry = row.vpn_entry || row.domain;
       var remove = document.createElement('button');
-      remove.className = 'btn btn-sm danger'; remove.textContent = 'Убрать из VPN';
-      remove.onclick = function(){ bypassRemoveDomain(row.domain, remove); };
-      item.appendChild(remove);
-    } else if (row.status === 'direct_failed_awg_ok') {
+      remove.className = 'btn btn-sm danger'; remove.textContent = 'Убрать ' + entry + ' из VPN';
+      remove.onclick = function(){ bypassRemoveDomain(entry, remove); };
+      actions.appendChild(remove);
+    } else if (bypassGroup(row) === 'act') {
+      var base = bypassBaseDomain(row.domain);
       var add = document.createElement('button');
-      add.className = 'btn btn-sm primary'; add.textContent = 'Добавить *.domain в VPN';
-      add.onclick = function(){ bypassAddDomain(row.domain, add); };
-      item.appendChild(add);
+      add.className = 'btn btn-sm primary'; add.textContent = 'Добавить *.' + base + ' в VPN';
+      add.onclick = function(){ bypassAddDomain(base, add); };
+      actions.appendChild(add);
     }
     el.appendChild(item);
   });
