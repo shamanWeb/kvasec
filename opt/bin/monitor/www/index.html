@@ -128,7 +128,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 <div class="tabs">
   <div class="tab active" data-tab="dashboard" onclick="switchTab('dashboard')">Дашборд</div>
   <div class="tab" data-tab="manage" onclick="switchTab('manage')">Управление</div>
-  <div class="tab" data-tab="route" onclick="switchTab('route')">Маршрутизация</div>
   <div class="tab" data-tab="devices" onclick="switchTab('devices')">Устройства</div>
   <div class="tab" data-tab="parental" onclick="switchTab('parental')">Родительский контроль</div>
   <div class="tab" data-tab="adblock" onclick="switchTab('adblock')">Реклама</div>
@@ -224,57 +223,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
   </div>
 
 </div><!-- /tab-manage -->
-
-<!-- ========== TAB: Маршрутизация ========== -->
-<div id="tab-route" class="tab-content">
-
-  <!-- Route -->
-  <div class="card">
-    <h3>Текущие списки маршрутизации</h3>
-    <div class="card-row"><label>Всё в тоннель:</label><span class="value" id="routeFull">-</span></div>
-    <div class="card-row"><label>По списку (IP):</label><span class="value" id="routeListIP">-</span></div>
-    <div class="card-row"><label>Исключённые:</label><span class="value" id="routeExclude">-</span></div>
-    <div class="card-row"><label>Гостевые сети:</label><span class="value" id="routeGuestNets">-</span></div>
-    <div class="card-row" style="margin-top:8px;">
-      <button class="btn btn-sm" onclick="routeAction('refresh',this)">Обновить</button>
-      <button class="btn btn-sm" onclick="loadRouteLists()">Перечитать</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3>Известные устройства</h3>
-    <div id="routeDevices" class="host-list" style="max-height:150px;"><div class="status">Загрузка...</div></div>
-  </div>
-
-  <div class="card">
-    <h3>Добавить IP/подсеть в тоннель</h3>
-    <div class="card-row" style="flex-wrap:wrap;gap:8px;">
-      <input type="text" id="routeIp" placeholder="IP или подсеть (номер или адрес)" style="flex:1;min-width:200px;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:12px;">
-      <select id="routeType" style="padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:12px;">
-        <option value="full">Всё в тоннель</option>
-        <option value="list">По списку KVASEC</option>
-        <option value="exclude">Исключить из перехвата</option>
-      </select>
-      <button class="btn btn-sm primary" onclick="routeAdd()">Добавить</button>
-      <button class="btn btn-sm danger" onclick="routeDel()">Удалить</button>
-    </div>
-    <div id="routeMsg" class="msg"></div>
-  </div>
-
-  <div class="card">
-    <h3>Гостевые сети</h3>
-    <div id="routeGuestList" class="host-list" style="max-height:120px;"><div class="status">Загрузка...</div></div>
-    <div class="card-row" style="flex-wrap:wrap;gap:8px;">
-      <select id="routeGuestNet" style="padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:monospace;font-size:12px;">
-        <option value="">Выберите сеть...</option>
-      </select>
-      <button class="btn btn-sm primary" onclick="routeGuestAdd()">Добавить сеть</button>
-      <button class="btn btn-sm danger" onclick="routeGuestDel()">Удалить сеть</button>
-    </div>
-    <div id="routeGuestMsg" class="msg"></div>
-  </div>
-
-</div>
 
 <!-- ========== TAB: Устройства ========== -->
 <div id="tab-devices" class="tab-content">
@@ -547,7 +495,6 @@ function showMain() {
   document.getElementById('changePassBtn').style.display = '';
   loadSystemStatus();
   loadHosts();
-  loadRouteLists();
   loadParentalList();
   loadAdguardStatus();
   loadAdblockStatus();
@@ -1673,143 +1620,6 @@ function setDeviceIsolation(mac, state, btn) {
       el.className = 'msg ok';
       el.textContent = (state === 'on') ? 'Устройство изолировано от панелей управления роутера' : 'Изоляция снята';
       loadDeviceModes();
-    } else {
-      el.className = 'msg err';
-      el.textContent = d.error || 'Ошибка';
-    }
-  });
-}
-
-// Route management
-function routeAction(action, btn) {
-  if (btn) loadingBtn(btn, true);
-  api('/cgi-bin/manage.sh?action=route_' + action, function(d) {
-    if (btn) loadingBtn(btn, false);
-    var el = document.getElementById('routeMsg');
-    if (d.ok) {
-      el.className = 'msg ok';
-      el.textContent = d.msg || 'OK';
-      loadRouteLists();
-    } else {
-      el.className = 'msg err';
-      el.textContent = d.error || 'Ошибка';
-    }
-  });
-}
-
-function loadRouteLists() {
-  api('/cgi-bin/manage.sh?action=route_status', function(d) {
-    if (!d.ok) return;
-    document.getElementById('routeFull').textContent = d.full || '(пусто)';
-    document.getElementById('routeListIP').textContent = d.list || '(пусто)';
-    document.getElementById('routeExclude').textContent = d.exclude || '(пусто)';
-    document.getElementById('routeGuestNets').textContent = d.guest_nets || '(не заданы)';
-    // Update current guest networks list
-    var gl = document.getElementById('routeGuestList');
-    if (d.guest_nets) {
-      var nets = d.guest_nets.split(',').map(function(s){return s.trim()}).filter(function(s){return s});
-      if (nets.length) {
-        gl.innerHTML = nets.map(function(n){return '<div class="host-item">' + esc(n) + '</div>'}).join('');
-      } else {
-        gl.innerHTML = '<div class="status" style="color:#8b949e;">Нет гостевых сетей</div>';
-      }
-    } else {
-      gl.innerHTML = '<div class="status" style="color:#8b949e;">Нет гостевых сетей</div>';
-    }
-  });
-  // Load known devices
-  api('/cgi-bin/manage.sh?action=route_devices', function(d) {
-    var el = document.getElementById('routeDevices');
-    if (!d.ok || !d.devices || !d.devices.length) {
-      el.innerHTML = '<div class="status" style="color:#8b949e;">Нет устройств</div>';
-      return;
-    }
-    el.innerHTML = '';
-    d.devices.forEach(function(dev) {
-      var div = document.createElement('div');
-      div.className = 'host-item';
-      div.innerHTML = '<span style="color:#58a6ff;min-width:120px;">' + esc(dev.ip) + '</span> ' + esc(dev.name);
-      div.onclick = function() { document.getElementById('routeIp').value = dev.ip; };
-      div.style.cursor = 'pointer';
-      el.appendChild(div);
-    });
-  });
-  // Load available guest networks
-  api('/cgi-bin/manage.sh?action=route_guest_networks', function(d) {
-    var sel = document.getElementById('routeGuestNet');
-    sel.innerHTML = '<option value="">Выберите сеть...</option>';
-    if (d.ok && d.networks) {
-      d.networks.forEach(function(n) {
-        var opt = document.createElement('option');
-        opt.value = n.id;
-        opt.textContent = n.id + ' - ' + n.name;
-        sel.appendChild(opt);
-      });
-    }
-  });
-}
-
-function routeAdd() {
-  var ip = document.getElementById('routeIp').value.trim();
-  var type = document.getElementById('routeType').value;
-  if (!ip) { alert('Введите IP или подсеть'); return; }
-  api('/cgi-bin/manage.sh?action=route_add&type=' + type + '&ip=' + encodeURIComponent(ip), function(d) {
-    var el = document.getElementById('routeMsg');
-    if (d.ok) {
-      el.className = 'msg ok';
-      el.textContent = d.msg || 'Добавлено';
-      document.getElementById('routeIp').value = '';
-      loadRouteLists();
-    } else {
-      el.className = 'msg err';
-      el.textContent = d.error || 'Ошибка';
-    }
-  });
-}
-
-function routeDel() {
-  var ip = document.getElementById('routeIp').value.trim();
-  var type = document.getElementById('routeType').value;
-  if (!ip) { alert('Введите IP или подсеть'); return; }
-  api('/cgi-bin/manage.sh?action=route_del&type=' + type + '&ip=' + encodeURIComponent(ip), function(d) {
-    var el = document.getElementById('routeMsg');
-    if (d.ok) {
-      el.className = 'msg ok';
-      el.textContent = d.msg || 'Удалено';
-      document.getElementById('routeIp').value = '';
-      loadRouteLists();
-    } else {
-      el.className = 'msg err';
-      el.textContent = d.error || 'Ошибка';
-    }
-  });
-}
-
-function routeGuestAdd() {
-  var net = document.getElementById('routeGuestNet').value;
-  if (!net) { alert('Выберите гостевую сеть'); return; }
-  api('/cgi-bin/manage.sh?action=route_guest_add&net=' + encodeURIComponent(net), function(d) {
-    var el = document.getElementById('routeGuestMsg');
-    if (d.ok) {
-      el.className = 'msg ok';
-      el.textContent = d.msg || 'Сеть добавлена';
-      loadRouteLists();
-    } else {
-      el.className = 'msg err';
-      el.textContent = d.error || 'Ошибка';
-    }
-  });
-}
-
-function routeGuestDel() {
-  var net = document.getElementById('routeGuestNet').value;
-  if (!net) { alert('Выберите гостевую сеть'); return; }
-  api('/cgi-bin/manage.sh?action=route_guest_del&net=' + encodeURIComponent(net), function(d) {
-    var el = document.getElementById('routeGuestMsg');
-    if (d.ok) {
-      el.className = 'msg ok';
-      el.textContent = d.msg || 'Сеть удалена';
-      loadRouteLists();
     } else {
       el.className = 'msg err';
       el.textContent = d.error || 'Ошибка';

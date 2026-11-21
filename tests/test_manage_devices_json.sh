@@ -1,6 +1,6 @@
 #!/bin/sh
 # Регрессия: DHCP-имена устройств (их задаёт любое устройство LAN) не ломают JSON
-# route_devices / device_modes — кавычки, обратный слеш, управляющие символы, HTML.
+# device_modes — кавычки, обратный слеш, управляющие символы, HTML.
 set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -45,15 +45,14 @@ mkdir -p "$WORK/tokens"
 token=0123456789abcdef0123456789abcdef
 date +%s > "$WORK/tokens/$token"
 
-for action in route_devices device_modes; do
-    out=$(PATH="$WORK/bin:$PATH" QUERY_STRING="action=$action&token=$token" REQUEST_METHOD=GET sh "$WORK/manage.sh")
-    printf '%s' "$out" | python3 -c '
+action=device_modes
+out=$(PATH="$WORK/bin:$PATH" QUERY_STRING="action=$action&token=$token" REQUEST_METHOD=GET sh "$WORK/manage.sh")
+printf '%s' "$out" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 names = [x["name"] for x in d["devices"]]
 assert any("Te\"st" in n and "\\" in n and "<img" in n for n in names), names
 ' || { echo "FAIL: $action → $out"; exit 1; }
-done
 
 # Сам jesc — во всех доступных awk (в т.ч. busybox без math): результат — валидная JSON-строка.
 eval "$(sed -n '/^AWK_JESC=/,/^'"'"'$/p' "$SOURCE")"
