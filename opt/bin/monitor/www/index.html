@@ -27,6 +27,8 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 
 /* Cards */
 .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+.card-pair { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.card-pair > .card { flex: 1 1 360px; margin-bottom: 0; }
 .card h3 { color: #c9d1d9; font-size: 14px; margin-bottom: 10px; }
 .card-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
 .card-row label { color: #8b949e; min-width: 80px; font-size: 12px; }
@@ -173,15 +175,30 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
 <!-- ========== TAB: Управление ========== -->
 <div id="tab-manage" class="tab-content">
 
-  <!-- System Status -->
-  <div class="card">
-    <h3>Состояние системы</h3>
-    <div class="card-row"><label>Пакет:</label><span class="value" id="sysPkg">-</span></div>
-    <div class="card-row"><label>Версия:</label><span class="value" id="sysVer">-</span></div>
-    <div class="card-row"><label>Туннель:</label><span class="value" id="sysMode">AmneziaWG</span></div>
-    <div class="card-row"><label>Хостов:</label><span class="value" id="sysHosts">-</span></div>
-    <div class="card-row"><label>Обновления:</label><span class="value" id="sysUpdate">-</span>
-      <button class="btn btn-sm" onclick="doCheckUpdate(this)" style="margin-left:8px;">Проверить</button>
+  <!-- Состояние и Действия — в одну строку; на узком экране переносятся друг под друга -->
+  <div class="card-pair">
+    <!-- System Status -->
+    <div class="card">
+      <h3>Состояние системы</h3>
+      <div class="card-row"><label>Пакет:</label><span class="value" id="sysPkg">-</span></div>
+      <div class="card-row"><label>Версия:</label><span class="value" id="sysVer">-</span></div>
+      <div class="card-row"><label>Туннель:</label><span class="value" id="sysMode">AmneziaWG</span></div>
+      <div class="card-row"><label>Хостов:</label><span class="value" id="sysHosts">-</span></div>
+      <div class="card-row"><label>Обновления:</label><span class="value" id="sysUpdate">-</span>
+        <button class="btn btn-sm" onclick="doCheckUpdate(this)" style="margin-left:8px;">Проверить</button>
+      </div>
+    </div>
+    <!-- System Actions -->
+    <div class="card">
+      <h3>Действия</h3>
+      <div class="card-row">
+        <button class="btn btn-sm primary" onclick="doUpgrade(this)">Установить обновление</button>
+        <button class="btn btn-sm" onclick="doUpdate(this)">Обновить списки</button>
+        <button class="btn btn-sm" onclick="doBackup(this)">Бэкап</button>
+        <button class="btn btn-sm" onclick="doRestore(this)">Восстановить</button>
+        <button class="btn btn-sm primary" onclick="doKvasInit(this)">Перезагрузка KVASEC — kvas init</button>
+      </div>
+      <div id="sysMsg" class="msg"></div>
     </div>
   </div>
 
@@ -207,19 +224,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
       <div class="progress-bar"><div class="progress-fill" id="hostProgressFill"></div></div>
       <div class="progress-text" id="hostProgressText"></div>
     </div>
-  </div>
-
-  <!-- System Actions -->
-  <div class="card">
-    <h3>Действия</h3>
-    <div class="card-row">
-      <button class="btn btn-sm primary" onclick="doUpgrade(this)">Установить обновление</button>
-      <button class="btn btn-sm" onclick="doUpdate(this)">Обновить списки</button>
-      <button class="btn btn-sm" onclick="doBackup(this)">Бэкап</button>
-      <button class="btn btn-sm" onclick="doRestore(this)">Восстановить</button>
-      <button class="btn btn-sm primary" onclick="doKvasInit(this)">Перезагрузка KVASEC — kvas init</button>
-    </div>
-    <div id="sysMsg" class="msg"></div>
   </div>
 
 </div><!-- /tab-manage -->
