@@ -259,13 +259,6 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
   <div class="card">
     <h3>Родительский контроль</h3>
     <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Заблокированные сайты добавляются в список блокировки рекламы. Домен и все его поддомены резолвятся в 0.0.0.0 и не открываются.</p>
-    <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-      <label>AdGuard Home:</label>
-      <span class="value" id="adguardStatus" style="color:#8b949e;">-</span>
-      <button class="btn btn-sm success" onclick="adguardOn(this)">Включить</button>
-      <button class="btn btn-sm danger" onclick="adguardOff(this)">Вернуть dnsmasq</button>
-    </div>
-    <p style="font-size:11px;color:#8b949e;margin:-6px 0 12px;">При первой установке откроется мастер AdGuard Home на порту 3000. Пока AdGuard включён, родительский контроль через dnsmasq недоступен.</p>
     <div style="display:flex;gap:16px;flex-wrap:wrap;">
       <div style="flex:1;min-width:250px;">
         <h4 style="font-size:13px;color:#58a6ff;margin-bottom:8px;">Заблокированные сайты</h4>
@@ -305,6 +298,16 @@ h1 { color: #58a6ff; font-size: 18px; margin-bottom: 4px; }
     <div class="progress-wrap" id="adblockProgress">
       <div class="progress-bar"><div class="progress-fill" id="adblockProgressFill"></div></div>
       <div class="progress-text" id="adblockProgressText"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>AdGuard Home</h3>
+    <p style="font-size:12px;color:#8b949e;margin-bottom:12px;">Альтернатива встроенной блокировке: AdGuard Home становится DNS-сервером сети вместо dnsmasq (KVASEC сохраняет текущие DNS-настройки). При первой установке откроется мастер AdGuard Home на порту 3000. Пока AdGuard включён, блокировка рекламы и родительский контроль через dnsmasq недоступны. «Вернуть dnsmasq» останавливает AdGuard и восстанавливает сохранённые настройки.</p>
+    <div class="card-row" style="align-items:center;gap:8px;flex-wrap:wrap;">
+      <label>Статус:</label>
+      <span class="value" id="adguardStatus" style="color:#8b949e;">-</span>
+      <button class="btn btn-sm success" onclick="adguardOn(this)">Включить</button>
+      <button class="btn btn-sm danger" onclick="adguardOff(this)">Вернуть dnsmasq</button>
     </div>
   </div>
 </div>
